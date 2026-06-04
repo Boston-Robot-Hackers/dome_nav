@@ -1,0 +1,13 @@
+# slam_param_patch.yaml — dome robot overrides applied on top of slam_toolbox defaults.
+# Base: mapper_params_online_async.yaml from slam_toolbox package.
+# Only values that differ from upstream defaults are listed here.
+# map_file_name is injected at launch time from DOME_HOME env var.
+
+slam_toolbox:
+  ros__parameters:
+
+    max_laser_range: 10.0          # upstream: 20.0 — dome lidar range
+    transform_timeout: 0.5         # upstream: 0.2  — more TF tolerance on Pi
+    tf_buffer_duration: 50.0       # upstream: 30.0 — larger buffer for slow systems
+    message_queue_size: 20         # upstream: missing — prevent dropped scans
+    map_start_at_dock: true
