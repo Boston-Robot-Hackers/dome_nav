@@ -29,7 +29,6 @@ class SlamManagerNode(Node):
         self.status_pub = self.create_publisher(String, "/dome_nav/slam_status", 10)
 
         self.serialize_client = self.create_client(SerializePoseGraph, "/slam_toolbox/serialize_map")
-        self.save_map_client = self.create_client(SaveMap, "/map_saver/save_map")
 
         self.get_logger().info(f"SlamManagerNode ready. map_persist_path={self.map_persist_path}")
 
