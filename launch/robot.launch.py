@@ -32,7 +32,6 @@ def robot_launch(use_sim_time: str = "false"):
 
     bl.include("slam_toolbox", "online_async_launch.py", launch_arguments={
         "slam_params_file": slam_config,
-        "use_sim_time": use_sim_time,
     })
 
     bl.include("nav2_bringup", "navigation_launch.py", launch_arguments={

@@ -7,10 +7,12 @@ Fix any import errors, missing deps, or setup.py issues.
 **Test**: build succeeds; `ros2 pkg list | grep dome_nav` returns the package.
 
 ## T02 — slam_toolbox launches via dome_nav
-**Status**: not done
+**Status**: done
 **Description**: `bl dome_nav robot.launch.py` starts slam_toolbox. Verify
 `/map` topic appears and `map→odom` TF edge is published.
-**Test**: manual — `ros2 topic hz /map` shows ~0.2 Hz; `ros2 run tf2_ros tf2_echo map odom` returns a transform.
+**Test**: manual integration test in `test/test_map_validation.py` (marked `manual`, requires live stack) —
+subscribes `/map`, asserts resolution > 0, width > 0, height > 0, at least some free (0) and occupied (100) cells exist.
+Also asserts `map→odom` TF available via tf2. Test must pass before T02 is done.
 
 ## T03 — slam_manager_node publishes status
 **Status**: not done
