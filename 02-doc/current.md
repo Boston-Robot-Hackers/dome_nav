@@ -56,8 +56,28 @@ regardless of shutdown ordering. Shutdown save is best-effort fallback only.
 - T04 — done (18 unit tests total: routing, navigate, cancel, result callbacks)
 - T05 — not done (manual integration test — needs live stack)
 
+## T05 Live Stack Debugging (2026-06-07)
+
+F02 T05 manual test in progress. Status flow works: `navigating:can` → `failed:can` confirmed.
+Failure cause: Nav2 stack not fully up.
+
+**Findings:**
+- `/targets/confirmed` had 0 publishers — `semantic_map` lifecycle node was `unconfigured`
+- Fixed: `ros2 lifecycle set /semantic_map configure && ros2 lifecycle set /semantic_map activate`
+- After activation, Nav2 accepted goal but `compute_path_to_pose` action server timed out
+- `bt_navigator` running but planner server not ready or not started
+- `collision_monitor` missing params (`FootprintApproach.max_points`)
+- `opennav_docking` missing param (`dock_database`)
+- `dome_control` not running — hardware interface absent
+
+**Next debug step:**
+```bash
+ros2 node list | grep -E "planner|controller|costmap"
+ros2 action list | grep compute_path
+```
+
 ## Likely Next Steps
 
-1. T05: manual integration test with live stack.
+1. T05: get full Nav2 stack (planner + controller) running, retry intent navigation.
 2. Fix dome_vision `semantic_map_node.py` frame from `odom` → `map`.
 3. Define F03.
