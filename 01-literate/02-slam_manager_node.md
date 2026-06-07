@@ -1,54 +1,42 @@
 ---
-version: "1.0"
-generated: "2026-06-04"
+version: "1.1"
+generated: "2026-06-07"
 ---
 
-# slam_manager_node.py — SLAM State Monitor and Map Persistence
+# slam_manager_node — SLAM State Monitor and Map Persistence
 
-## Purpose
+## Introduction
 
-`SlamManagerNode` sits between `slam_toolbox` and the rest of the dome system. Its job is narrow: watch for the `/map` topic to appear (signalling that slam_toolbox is producing a map), publish a status string so other nodes can gate their behaviour on mapping readiness, and serialize the pose graph to disk when the node shuts down.
+`slam_manager_node` is a thin ROS2 node that sits alongside slam_toolbox and does two things: it watches for the first `/map` message to announce that SLAM is actively building a map, and it periodically serializes the pose graph to disk so map state survives restarts.
 
-## Startup and Parameters
+The node deliberately does not touch slam_toolbox internals. It only observes the `/map` topic (a standard ROS2 output) and calls the `/slam_toolbox/serialize_map` service (a documented slam_toolbox API). This keeps it decoupled from slam_toolbox version changes.
 
-The node declares one ROS2 parameter — the path where the pose graph will be saved. The default comes from `dome_home()` so the path follows the `DOME_HOME` environment variable:
+## Initialization
+
+On startup the node:
+
+1. Declares a `map_persist_path` parameter (default: `~/.dome/slam_map`).
+2. Creates a subscription to `/map`.
+3. Creates a publisher on `/dome_nav/slam_status`.
+4. Creates a service client for `/slam_toolbox/serialize_map`.
+5. Creates a 30-second timer for periodic saves.
 
 ```python
-def default_map_path() -> str:
-    return os.path.join(dome_home(), "slam_map")
-
 class SlamManagerNode(Node):
     def __init__(self):
         super().__init__("slam_manager_node")
         self.declare_parameter("map_persist_path", default_map_path())
-        self.map_persist_path = (
-            self.get_parameter("map_persist_path")
-            .get_parameter_value()
-            .string_value
-        )
+        self.map_persist_path = self.get_parameter("map_persist_path").get_parameter_value().string_value
         self.map_ready = False
+        self.map_sub = self.create_subscription(OccupancyGrid, "/map", self.on_map, 10)
+        self.status_pub = self.create_publisher(String, "/dome_nav/slam_status", 10)
+        self.serialize_client = self.create_client(SerializePoseGraph, "/slam_toolbox/serialize_map")
+        self.save_timer = self.create_timer(30.0, self.periodic_save)
 ```
 
-`map_ready` starts `False`. The first `/map` message flips it to `True` and is the signal that slam_toolbox has warmed up.
+## Detecting When SLAM Is Active
 
-## Topic Wiring
-
-```python
-self.map_sub = self.create_subscription(OccupancyGrid, "/map", self.on_map, 10)
-self.status_pub = self.create_publisher(String, "/dome_nav/slam_status", 10)
-self.serialize_client = self.create_client(
-    SerializePoseGraph, "/slam_toolbox/serialize_map"
-)
-```
-
-```mermaid
-flowchart LR
-    ST[slam_toolbox] -->|/map| SL[SlamManagerNode]
-    SL -->|/dome_nav/slam_status| OTH[other nodes]
-    SL -->|serialize_map service| ST
-```
-
-## Map Arrival Callback
+`on_map` fires every time slam_toolbox publishes an updated occupancy grid. The first time it fires, `map_ready` flips to `True` and a log message records the event. Every call publishes a status string.
 
 ```python
 def on_map(self, msg: OccupancyGrid):
@@ -60,11 +48,42 @@ def on_map(self, msg: OccupancyGrid):
     self.status_pub.publish(status)
 ```
 
-The `"waiting"` branch in the ternary is unreachable after `map_ready` is set, but the logic is clear enough to leave as-is.
+The status is published on every `/map` callback rather than only on state transitions. This means any node or tool that subscribes to `/dome_nav/slam_status` gets the current state without needing to cache the last message.
 
-## Shutdown: Pose Graph Serialization
+## Periodic Save — Why Not Rely on Shutdown
 
-On shutdown, `save_map()` is called from `main()`. It calls the `slam_toolbox/serialize_map` service synchronously using `spin_until_future_complete`:
+The intuitive design saves the pose graph when the node shuts down. The problem: Ctrl-C sends SIGINT to every process in the launch group simultaneously. slam_toolbox and slam_manager both receive the signal at the same time. By the time the `finally` block in `main()` runs `save_map()`, slam_toolbox has often already exited and the serialize service is gone.
+
+The fix is a 30-second timer:
+
+```python
+def periodic_save(self):
+    if self.map_ready:
+        self.save_map()
+```
+
+This fires while slam_toolbox is still running, well before any shutdown race. The shutdown `save_map()` call remains as a best-effort fallback, but correctness does not depend on it.
+
+```mermaid
+sequenceDiagram
+    participant Timer
+    participant SlamManager
+    participant SlamToolbox
+
+    loop every 30s
+        Timer->>SlamManager: periodic_save()
+        SlamManager->>SlamToolbox: serialize_map(filename)
+        SlamToolbox-->>SlamManager: result
+        SlamManager->>SlamManager: log success/failure
+    end
+
+    Note over SlamManager,SlamToolbox: On Ctrl-C both get SIGINT simultaneously
+    SlamManager->>SlamToolbox: save_map() [best-effort, may fail]
+```
+
+## Saving the Pose Graph
+
+`save_map` follows a simple sequence: ensure the output directory exists, wait up to 5 seconds for the service to be available, make the async call, then spin until complete or timed out.
 
 ```python
 def save_map(self):
@@ -83,28 +102,14 @@ def save_map(self):
     return False
 ```
 
-The synchronous pattern is intentional here: shutdown is the one time we want to block until the file is written before the process exits.
+slam_toolbox appends `.posegraph` and `.data` extensions to the filename automatically. The path stored in `map_persist_path` (`~/.dome/slam_map`) is the stem only.
 
-## Main Entry Point
+## Observations and Potential Improvements
 
-```python
-def main():
-    rclpy.init()
-    node = SlamManagerNode()
-    try:
-        rclpy.spin(node)
-    finally:
-        node.save_map()
-        node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
-```
+1. **`makedirs` guard** — `os.path.dirname("")` returns `""`. If `map_persist_path` is ever a bare filename with no directory component, `makedirs("")` raises. A guard like `if d := os.path.dirname(...): os.makedirs(d, ...)` prevents this.
 
-`save_map()` is in `finally` so it runs on both normal shutdown (SIGINT) and unexpected exits.
+2. **`spin_until_future_complete` during periodic save** — calling this inside a timer callback blocks the ROS2 executor for up to 10 seconds. For a node that only manages SLAM state this is acceptable, but it would be incorrect in a node with real-time callbacks. A fully async implementation would chain a `add_done_callback` on the future instead.
 
-## Potential Improvements
+3. **Status string vs enum** — publishing `"mapping"` as a raw string is fragile for consumers. A `std_msgs/Int8` with an enum, or a custom message, would be more robust. The current approach is fine while dome_nav is the only consumer.
 
-- **`os.path.dirname` edge case**: if `map_persist_path` has no directory component, `dirname` returns `""` and `makedirs("")` raises. Guard with `if dirname := os.path.dirname(self.map_persist_path): os.makedirs(dirname, exist_ok=True)`.
-- **Unreachable branch**: `status.data = "mapping" if self.map_ready else "waiting"` — once `map_ready` is `True` it never reverts; the `"waiting"` string can only publish before the first map arrives if `on_map` is somehow called with `map_ready` already `True`, which cannot happen. Simplify to `status.data = "mapping"` inside the callback, or publish `"waiting"` at a timer rate before the first map arrives.
-- **No lifecycle management**: this is a plain `Node`, not a `LifecycleNode`. For production use, a lifecycle node would allow clean deactivation without process exit.
-- **`spin_until_future_complete` at shutdown**: if slam_toolbox has already exited (e.g., crash), this will block for the full 10-second timeout. A shorter timeout with a retry would be more responsive.
+4. **Configurable save interval** — the 30-second period is hardcoded. Exposing it as a ROS2 parameter would let operators tune it without recompiling.

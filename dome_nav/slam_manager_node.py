@@ -30,7 +30,13 @@ class SlamManagerNode(Node):
 
         self.serialize_client = self.create_client(SerializePoseGraph, "/slam_toolbox/serialize_map")
 
+        self.save_timer = self.create_timer(30.0, self.periodic_save)
+
         self.get_logger().info(f"SlamManagerNode ready. map_persist_path={self.map_persist_path}")
+
+    def periodic_save(self):
+        if self.map_ready:
+            self.save_map()
 
     def on_map(self, msg: OccupancyGrid):
         if not self.map_ready:

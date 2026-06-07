@@ -15,23 +15,23 @@ subscribes `/map`, asserts resolution > 0, width > 0, height > 0, at least some 
 Also asserts `map→odom` TF available via tf2. Test must pass before T02 is done.
 
 ## T03 — slam_manager_node publishes status
-**Status**: not done
+**Status**: done
 **Description**: `/dome_nav/slam_status` publishes "mapping" once `/map` is received.
 **Test**: `ros2 topic echo /dome_nav/slam_status` shows "mapping" after map arrives.
 
 ## T04 — pose graph saves on clean shutdown
-**Status**: not done
+**Status**: done
 **Description**: Ctrl-C triggers `slam_manager_node.save_map()`. Files
 `~/.dome/slam_map.posegraph` and `~/.dome/slam_map.data` exist after shutdown.
 **Test**: manual — check files exist and are non-empty after clean shutdown.
 
 ## T05 — map loads on next run
-**Status**: not done
+**Status**: done
 **Description**: Relaunch with existing `~/.dome/slam_map.posegraph`. Pre-built
 map walls visible in RViz immediately without robot movement.
 **Test**: manual — `/map` topic appears within 5s of launch with non-empty grid.
 
 ## T06 — write unit tests for slam_manager_node
-**Status**: not done
+**Status**: done
 **Description**: Test `save_map()` service call logic with mocked ROS2 client.
 Test `on_map()` sets `map_ready` and publishes status. Put in `test/test_slam_manager.py`.

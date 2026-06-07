@@ -1,10 +1,10 @@
 # F01 — SLAM Bringup and Map Persistence
 
 **Priority**: High
-**Done:** no
+**Done:** yes
 **Tasks File Created:** yes
-**Tests Written:** no
-**Test Passing:** no
+**Tests Written:** yes
+**Test Passing:** yes
 **Description**: Launch slam_toolbox via dome_nav, verify map builds from lidar,
 verify pose graph saves on shutdown, verify map loads on next run. This is the
 foundation everything else depends on.
