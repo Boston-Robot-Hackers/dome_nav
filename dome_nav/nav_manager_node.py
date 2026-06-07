@@ -3,13 +3,16 @@
 # Author: Pito Salas and Claude Code
 # Open Source Under MIT license
 
+import functools
 import json
+import math
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
+import tf2_ros
 
 
 class NavManagerNode(Node):
@@ -22,7 +25,11 @@ class NavManagerNode(Node):
         self.intent_sub = self.create_subscription(String, "/intent", self.on_intent, 10)
         self.targets_sub = self.create_subscription(String, "/targets/confirmed", self.on_targets, 10)
 
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
         self.confirmed_targets: list[dict] = []
+        self._goal_handle = None
         self.get_logger().info("NavManagerNode ready.")
 
     def on_targets(self, msg: String):
@@ -69,21 +76,60 @@ class NavManagerNode(Node):
         goal.pose = goal_pose
         self.get_logger().info(f"Navigating to {label} at {xyz}.")
         self.publish_status(f"navigating:{label}")
-        self.nav_client.send_goal_async(goal, feedback_callback=self.on_nav_feedback)
+        future = self.nav_client.send_goal_async(goal, feedback_callback=self.on_nav_feedback)
+        future.add_done_callback(functools.partial(self._on_goal_accepted, label=label))
+
+    def _on_goal_accepted(self, future, label: str):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().warning("Goal rejected by Nav2.")
+            self.publish_status(f"goal_rejected:{label}")
+            return
+        self._goal_handle = goal_handle
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(functools.partial(self._on_goal_result, label=label))
+
+    def _on_goal_result(self, future, label: str):
+        self._goal_handle = None
+        result = future.result()
+        from action_msgs.msg import GoalStatus
+        if result.status == GoalStatus.STATUS_SUCCEEDED:
+            self.publish_status(f"done:{label}")
+        else:
+            self.publish_status(f"failed:{label}")
 
     def cancel_navigation(self):
-        if self.nav_client.server_is_ready():
-            self.nav_client._cancel_goal_async()
+        if self._goal_handle is not None:
+            self._goal_handle.cancel_goal_async()
+            self._goal_handle = None
             self.publish_status("cancelled")
 
     def on_nav_feedback(self, feedback_msg):
         pass
 
+    def robot_xy_in_map(self) -> tuple[float, float] | None:
+        try:
+            tf = self.tf_buffer.lookup_transform("map", "base_footprint", rclpy.time.Time())
+            t = tf.transform.translation
+            return (t.x, t.y)
+        except (tf2_ros.LookupException, tf2_ros.ExtrapolationException, tf2_ros.ConnectivityException):
+            return None
+
     def find_nearest_confirmed(self, label: str) -> dict | None:
         matches = [t for t in self.confirmed_targets if t.get("label") == label]
         if not matches:
             return None
-        return matches[0]
+        robot_xy = self.robot_xy_in_map()
+        if robot_xy is None:
+            self.get_logger().warning("map→base_footprint TF unavailable — returning first match.")
+            return matches[0]
+        rx, ry = robot_xy
+
+        def dist(target: dict) -> float:
+            xyz = target.get("xyz_world", [0.0, 0.0, 0.0])
+            return math.sqrt((xyz[0] - rx) ** 2 + (xyz[1] - ry) ** 2)
+
+        return min(matches, key=dist)
 
     def publish_status(self, status: str):
         msg = String()

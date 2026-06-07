@@ -36,11 +36,11 @@ slam_manager, so the `finally: save_map()` call in main() usually fails (service
 Fix: `periodic_save` timer fires every 30s while map_ready, ensuring pose graph is saved
 regardless of shutdown ordering. Shutdown save is best-effort fallback only.
 
-## Code Issues Found (not yet filed as tasks)
+## Code Issues Fixed
 
-- `nav_manager_node.py:75` — `self.nav_client._cancel_goal_async()` uses private rclpy API; should track GoalHandle and call `goal_handle.cancel_goal_async()`.
-- `nav_manager_node.py:82` — `find_nearest_confirmed` returns first match, not nearest; name is misleading.
-- `slam_manager_node.py:50` — `os.path.dirname` returns `""` if path has no directory; `makedirs("")` raises. Guard needed.
+- `nav_manager_node.py` — `cancel_navigation` now tracks GoalHandle via `_on_goal_accepted` callback, calls `goal_handle.cancel_goal_async()`.
+- `nav_manager_node.py` — `find_nearest_confirmed` now does true distance sort using TF; falls back to first match if TF unavailable.
+- `slam_manager_node.py` — `makedirs("")` guard added: only calls `makedirs` when `dirname` is non-empty.
 
 ## What is NOT done
 
@@ -48,9 +48,16 @@ regardless of shutdown ordering. Shutdown save is best-effort fallback only.
 - dome_vision `semantic_map_node.py` still uses `odom` frame — needs updating to `map`.
 - No integration test with full linorobot2 + dome_nav stack automated.
 
+## F02/TF02 Task Status
+
+- T01 — done (find_nearest_confirmed: distance sort, 6 tests)
+- T02 — done (cancel_navigation: tracked GoalHandle via _on_goal_accepted)
+- T03 — done (_on_goal_result: publishes done:/failed: on completion, 4 tests)
+- T04 — done (18 unit tests total: routing, navigate, cancel, result callbacks)
+- T05 — not done (manual integration test — needs live stack)
+
 ## Likely Next Steps
 
-1. Define F02 feature (nav_manager_node — NavigateToPose flow).
-2. Fix `find_nearest_confirmed` — rename or implement distance sort.
-3. Fix `cancel_navigation` to use tracked GoalHandle instead of private API.
-4. Fix `makedirs("")` guard in `save_map`.
+1. T05: manual integration test with live stack.
+2. Fix dome_vision `semantic_map_node.py` frame from `odom` → `map`.
+3. Define F03.

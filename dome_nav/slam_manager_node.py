@@ -47,7 +47,9 @@ class SlamManagerNode(Node):
         self.status_pub.publish(status)
 
     def save_map(self):
-        os.makedirs(os.path.dirname(self.map_persist_path), exist_ok=True)
+        parent = os.path.dirname(self.map_persist_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
 
         if not self.serialize_client.wait_for_service(timeout_sec=5.0):
             self.get_logger().warning("serialize_map service not available — map not saved.")
