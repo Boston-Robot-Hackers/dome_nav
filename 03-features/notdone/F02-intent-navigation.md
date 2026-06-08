@@ -5,8 +5,8 @@ Feature file name: `F02-intent-navigation.md`
 **Priority**: High
 **Done:** no
 **Tasks File Created:** yes
-**Tests Written:** no
-**Test Passing:** no
+**Tests Written:** yes (unit T01–T04; T05 manual pending live stack)
+**Test Passing:** yes (unit); T05 not yet run
 **Description**: nav_manager_node receives JSON intents on `/intent`, looks up the
 target in `/targets/confirmed`, finds the nearest match by distance, and sends a
 `NavigateToPose` goal to Nav2 in `map` frame. Publishes `/dome_nav/nav_status`.

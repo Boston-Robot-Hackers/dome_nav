@@ -1,6 +1,6 @@
 # Code Review Checklist
 
-Version: 3.0
+Version: 3.1
 
 Use this for Python source reviews. `MUST` items are blocking unless explicitly
 waived in the task or PR notes. `SHOULD` items are expected defaults. `CONSIDER`
@@ -30,6 +30,16 @@ items are review prompts, not mechanical rules.
 - [ ] MUST: No mutable default arguments
 - [ ] MUST: No bare `except Exception:` or silent `except X: pass`
 - [ ] MUST: Validation happens at system boundaries: user input, config, hardware, ROS, or external APIs
+
+### Report Errors, Don't Guess And "Fix" Them
+When code detects something wrong or unexpected, report it (raise/die, or warn) —
+do not infer what was meant and correct it. A guess-and-repair either hides a real
+bug or invents new wrong behavior. If the wrong value came from our own code or
+content, it's a bug to fix at the source.
+- [ ] MUST: Do not compensate for a violated expectation by reinterpreting, coercing, defaulting, or branching to "make it work"
+- [ ] MUST: On a problem, raise with context; never return the bad value unchanged or a silent fallback, and never swallow with `except: return None`/`continue`
+- [ ] MUST: Validate once at the boundary, then trust it
+- [ ] SHOULD: Only genuinely external, untrusted input gets validate-and-reject — and even then, reject, don't silently fix
 - [ ] MUST: Bug fixes include regression tests unless the case is hardware-only or otherwise documented
 - [ ] MUST: JSON map/tracker format changes preserve old saved files or include migration/default handling
 - [ ] MUST: Lifecycle nodes stop worker threads, timers, publishers/subscribers, and OAK resources cleanly on deactivate/cleanup
@@ -100,7 +110,7 @@ items are review prompts, not mechanical rules.
 - [ ] CONSIDER: No god methods, feature envy, data clumps, or unrelated responsibilities in one class
 - [ ] CONSIDER: Mutable state is necessary and class invariants are enforced
 - [ ] CONSIDER: Public API is minimal; internal helpers are clearly separated from public interface
-- [ ] CONSIDER: Repeated 3+ line blocks or repeated object construction patterns may need a helper
+- [ ] MUST: No duplicated logic (DRY) — read every method body and actively look for repeated patterns, not just obvious copy-paste. Check: identical or near-identical method bodies, the same 3+ line sequence in multiple places, repeated object construction patterns. Extract a helper when found
 
 ## Comments And Types
 - [ ] SHOULD: Simple methods with obvious bodies have no docstring
