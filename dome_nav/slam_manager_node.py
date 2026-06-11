@@ -58,13 +58,14 @@ class SlamManagerNode(Node):
         req = SerializePoseGraph.Request()
         req.filename = self.map_persist_path
         future = self.serialize_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
+        future.add_done_callback(self._on_save_done)
+        return True
 
+    def _on_save_done(self, future):
         if future.result() is not None:
             self.get_logger().info(f"Pose graph saved to {self.map_persist_path}")
-            return True
-        self.get_logger().error("Failed to serialize pose graph.")
-        return False
+        else:
+            self.get_logger().error("Failed to serialize pose graph.")
 
 
 def main():

@@ -2,7 +2,7 @@
 
 ## Snapshot
 
-**Date:** 2026-06-07
+**Date:** 2026-06-11
 **Branch:** main
 **Status:** F01 complete — all T01–T06 done. slam_toolbox launches, /map publishes, TF valid, status publishes, pose graph saves periodically, map loads on relaunch.
 
@@ -76,8 +76,52 @@ ros2 node list | grep -E "planner|controller|costmap"
 ros2 action list | grep compute_path
 ```
 
+## Localization Strategy — Decision Pending (2026-06-11)
+
+Current launch uses slam_toolbox `online_async` (mapping mode). Problem: if robot does NOT
+start at exact last-saved pose, map corrupts silently — new scans added at wrong offsets.
+
+### Options evaluated
+
+**A. slam_toolbox localization mode**
+- Loads `.posegraph` + `.data`, matches lidar scan-to-scan against pose graph
+- Better cold-start (can find itself without manual pose hint)
+- Supports loop closure; map stays frozen
+- More complex, heavier than AMCL
+
+**B. AMCL + static map (recommended)**
+- Loads `basement1.pgm` + `basement1.yaml` via `nav2_map_server`
+- Particle filter localizes against occupancy grid
+- Simpler, lighter, well-tested in Nav2
+- Needs reasonable initial pose to converge; fine if robot always boots at dock
+- Requires removing slam_toolbox from launch, re-enabling AMCL in nav2 params
+- Map is truly static — won't drift or grow
+
+**C. Keep online_async + always dock before shutdown**
+- Fragile. One missed dock = corrupt map. Not recommended.
+
+### Dock position in existing map
+
+Map was built with `map_start_at_dock: true` — dock *should* be at (0,0,0) in map frame.
+BUT: exact start position when map was built is uncertain. Before committing to AMCL,
+verify dock coordinates using one of:
+1. Load map in RViz (`map_server` + `basement1.yaml`), visually confirm (0,0,0) is dock area
+2. Boot with `online_async` + existing map, drive robot to dock physically, read pose from
+   RViz or `ros2 topic echo /pose` — that reading = dock's true map coordinates
+
+### To switch to AMCL
+
+1. Change `robot.launch.py`: replace `slam_toolbox online_async_launch.py` with
+   `nav2_bringup map_server` + `amcl` nodes (or use `localization_launch.py`)
+2. Re-enable AMCL in `nav2_param_patch.yaml` (currently AMCL is disabled — slam_toolbox
+   owns `map→odom` TF; AMCL and slam_toolbox cannot coexist on that TF edge)
+3. Set AMCL `initial_pose` params to confirmed dock coordinates
+4. Remove `slam_manager_node` from launch (no longer needed)
+
 ## Likely Next Steps
 
-1. T05: get full Nav2 stack (planner + controller) running, retry intent navigation.
-2. Fix dome_vision `semantic_map_node.py` frame from `odom` → `map`.
-3. Define F03.
+1. Decide localization strategy (AMCL vs slam_toolbox localization) — see above.
+2. Verify dock position in map before switching.
+3. T05: get full Nav2 stack (planner + controller) running, retry intent navigation.
+4. Fix dome_vision `semantic_map_node.py` frame from `odom` → `map`.
+5. Define F03.

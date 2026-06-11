@@ -1,6 +1,6 @@
 ---
-version: "1.1"
-generated: "2026-06-07"
+version: "1.2"
+generated: "2026-06-11"
 ---
 
 # slam_manager_node — SLAM State Monitor and Map Persistence
@@ -83,32 +83,38 @@ sequenceDiagram
 
 ## Saving the Pose Graph
 
-`save_map` follows a simple sequence: ensure the output directory exists, wait up to 5 seconds for the service to be available, make the async call, then spin until complete or timed out.
+`save_map` ensures the output directory exists, waits up to 5 seconds for the service, fires the async call, and attaches a done callback. It returns immediately after dispatching — the result is handled asynchronously.
 
 ```python
 def save_map(self):
-    os.makedirs(os.path.dirname(self.map_persist_path), exist_ok=True)
+    parent = os.path.dirname(self.map_persist_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     if not self.serialize_client.wait_for_service(timeout_sec=5.0):
         self.get_logger().warning("serialize_map service not available — map not saved.")
         return False
     req = SerializePoseGraph.Request()
     req.filename = self.map_persist_path
     future = self.serialize_client.call_async(req)
-    rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
+    future.add_done_callback(self._on_save_done)
+    return True
+
+def _on_save_done(self, future):
     if future.result() is not None:
         self.get_logger().info(f"Pose graph saved to {self.map_persist_path}")
-        return True
-    self.get_logger().error("Failed to serialize pose graph.")
-    return False
+    else:
+        self.get_logger().error("Failed to serialize pose graph.")
 ```
 
-slam_toolbox appends `.posegraph` and `.data` extensions to the filename automatically. The path stored in `map_persist_path` (`~/.dome/slam_map`) is the stem only.
+Using `add_done_callback` instead of `spin_until_future_complete` avoids blocking the ROS2 executor inside a timer callback. The tradeoff: callers can no longer check a return value to know if the save succeeded — only the log reflects the outcome.
+
+slam_toolbox appends `.posegraph` and `.data` extensions to the filename automatically. The path in `map_persist_path` is the stem only.
 
 ## Observations and Potential Improvements
 
 1. **`makedirs` guard** — `os.path.dirname("")` returns `""`. If `map_persist_path` is ever a bare filename with no directory component, `makedirs("")` raises. A guard like `if d := os.path.dirname(...): os.makedirs(d, ...)` prevents this.
 
-2. **`spin_until_future_complete` during periodic save** — calling this inside a timer callback blocks the ROS2 executor for up to 10 seconds. For a node that only manages SLAM state this is acceptable, but it would be incorrect in a node with real-time callbacks. A fully async implementation would chain a `add_done_callback` on the future instead.
+2. **Async save result unobservable by callers** — `save_map` returns `True` after dispatching the service call, but the actual success or failure is only logged in `_on_save_done`. Any caller that checked the return value for confirmation now gets no signal. This is acceptable for periodic saves and best-effort shutdown saves, but would be a problem if save success ever gates other logic.
 
 3. **Status string vs enum** — publishing `"mapping"` as a raw string is fragile for consumers. A `std_msgs/Int8` with an enum, or a custom message, would be more robust. The current approach is fine while dome_nav is the only consumer.
 

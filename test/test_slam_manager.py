@@ -70,30 +70,23 @@ def test_save_map_returns_false_when_service_unavailable(node):
 
 def test_save_map_calls_service_with_correct_path(node):
     mock_future = MagicMock()
-    mock_future.result.return_value = MagicMock()
-
     node.serialize_client.wait_for_service = MagicMock(return_value=True)
     node.serialize_client.call_async = MagicMock(return_value=mock_future)
 
-    with patch("rclpy.spin_until_future_complete"):
-        result = node.save_map()
+    result = node.save_map()
 
     call_args = node.serialize_client.call_async.call_args[0][0]
     assert call_args.filename == node.map_persist_path
     assert result is True
 
 
-def test_save_map_returns_false_on_future_none(node):
+def test_on_save_done_logs_error_on_future_none(node):
     mock_future = MagicMock()
     mock_future.result.return_value = None
 
-    node.serialize_client.wait_for_service = MagicMock(return_value=True)
-    node.serialize_client.call_async = MagicMock(return_value=mock_future)
-
-    with patch("rclpy.spin_until_future_complete"):
-        result = node.save_map()
-
-    assert result is False
+    with patch.object(node, "get_logger") as mock_logger:
+        node._on_save_done(mock_future)
+        mock_logger().error.assert_called_once()
 
 
 def test_save_map_creates_directory(node, tmp_path):
@@ -101,12 +94,9 @@ def test_save_map_creates_directory(node, tmp_path):
     node.map_persist_path = new_path
 
     mock_future = MagicMock()
-    mock_future.result.return_value = MagicMock()
-
     node.serialize_client.wait_for_service = MagicMock(return_value=True)
     node.serialize_client.call_async = MagicMock(return_value=mock_future)
 
-    with patch("rclpy.spin_until_future_complete"):
-        node.save_map()
+    node.save_map()
 
     assert (tmp_path / "subdir").exists()

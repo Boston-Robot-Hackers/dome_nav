@@ -42,3 +42,8 @@ velocity_smoother:
     min_velocity: [-0.4, 0.0, -1.9]
     max_accel: [1.5, 0.0, 3.2]
     max_decel: [-1.5, 0.0, -3.2]
+
+collision_monitor:
+  ros__parameters:
+    polygons: []
+    observation_sources: []

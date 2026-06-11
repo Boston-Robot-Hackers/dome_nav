@@ -14,7 +14,7 @@ def robot_launch(use_sim_time: str = "false"):
     bl = BetterLaunch()
 
     home = dome_home()
-    slam_map_path = os.path.join(home, "slam_map")
+    slam_map_path = os.path.join(home, "slam_maps", "basement1")
     os.makedirs(home, exist_ok=True)
 
     pkg = get_package_share_directory("dome_nav")
