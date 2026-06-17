@@ -2,9 +2,9 @@
 
 ## Snapshot
 
-**Date:** 2026-06-11
+**Date:** 2026-06-16
 **Branch:** main
-**Status:** F01 complete — all T01–T06 done. slam_toolbox launches, /map publishes, TF valid, status publishes, pose graph saves periodically, map loads on relaunch.
+**Status:** Architecture redesign complete. New spec written. F03/F04/F05 features defined. No code written yet.
 
 ## What exists
 
@@ -13,115 +13,67 @@
 - `nav_manager_node.py` — subscribes `/intent`, sends `NavigateToPose` goals to Nav2.
 - `utils.py` — `dome_home()`, `yaml_override()`, `yaml_patch_dict()` for launch config merging.
 - `config/slam_param_patch.yaml` — slam_toolbox overrides (range, TF tolerance, map persistence).
-- `config/nav2_param_patch.yaml` — Nav2 overrides (AMCL removed).
-- `launch/robot.launch.py` and `launch/remote.launch.py` — better_launch wrappers.
+- `config/nav2_param_patch.yaml` — Nav2 overrides.
+- `launch/robot.launch.py` — better_launch wrapper (slam_toolbox + Nav2 + manager nodes).
 - `01-literate/` — literate docs for utils, slam_manager_node, nav_manager_node.
-- `test/test_map_validation.py` — manual integration tests for T02 (4 tests, all pass).
-- `test/test_slam_manager.py` — unit tests for T06: on_map and save_map (7 tests, all pass).
-- `setup.cfg` — pytest `manual` mark registered.
+- `test/test_slam_manager.py`, `test/test_nav_manager.py` — unit tests (require rclpy, fail without ROS2).
+- `02-doc/brainstorm.md` — full architecture brainstorm from 2026-06-16 session.
 
-## F01/TF01 Task Status
+## Architecture Decision (2026-06-16)
 
-- T01 — done (colcon build passes)
-- T02 — done (slam_toolbox launches, /map and map→odom TF confirmed, 4 tests pass)
-- T03 — done (`/dome_nav/slam_status` publishes "mapping")
-- T04 — done (pose graph saves every 30s via periodic timer)
-- T05 — done (map loads on next run — 69 occupied cells visible immediately on relaunch)
-- T06 — done (7 unit tests for slam_manager_node — save_map mocked, on_map status)
+**New approach: Static map + AMCL** replaces lifelong slam_toolbox as the navigation strategy.
 
-## Key Design Decision — T04
+Two modes:
+- **Mode A (map build)**: `robot_map.launch.py` — slam_toolbox online_async, human teleoperation, save map on shutdown. Run once.
+- **Mode B (navigate)**: `robot_nav.launch.py` — map_server + AMCL + Nav2. Normal operation. AMCL converges from lidar alone, no fixed start position, no fiducials needed.
 
-Ctrl-C sends SIGINT to all nodes simultaneously. slam_toolbox exits at same time as
-slam_manager, so the `finally: save_map()` call in main() usually fails (service gone).
-Fix: `periodic_save` timer fires every 30s while map_ready, ensuring pose graph is saved
-regardless of shutdown ordering. Shutdown save is best-effort fallback only.
+Key reasons:
+- AMCL (particle filter) provides global localization without known initial pose
+- Static map = no TF jumps from loop closure, no Nav2 goal invalidation
+- Much simpler, more robust, 20+ years battle-tested
+- Outdoor extension: swap AMCL for GPS/RTK EKF, everything else unchanged
 
-## Code Issues Fixed
+`spec.md` fully rewritten to reflect this.
 
-- `nav_manager_node.py` — `cancel_navigation` now tracks GoalHandle via `_on_goal_accepted` callback, calls `goal_handle.cancel_goal_async()`.
-- `nav_manager_node.py` — `find_nearest_confirmed` now does true distance sort using TF; falls back to first match if TF unavailable.
-- `slam_manager_node.py` — `makedirs("")` guard added: only calls `makedirs` when `dirname` is non-empty.
+## To switch to AMCL (implementation steps for F03)
 
-## What is NOT done
+1. Rename `robot.launch.py` → `robot_map.launch.py` (Mode A, unchanged)
+2. New `robot_nav.launch.py`: replace `slam_toolbox online_async_launch.py` with
+   `nav2_bringup localization_launch.py` (map_server + amcl)
+3. Re-enable AMCL in `nav2_param_patch.yaml` (currently disabled — slam_toolbox owns
+   `map→odom` TF; AMCL and slam_toolbox cannot coexist on that TF edge)
+4. Remove `slam_manager_node` from nav launch (not needed in Mode B)
+5. Note: AMCL particle filter converges from any start — no dock/initial pose needed
 
-- F02+ features not yet defined.
-- dome_vision `semantic_map_node.py` still uses `odom` frame — needs updating to `map`.
-- No integration test with full linorobot2 + dome_nav stack automated.
+## dome_vision finding
 
-## F02/TF02 Task Status
+`semantic_map_node.py` line 26: `ODOM_FRAME = "odom"` — objects stored in odom frame,
+which resets each session. For cross-session object memory, must change to `"map"`.
+This is NOT a dome_nav change — it's in dome_vision repo.
 
-- T01 — done (find_nearest_confirmed: distance sort, 6 tests)
-- T02 — done (cancel_navigation: tracked GoalHandle via _on_goal_accepted)
-- T03 — done (_on_goal_result: publishes done:/failed: on completion, 4 tests)
-- T04 — done (18 unit tests total: routing, navigate, cancel, result callbacks)
-- T05 — not done (manual integration test — needs live stack)
+## F01/TF01 — Done
 
-## T05 Live Stack Debugging (2026-06-07)
+All tasks complete. slam_toolbox launches, `/map` publishes, TF valid, status publishes,
+pose graph saves every 30s and on shutdown.
 
-F02 T05 manual test in progress. Status flow works: `navigating:can` → `failed:can` confirmed.
-Failure cause: Nav2 stack not fully up.
+Key design: periodic save (30s) because SIGINT kills slam_toolbox before slam_manager
+so shutdown save is unreliable. Timer-based save ensures persistence.
 
-**Findings:**
-- `/targets/confirmed` had 0 publishers — `semantic_map` lifecycle node was `unconfigured`
-- Fixed: `ros2 lifecycle set /semantic_map configure && ros2 lifecycle set /semantic_map activate`
-- After activation, Nav2 accepted goal but `compute_path_to_pose` action server timed out
-- `bt_navigator` running but planner server not ready or not started
-- `collision_monitor` missing params (`FootprintApproach.max_points`)
-- `opennav_docking` missing param (`dock_database`)
-- `dome_control` not running — hardware interface absent
+## F02/TF02 — Partially Done
 
-**Next debug step:**
-```bash
-ros2 node list | grep -E "planner|controller|costmap"
-ros2 action list | grep compute_path
-```
+- T01–T04 done (unit tests, routing, cancel, result callbacks)
+- T05 not done (manual integration — needs live stack with Nav2 fully up)
+- F02 needs revisiting: intent navigation now depends on AMCL mode (F03) not slam_toolbox
 
-## Localization Strategy — Decision Pending (2026-06-11)
+## Features Not Done
 
-Current launch uses slam_toolbox `online_async` (mapping mode). Problem: if robot does NOT
-start at exact last-saved pose, map corrupts silently — new scans added at wrong offsets.
-
-### Options evaluated
-
-**A. slam_toolbox localization mode**
-- Loads `.posegraph` + `.data`, matches lidar scan-to-scan against pose graph
-- Better cold-start (can find itself without manual pose hint)
-- Supports loop closure; map stays frozen
-- More complex, heavier than AMCL
-
-**B. AMCL + static map (recommended)**
-- Loads `basement1.pgm` + `basement1.yaml` via `nav2_map_server`
-- Particle filter localizes against occupancy grid
-- Simpler, lighter, well-tested in Nav2
-- Needs reasonable initial pose to converge; fine if robot always boots at dock
-- Requires removing slam_toolbox from launch, re-enabling AMCL in nav2 params
-- Map is truly static — won't drift or grow
-
-**C. Keep online_async + always dock before shutdown**
-- Fragile. One missed dock = corrupt map. Not recommended.
-
-### Dock position in existing map
-
-Map was built with `map_start_at_dock: true` — dock *should* be at (0,0,0) in map frame.
-BUT: exact start position when map was built is uncertain. Before committing to AMCL,
-verify dock coordinates using one of:
-1. Load map in RViz (`map_server` + `basement1.yaml`), visually confirm (0,0,0) is dock area
-2. Boot with `online_async` + existing map, drive robot to dock physically, read pose from
-   RViz or `ros2 topic echo /pose` — that reading = dock's true map coordinates
-
-### To switch to AMCL
-
-1. Change `robot.launch.py`: replace `slam_toolbox online_async_launch.py` with
-   `nav2_bringup map_server` + `amcl` nodes (or use `localization_launch.py`)
-2. Re-enable AMCL in `nav2_param_patch.yaml` (currently AMCL is disabled — slam_toolbox
-   owns `map→odom` TF; AMCL and slam_toolbox cannot coexist on that TF edge)
-3. Set AMCL `initial_pose` params to confirmed dock coordinates
-4. Remove `slam_manager_node` from launch (no longer needed)
+- **F03** — AMCL navigation mode: new `robot_nav.launch.py`, map_server + AMCL + Nav2
+- **F04** — ROS-free unit tests: extract pure Python `slam_manager.py` / `nav_manager.py` from nodes
+- **F05** — Sensor-only integration test: rosbag-based, no dome_vision/dome_control needed
 
 ## Likely Next Steps
 
-1. Decide localization strategy (AMCL vs slam_toolbox localization) — see above.
-2. Verify dock position in map before switching.
-3. T05: get full Nav2 stack (planner + controller) running, retry intent navigation.
-4. Fix dome_vision `semantic_map_node.py` frame from `odom` → `map`.
-5. Define F03.
+1. F04 first: extract pure Python classes → enables tests without ROS
+2. F03: write `robot_nav.launch.py` + AMCL config
+3. F02 T05: retry live stack test once F03 is working
+4. dome_vision: change `ODOM_FRAME = "odom"` → `"map"` in `semantic_map_node.py`
