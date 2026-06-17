@@ -30,14 +30,11 @@ def robot_launch(use_sim_time: str = "false"):
     nav2_patch = os.path.join(pkg, "config", "nav2_param_patch.yaml")
     nav2_config = yaml_override(nav2_base, nav2_patch)
 
-    bl.include("slam_toolbox", "online_async_launch.py", launch_arguments={
-        "slam_params_file": slam_config,
-    })
+    bl.include("slam_toolbox", "online_async_launch.py",
+        **{"slam_params_file": slam_config})
 
-    bl.include("nav2_bringup", "navigation_launch.py", launch_arguments={
-        "params_file": nav2_config,
-        "use_sim_time": use_sim_time,
-    })
+    bl.include("nav2_bringup", "navigation_launch.py",
+        **{"params_file": nav2_config, "use_sim_time": use_sim_time})
 
     bl.node(
         "dome_nav",

@@ -45,5 +45,10 @@ velocity_smoother:
 
 collision_monitor:
   ros__parameters:
-    polygons: []
-    observation_sources: []
+    FootprintApproach:
+      max_points: 1           # satisfy required param; collision_monitor not used on dome
+
+docking_server:
+  ros__parameters:
+    dock_database: ""         # no docking hardware on dome
+

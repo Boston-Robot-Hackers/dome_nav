@@ -4,20 +4,22 @@
 # Open Source Under MIT license
 
 import functools
-import json
-import math
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
+from action_msgs.msg import GoalStatus
 from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
 import tf2_ros
+from dome_nav.nav_manager import NavManager
 
 
 class NavManagerNode(Node):
     def __init__(self):
         super().__init__("nav_manager_node")
+
+        self._manager = NavManager()
 
         self.nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
         self.status_pub = self.create_publisher(String, "/dome_nav/nav_status", 10)
@@ -28,23 +30,26 @@ class NavManagerNode(Node):
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-        self.confirmed_targets: list[dict] = []
         self._goal_handle = None
         self.get_logger().info("NavManagerNode ready.")
 
+    @property
+    def confirmed_targets(self) -> list[dict]:
+        return self._manager.confirmed_targets
+
+    @confirmed_targets.setter
+    def confirmed_targets(self, value: list[dict]):
+        self._manager.confirmed_targets = value
+
     def on_targets(self, msg: String):
-        try:
-            self.confirmed_targets = json.loads(msg.data)
-        except json.JSONDecodeError:
+        if not self._manager.on_targets(msg.data):
             self.get_logger().warning("Could not parse /targets/confirmed JSON.")
 
     def on_intent(self, msg: String):
-        try:
-            intent = json.loads(msg.data)
-        except json.JSONDecodeError:
+        result = self._manager.parse_intent(msg.data)
+        if result is None:
             return
-
-        action = intent.get("action", "")
+        action, intent = result
         if action == "go_to_object":
             label = intent.get("label", "")
             self.navigate_to_object(label)
@@ -92,7 +97,6 @@ class NavManagerNode(Node):
     def _on_goal_result(self, future, label: str):
         self._goal_handle = None
         result = future.result()
-        from action_msgs.msg import GoalStatus
         if result.status == GoalStatus.STATUS_SUCCEEDED:
             self.publish_status(f"done:{label}")
         else:
@@ -116,20 +120,10 @@ class NavManagerNode(Node):
             return None
 
     def find_nearest_confirmed(self, label: str) -> dict | None:
-        matches = [t for t in self.confirmed_targets if t.get("label") == label]
-        if not matches:
-            return None
         robot_xy = self.robot_xy_in_map()
         if robot_xy is None:
             self.get_logger().warning("map→base_footprint TF unavailable — returning first match.")
-            return matches[0]
-        rx, ry = robot_xy
-
-        def dist(target: dict) -> float:
-            xyz = target.get("xyz_world", [0.0, 0.0, 0.0])
-            return math.sqrt((xyz[0] - rx) ** 2 + (xyz[1] - ry) ** 2)
-
-        return min(matches, key=dist)
+        return self._manager.find_nearest_confirmed(label, robot_xy)
 
     def publish_status(self, status: str):
         msg = String()

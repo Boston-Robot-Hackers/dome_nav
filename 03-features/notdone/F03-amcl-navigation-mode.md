@@ -2,7 +2,7 @@
 
 **Priority**: High
 **Done:** no
-**Tasks File Created:** no
+**Tasks File Created:** yes
 **Tests Written:** no
 **Test Passing:** no
 **Description**: Add Mode B to dome_nav: load a saved occupancy map via map_server,

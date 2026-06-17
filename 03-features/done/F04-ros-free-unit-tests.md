@@ -1,10 +1,10 @@
 # F04 — ROS-Free Unit Tests for Manager Logic
 
 **Priority**: Medium
-**Done:** no
-**Tasks File Created:** no
-**Tests Written:** no
-**Test Passing:** no
+**Done:** yes
+**Tasks File Created:** yes
+**Tests Written:** yes (23 pure Python tests)
+**Test Passing:** yes (48/48 total including existing ROS node tests)
 **Description**: Extract core logic from `slam_manager_node.py` and `nav_manager_node.py`
 into pure Python classes with no rclpy dependency. ROS nodes become thin wrappers.
 Pure Python classes are unit-testable without a ROS installation or running nodes.
