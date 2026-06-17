@@ -51,6 +51,7 @@
   - `04-tasks/template.md` — copy from `.claude/templates/task_template.md`
   - `05-issues/` — loose issues not yet converted into features
   - `05-issues/template.md` — copy from `.claude/templates/issue_template.md`
+  - `run.bash` — executable shell script containing `uv run streamlit run src/book.py` (or the appropriate run command for the app); set executable with `chmod +x run.bash`
 * After scaffolding, prompt the user to fill in `02-doc/spec.md` and initialize `02-doc/current.md` before defining any features
 
 # github

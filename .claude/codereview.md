@@ -1,6 +1,6 @@
 # Code Review Checklist
 
-Version: 3.1
+Version: 3.2
 
 Use this for Python source reviews. `MUST` items are blocking unless explicitly
 waived in the task or PR notes. `SHOULD` items are expected defaults. `CONSIDER`
@@ -120,6 +120,13 @@ content, it's a bug to fix at the source.
 - [ ] SHOULD: Public method parameters have type annotations where the type is non-obvious
 - [ ] SHOULD: Return type is annotated when callers would otherwise have to guess
 - [ ] MUST: Prefer simple annotations where possible; use precise collection types when they prevent caller ambiguity
+
+## Web Assets (CSS / JS / HTML)
+- [ ] MUST: No inline CSS strings inside Python source files; CSS lives in `.css` files loaded at runtime
+- [ ] MUST: No inline JavaScript strings inside Python source files; JS lives in `.js` files loaded at runtime
+- [ ] MUST: No inline HTML template strings inside Python source files; HTML templates live in `.html` files loaded at runtime
+- [ ] MUST: Python loads asset files via `Path(__file__).parent / "filename"` and passes the content to the framework
+- [ ] SHOULD: One CSS file per module that needs custom styles; shared styles go in a shared asset file
 
 ## Runtime Quality
 - [ ] MUST: No unreachable code, commented-out code blocks, debug print statements, or breakpoints
