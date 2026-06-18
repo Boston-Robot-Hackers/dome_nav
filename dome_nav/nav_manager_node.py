@@ -8,8 +8,8 @@ import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from action_msgs.msg import GoalStatus
-from std_msgs.msg import String
-from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import String, Float32
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from nav2_msgs.action import NavigateToPose
 import tf2_ros
 from dome_nav.nav_manager import NavManager
@@ -24,22 +24,23 @@ class NavManagerNode(Node):
         self.nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
         self.status_pub = self.create_publisher(String, "/dome_nav/nav_status", 10)
 
+        self.loc_status_pub = self.create_publisher(String, "/dome_nav/localization_status", 10)
+        self.loc_score_pub = self.create_publisher(Float32, "/dome_nav/localization_score", 10)
+
         self.intent_sub = self.create_subscription(String, "/intent", self.on_intent, 10)
         self.targets_sub = self.create_subscription(String, "/targets/confirmed", self.on_targets, 10)
+        self.amcl_sub = self.create_subscription(
+            PoseWithCovarianceStamped, "/amcl_pose", self.on_amcl_pose, 10
+        )
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         self._goal_handle = None
+        self._last_loc_status = "localizing"
+        self._last_loc_score = 0.0
+        self.create_timer(1.0, self._publish_localization)
         self.get_logger().info("NavManagerNode ready.")
-
-    @property
-    def confirmed_targets(self) -> list[dict]:
-        return self._manager.confirmed_targets
-
-    @confirmed_targets.setter
-    def confirmed_targets(self, value: list[dict]):
-        self._manager.confirmed_targets = value
 
     def on_targets(self, msg: String):
         if not self._manager.on_targets(msg.data):
@@ -107,6 +108,20 @@ class NavManagerNode(Node):
             self._goal_handle.cancel_goal_async()
             self._goal_handle = None
             self.publish_status("cancelled")
+
+    def on_amcl_pose(self, msg: PoseWithCovarianceStamped):
+        status, score = self._manager.check_localization(list(msg.pose.covariance))
+        self._last_loc_status = status
+        self._last_loc_score = score
+        self._publish_localization()
+
+    def _publish_localization(self):
+        s_msg = String()
+        s_msg.data = self._last_loc_status
+        self.loc_status_pub.publish(s_msg)
+        f_msg = Float32()
+        f_msg.data = float(self._last_loc_score)
+        self.loc_score_pub.publish(f_msg)
 
     def on_nav_feedback(self, feedback_msg):
         pass

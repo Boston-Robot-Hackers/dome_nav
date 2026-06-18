@@ -46,9 +46,18 @@ velocity_smoother:
 collision_monitor:
   ros__parameters:
     FootprintApproach:
-      max_points: 1           # satisfy required param; collision_monitor not used on dome
+      points: "[[0.25, 0.25], [0.25, -0.25], [-0.25, -0.25], [-0.25, 0.25]]"
+      min_points: 1           # collision_monitor not actively used on dome
 
-docking_server:
+
+lifecycle_manager:
   ros__parameters:
-    dock_database: ""         # no docking hardware on dome
+    node_names:
+      - planner_server
+      - controller_server
+      - smoother_server
+      - recoveries_server
+      - bt_navigator
+      - waypoint_follower
+      - velocity_smoother
 

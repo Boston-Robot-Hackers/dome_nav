@@ -35,7 +35,8 @@ def robot_nav_launch(use_sim_time: str = "false"):
     nav_config = yaml_override(nav2_base, nav2_patch)
 
     bl.include("nav2_bringup", "navigation_launch.py",
-        params_file=nav_config, use_sim_time=use_sim_time)
+        params_file=nav_config, use_sim_time=use_sim_time,
+        use_docking_server="False")
 
     bl.node(
         "dome_nav",

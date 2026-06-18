@@ -4,84 +4,64 @@
 
 **Date:** 2026-06-17
 **Branch:** main
-**Status:** F03 (AMCL mode) live-tested and working. F04 (pure Python tests) done. F06 feature file created.
+**Status:** Code review of whole package done (style_guide.md). F07 shipped
+(lifecycle node + temp-file leak fix). 10 issues filed (I01–I11, no I-gap); I01 + I11
+resolved. F08 typed-messages proposal written (not started).
 
 ## What exists
 
-- `dome_nav/slam_manager.py` — pure Python `SlamManager`: map readiness state, save gating, dir setup
-- `dome_nav/nav_manager.py` — pure Python `NavManager`: JSON parsing, target selection, status strings
-- `dome_nav/slam_manager_node.py` — thin ROS2 wrapper delegating to `SlamManager`
-- `dome_nav/nav_manager_node.py` — thin ROS2 wrapper delegating to `NavManager`
-- `dome_nav/utils.py` — `dome_home()`, `yaml_override()`, `yaml_patch_dict()`
-- `config/slam_param_patch.yaml` — slam_toolbox overrides
-- `config/nav2_param_patch.yaml` — Nav2 overrides + stubs for `FootprintApproach.max_points`, `docking_server.dock_database`
-- `config/nav2_amcl_patch.yaml` — AMCL + map_server params for Mode B; `set_initial_pose: true` at (0,0)
-- `launch/robot_map.launch.py` — Mode A: slam_toolbox + Nav2 + both manager nodes
-- `launch/robot_nav.launch.py` — Mode B: map_server + AMCL + Nav2 + nav_manager node
-- `01-literate/` — literate docs for utils, slam_manager_node, nav_manager_node, slam_manager, nav_manager
-- `test/test_slam_manager_pure.py` (8 tests), `test/test_nav_manager_pure.py` (15 tests) — no rclpy, 0.04s
-- `test/test_slam_manager.py`, `test/test_nav_manager.py` — ROS node tests (require rclpy)
+- `dome_nav/nav_manager.py` — pure Python `NavManager`: JSON parse, nearest-target,
+  localization score, status strings (KEPT — real algorithms, 21 pure tests)
+- `dome_nav/slam_manager_node.py` — **LifecycleNode**: watches `/map`, persists pose
+  graph; synchronous save on shutdown. `SlamManager` pure class was folded in and deleted.
+- `dome_nav/nav_manager_node.py` — ROS2 node: `/intent` → NavigateToPose, status,
+  `/amcl_pose` → localization status/score. Property-proxies removed.
+- `dome_nav/utils.py` — `dome_home()`, `yaml_override()`, `yaml_patch_dict()`,
+  `write_config()` (content-addressed launch cache, replaces leaking temp files)
+- `config/` — slam_param_patch, nav2_param_patch, nav2_amcl_patch (initial pose set to
+  basement1 dock: x=-2.768, y=0.145, yaw=1.743)
+- `launch/robot_map.launch.py` (Mode A), `launch/robot_nav.launch.py` (Mode B)
+- Tests: `test_nav_manager_pure.py` (21), `test_utils_pure.py` (5),
+  `test_nav_manager.py` (18, ROS), `test_slam_manager.py` (11, ROS lifecycle),
+  `test_map_validation.py` (4, manual/live only)
 
-## Architecture
+## Test status
 
-Two modes:
-- **Mode A (map build)**: `bl dome_nav robot_map.launch.py` — slam_toolbox online_async + Nav2
-- **Mode B (navigate)**: `bl dome_nav robot_nav.launch.py` — map_server + AMCL + Nav2
+**55 passed, 4 deselected** (manual) via
+`python3 -m pytest src/dome_nav/test/ -m "not manual"`. The 4 manual tests need a live
+stack. Build: `colcon build --packages-select dome_nav --symlink-install`.
 
-AMCL notes:
-- `set_initial_pose: true` at (0,0) — only reliable if robot starts at map origin
-- Convergence check: `covariance[0]` (x) and `covariance[7]` (y) — both < 0.05 m² = converged
-- Foxglove: plot `/amcl_pose.pose.covariance[0]` and `/amcl_pose.pose.covariance[7]`
+## This session's work
 
-## Test Commands
+- Renamed `.claude/codereview.md` → `.claude/style_guide.md`; updated `/start`,
+  `CLAUDE.md`, and the j3 template repo (committed + pushed to j3).
+- Full code review against style_guide → issues I01–I11.
+- F07 T01 (I11 temp-file leak) + T02 (I01 lifecycle) done. T03 (nav lifecycle) deferred.
+  T04 (manual shutdown verify) pending live stack.
+- F04 marked partially reversed (SlamManager extraction undone, with rationale).
 
-```bash
-# Pure tests (no ROS needed)
-cd ros2_ws && source install/setup.bash
-python3 -m pytest src/dome_nav/test/test_slam_manager_pure.py src/dome_nav/test/test_nav_manager_pure.py -v
+## Open issues (05-issues/)
 
-# Launch Mode B
-bl dome_nav robot_nav.launch.py
-```
+- I01 RESOLVED (F07 T02), I11 RESOLVED (F07 T01)
+- I02–I05: nav_manager crashes/silent-drops (non-list/non-dict JSON, missing xyz_world,
+  silent intent drop) → tasks TF02 T06–T09
+- I06: leading-underscore MUST violations (3 source + 3 test files) → TF02 T10
+- I07: localization score not clamped to 1.0 → TF06 T05
+- I08: test files missing header → TF06 T06
+- I09: `should_save()` was a 1-line method — now moot (folded into lifecycle node); verify
+  before closing
+- I10: `navigate_status()` defined but bypassed by node (dead + DRY) → not yet tasked
 
-## dome_vision finding
+## Likely next steps
 
-`semantic_map_node.py` line 26: `ODOM_FRAME = "odom"` — objects stored in odom frame,
-resets each session. Change to `"map"` for cross-session object memory. NOT a dome_nav change.
+1. Fix the nav_manager crash class (I02/I03/I04/I05 — boundary validation + logging)
+2. I06 underscore rename sweep (touches source + tests)
+3. I10: wire node to call `NavManager.navigate_status()` instead of inline strings
+4. F02 T05 / F03 T05 / F06 T04 / TF07 T04 — manual live-stack tests
+5. F08 typed messages — needs dome_control + dome_vision in lockstep
 
-## F01/TF01 — Done
+## AMCL notes (unchanged)
 
-All tasks complete. slam_toolbox launches, `/map` publishes, TF valid, pose graph saves
-every 30s and on shutdown.
-
-## F02/TF02 — Partially Done
-
-- T01–T04 done (unit tests, routing, cancel, result callbacks)
-- T05 not done (manual integration — needs live Nav2 stack with confirmed targets)
-
-## F03/TF03 — Done
-
-- T01–T04 done (launch files, AMCL config, live test)
-- T05 manual test: Mode B stack up, map loads, AMCL converges (needs correct initial pose)
-- Key fix: removed `collision_monitor` section from patch to avoid `observation_sources: []` crash
-- Key fix: `set_initial_pose: true` so AMCL starts without waiting for `/initialpose` topic
-
-## F04/TF04 — Done
-
-- Pure Python `SlamManager` and `NavManager` extracted from nodes
-- 23 tests, all pass, no rclpy dependency, run in 0.04s
-- Nodes refactored as thin delegation wrappers
-
-## F06 — Planned
-
-`03-features/notdone/F06-localization-status.md` created.
-Add `NavManager.check_localization(covariance) -> str` + node subscribes `/amcl_pose`,
-publishes `/dome_nav/localization_status` with `"converged"` or `"localizing"`.
-Threshold: `covariance[0] < 0.1` and `covariance[7] < 0.1`.
-
-## Likely Next Steps
-
-1. F06: implement `check_localization` + amcl_pose subscription in nav_manager_node
-2. F02 T05: retry live stack test with Nav2 fully up
-3. Determine true dock/start coordinates in basement1 map for reliable AMCL init
-4. dome_vision: change `ODOM_FRAME = "odom"` → `"map"` in `semantic_map_node.py`
+- Convergence: `covariance[0]` (x) and `covariance[7]` (y) both < 0.05 m² = converged
+- Foxglove: plot `/amcl_pose.pose.covariance[0]` and `[7]`
+- `set_initial_pose: true` at basement1 dock pose

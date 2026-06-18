@@ -1,5 +1,13 @@
 # F04 — ROS-Free Unit Tests for Manager Logic
 
+> **Partially reversed by F07 (2026-06-17).** The `SlamManager` extraction was undone:
+> it wrapped ~6 lines of trivial state (a bool + one `makedirs`), so the wrapper +
+> property-proxies + separate test file cost more than they saved. Its logic was folded
+> back into `SlamManagerNode` (now a `LifecycleNode`) and `dome_nav/slam_manager.py` +
+> `test/test_slam_manager_pure.py` were deleted. `NavManager` is **kept** — it holds real
+> algorithms (nearest-target, localization score, intent parsing) with 21 pure tests that
+> remain valuable. Node property-proxies were also removed; tests reach the manager directly.
+
 **Priority**: Medium
 **Done:** yes
 **Tasks File Created:** yes

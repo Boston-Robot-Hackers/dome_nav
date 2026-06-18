@@ -30,6 +30,31 @@ published.
 Put in `test/test_nav_manager.py`.
 **Test**: plain pytest, no live stack required.
 
+## T06 — fix non-list JSON crash in on_targets (I02)
+**Status**: not done
+**Description**: on_targets() assigns json.loads() result without isinstance check. Non-list JSON (dict, scalar) sets confirmed_targets to wrong type; find_nearest_confirmed then raises AttributeError. Add isinstance(result, list) guard; log warning and return False if not list.
+**Test**: add regression test to test_nav_manager_pure.py: on_targets with dict JSON, on_targets with scalar JSON.
+
+## T07 — fix non-dict JSON crash in parse_intent (I03)
+**Status**: not done
+**Description**: parse_intent calls intent.get() without isinstance check. Valid non-dict JSON (list, string) raises AttributeError. Add isinstance(intent, dict) check after json.loads; return None if not dict.
+**Test**: add regression test to test_nav_manager_pure.py: parse_intent with list JSON, parse_intent with string JSON.
+
+## T08 — fix missing xyz_world silent fallback (I04)
+**Status**: not done
+**Description**: navigate_to_object falls back to [0,0,0] when xyz_world key absent, silently navigating to map origin. Check key exists first; log warning and publish no_target:label if missing.
+**Test**: add regression test to test_nav_manager_pure.py: navigate_status when target lacks xyz_world.
+
+## T09 — add warning log for malformed/unknown intent (I05)
+**Status**: not done
+**Description**: on_intent does bare return when parse_intent returns None, with no log. Add get_logger().warning with the raw message data so operators see diagnostic output.
+**Test**: manual — send malformed JSON on /intent, verify warning appears in node log.
+
+## T10 — remove leading underscore prefixes (I06)
+**Status**: not done
+**Description**: nav_manager_node.py, slam_manager_node.py, utils.py all use leading underscore on methods and instance vars, violating MUST rule in style_guide.md. Rename all: _manager→manager, _goal_handle→goal_handle, _on_goal_accepted→on_goal_accepted, etc.
+**Test**: all existing tests pass after rename.
+
 ## T05 — manual integration test
 **Status**: not done
 **Description**: With live stack and a confirmed target, publish `go_to_object` intent.

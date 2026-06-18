@@ -3,8 +3,8 @@
 # Author: Pito Salas and Claude Code
 # Open Source Under MIT license
 
+import hashlib
 import os
-import tempfile
 import yaml
 
 
@@ -21,7 +21,7 @@ def yaml_override(base_file: str, override_file: str) -> str:
         override_params = yaml.safe_load(f) or {}
 
     merged = _deep_merge(base_params, override_params)
-    return _write_temp(merged)
+    return write_config(merged)
 
 
 def yaml_patch_dict(base_file: str, overrides: dict) -> str:
@@ -30,7 +30,7 @@ def yaml_patch_dict(base_file: str, overrides: dict) -> str:
         base_params = yaml.safe_load(f) or {}
 
     merged = _deep_merge(base_params, overrides)
-    return _write_temp(merged)
+    return write_config(merged)
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -43,8 +43,18 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
-def _write_temp(data: dict) -> str:
-    temp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
-    yaml.dump(data, temp, default_flow_style=False, sort_keys=False)
-    temp.close()
-    return temp.name
+def write_config(data: dict) -> str:
+    """Write merged config to a content-addressed file under the DOME_HOME launch cache.
+
+    Keyed by a hash of the rendered YAML so identical configs reuse one file and
+    repeated launches do not accumulate temp files (the old NamedTemporaryFile
+    approach leaked one file per launch into /tmp).
+    """
+    cache_dir = os.path.join(dome_home(), "launch_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    blob = yaml.dump(data, default_flow_style=False, sort_keys=False)
+    digest = hashlib.sha1(blob.encode()).hexdigest()[:16]
+    path = os.path.join(cache_dir, f"{digest}.yaml")
+    with open(path, "w") as f:
+        f.write(blob)
+    return path

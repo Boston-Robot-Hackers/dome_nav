@@ -97,6 +97,51 @@ def test_find_nearest_from_non_origin(mgr):
     assert result["xyz_world"] == [8.0, 0.0, 0.0]
 
 
+# --- check_localization ---
+
+def _cov(x, y):
+    cov = [0.0] * 36
+    cov[0] = x
+    cov[7] = y
+    return cov
+
+
+def test_check_localization_perfect(mgr):
+    status, score = mgr.check_localization(_cov(0.0, 0.0))
+    assert score == 1.0
+    assert status == "converged"
+
+
+def test_check_localization_at_threshold(mgr):
+    status, score = mgr.check_localization(_cov(0.1, 0.05))
+    assert abs(score - 0.9) < 1e-9
+    assert status == "converged"
+
+
+def test_check_localization_partial(mgr):
+    status, score = mgr.check_localization(_cov(0.5, 0.3))
+    assert abs(score - 0.5) < 1e-9
+    assert status == "localizing"
+
+
+def test_check_localization_lost(mgr):
+    status, score = mgr.check_localization(_cov(1.0, 1.0))
+    assert score == 0.0
+    assert status == "localizing"
+
+
+def test_check_localization_clamped(mgr):
+    status, score = mgr.check_localization(_cov(2.0, 2.0))
+    assert score == 0.0
+    assert status == "localizing"
+
+
+def test_check_localization_uses_max_of_two(mgr):
+    status, score = mgr.check_localization(_cov(0.05, 0.8))
+    assert abs(score - 0.2) < 1e-9
+    assert status == "localizing"
+
+
 # --- navigate_status ---
 
 def test_navigate_status_no_target(mgr):

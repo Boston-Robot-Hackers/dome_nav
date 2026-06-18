@@ -29,18 +29,18 @@ def node(ros):
 # --- find_nearest_confirmed tests ---
 
 def test_find_nearest_no_matches(node):
-    node.confirmed_targets = [{"label": "chair", "xyz_world": [1.0, 0.0, 0.0]}]
+    node._manager.confirmed_targets = [{"label": "chair", "xyz_world": [1.0, 0.0, 0.0]}]
     assert node.find_nearest_confirmed("table") is None
 
 
 def test_find_nearest_empty_targets(node):
-    node.confirmed_targets = []
+    node._manager.confirmed_targets = []
     assert node.find_nearest_confirmed("chair") is None
 
 
 def test_find_nearest_single_match(node):
     import tf2_ros
-    node.confirmed_targets = [{"label": "chair", "xyz_world": [3.0, 4.0, 0.0]}]
+    node._manager.confirmed_targets = [{"label": "chair", "xyz_world": [3.0, 4.0, 0.0]}]
     node.tf_buffer.lookup_transform = MagicMock(
         side_effect=tf2_ros.LookupException("no tf")
     )
@@ -50,7 +50,7 @@ def test_find_nearest_single_match(node):
 
 
 def test_find_nearest_returns_closest(node):
-    node.confirmed_targets = [
+    node._manager.confirmed_targets = [
         {"label": "chair", "xyz_world": [10.0, 0.0, 0.0]},
         {"label": "chair", "xyz_world": [1.0, 0.0, 0.0]},
         {"label": "chair", "xyz_world": [5.0, 0.0, 0.0]},
@@ -65,7 +65,7 @@ def test_find_nearest_returns_closest(node):
 
 
 def test_find_nearest_closest_from_non_origin(node):
-    node.confirmed_targets = [
+    node._manager.confirmed_targets = [
         {"label": "box", "xyz_world": [0.0, 0.0, 0.0]},
         {"label": "box", "xyz_world": [8.0, 0.0, 0.0]},
     ]
@@ -80,7 +80,7 @@ def test_find_nearest_closest_from_non_origin(node):
 
 def test_find_nearest_tf_unavailable_returns_first(node):
     import tf2_ros
-    node.confirmed_targets = [
+    node._manager.confirmed_targets = [
         {"label": "cup", "xyz_world": [10.0, 0.0, 0.0]},
         {"label": "cup", "xyz_world": [1.0, 0.0, 0.0]},
     ]
@@ -120,14 +120,14 @@ def test_on_intent_invalid_json_ignored(node):
 # --- navigate_to_object tests ---
 
 def test_navigate_no_target_publishes_no_target(node):
-    node.confirmed_targets = []
+    node._manager.confirmed_targets = []
     node.publish_status = MagicMock()
     node.navigate_to_object("ghost")
     node.publish_status.assert_called_once_with("no_target:ghost")
 
 
 def test_navigate_server_unavailable_publishes_nav_unavailable(node):
-    node.confirmed_targets = [{"label": "chair", "xyz_world": [1.0, 0.0, 0.0]}]
+    node._manager.confirmed_targets = [{"label": "chair", "xyz_world": [1.0, 0.0, 0.0]}]
     node.publish_status = MagicMock()
     node.nav_client.wait_for_server = MagicMock(return_value=False)
     node.navigate_to_object("chair")
@@ -135,7 +135,7 @@ def test_navigate_server_unavailable_publishes_nav_unavailable(node):
 
 
 def test_navigate_sends_goal_and_publishes_navigating(node):
-    node.confirmed_targets = [{"label": "chair", "xyz_world": [2.0, 3.0, 0.0]}]
+    node._manager.confirmed_targets = [{"label": "chair", "xyz_world": [2.0, 3.0, 0.0]}]
     node.publish_status = MagicMock()
     node.nav_client.wait_for_server = MagicMock(return_value=True)
     mock_future = MagicMock()

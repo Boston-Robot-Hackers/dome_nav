@@ -1,6 +1,6 @@
 ---
-version: "1.0"
-generated: "2026-06-04"
+version: "2.0"
+generated: "2026-06-17"
 ---
 
 # utils.py — Shared Utilities for dome_nav
@@ -34,7 +34,7 @@ def yaml_override(base_file: str, override_file: str) -> str:
     with open(override_file) as f:
         override_params = yaml.safe_load(f) or {}
     merged = _deep_merge(base_params, override_params)
-    return _write_temp(merged)
+    return write_config(merged)
 ```
 
 **Dict-to-file merge** — useful when overrides are computed at launch time:
@@ -44,10 +44,10 @@ def yaml_patch_dict(base_file: str, overrides: dict) -> str:
     with open(base_file) as f:
         base_params = yaml.safe_load(f) or {}
     merged = _deep_merge(base_params, overrides)
-    return _write_temp(merged)
+    return write_config(merged)
 ```
 
-Both return a path to a temporary file. The caller passes that path to a ROS2 node as a params file argument. The temp file lives until the process exits.
+Both return a path to a config file on disk. The caller passes that path to a ROS2 node as a params file argument.
 
 ## Deep Merge Algorithm
 
@@ -75,20 +75,26 @@ flowchart TD
     F --> G
 ```
 
-## Temp File Sink
+## Content-Addressed Config Sink
+
+The merged config must persist after the function returns — ROS2 nodes read it after the launch process writes it. An earlier version used `tempfile.NamedTemporaryFile(delete=False)`, which leaked one `/tmp` file on *every* launch since nothing ever deleted them (issue I11). The fix keys the file by a hash of its own content:
 
 ```python
-def _write_temp(data: dict) -> str:
-    temp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
-    yaml.dump(data, temp, default_flow_style=False, sort_keys=False)
-    temp.close()
-    return temp.name
+def write_config(data: dict) -> str:
+    cache_dir = os.path.join(dome_home(), "launch_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    blob = yaml.dump(data, default_flow_style=False, sort_keys=False)
+    digest = hashlib.sha1(blob.encode()).hexdigest()[:16]
+    path = os.path.join(cache_dir, f"{digest}.yaml")
+    with open(path, "w") as f:
+        f.write(blob)
+    return path
 ```
 
-`delete=False` is intentional: the file must persist after `close()` because ROS2 nodes read it after the launch process creates it. The OS will clean it up on reboot; for long-running robots this is acceptable.
+Because the filename is derived from the rendered YAML, identical configs map to the same file and repeated launches overwrite rather than accumulate. The on-disk set is bounded by the number of *distinct* configs — a handful — instead of growing without limit. The cache lives under `DOME_HOME` so it travels with the rest of the robot's state and is easy to inspect or wipe.
 
 ## Potential Improvements
 
-- **Temp file leaks**: Files are never explicitly deleted. A `contextlib.contextmanager` wrapper that deletes on exit would make this safer for long-running processes or test suites.
+- **Cache eviction**: the launch cache is bounded by distinct configs but never pruned. A startup sweep of files older than N days would keep it tidy across many map/param variations.
 - **Missing-file error messages**: `open(base_file)` raises a generic `FileNotFoundError`. A wrapper with a descriptive message pointing to the offending config path would help operators debug misconfigured launches.
-- **`sort_keys=False`** preserves author intent in YAML output, but makes deterministic diffs harder. Consider documenting this choice.
+- **`sort_keys=False`** preserves author intent in YAML output and, conveniently, keeps the content hash stable across runs — but it does make deterministic diffs against alphabetised configs harder.

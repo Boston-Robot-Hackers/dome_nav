@@ -8,6 +8,9 @@ import math
 
 
 class NavManager:
+    MAX_COV = 1.0
+    CONVERGED_THRESHOLD = 0.9
+
     def __init__(self):
         self.confirmed_targets: list[dict] = []
 
@@ -41,6 +44,12 @@ class NavManager:
             return math.sqrt((xyz[0] - rx) ** 2 + (xyz[1] - ry) ** 2)
 
         return min(matches, key=dist)
+
+    def check_localization(self, covariance: list[float]) -> tuple[str, float]:
+        worst = max(covariance[0], covariance[7])
+        score = max(0.0, 1.0 - worst / self.MAX_COV)
+        status = "converged" if score >= self.CONVERGED_THRESHOLD else "localizing"
+        return (status, score)
 
     def navigate_status(self, label: str, target: dict | None) -> str:
         if target is None:
