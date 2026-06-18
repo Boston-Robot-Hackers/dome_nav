@@ -1,6 +1,6 @@
 ---
-version: "3.0"
-generated: "2026-06-17"
+version: "3.1"
+generated: "2026-06-18"
 ---
 
 # SlamManagerNode — Lifecycle Node for SLAM Persistence
@@ -74,18 +74,27 @@ timer, subscription, and publisher.
 
 ## Map subscription
 
-The first `/map` flips `map_ready` and logs once; later messages just re-publish
-the `"mapping"` status without log spam.
+The first `/map` flips `map_ready`, logs once, and immediately triggers an async
+save. This guarantees at least one persist even if the 30-second timer hasn't
+fired before shutdown. Later messages just re-publish the `"mapping"` status
+without log spam.
 
 ```python
     def on_map(self, msg: OccupancyGrid):
-        if not self.map_ready:
+        first_map = not self.map_ready
+        if first_map:
             self.map_ready = True
             self.get_logger().info("Map received — slam_toolbox is mapping.")
         status = String()
         status.data = "mapping"
         self.status_pub.publish(status)
+        if first_map:
+            self.save_map_async()
 ```
+
+The save-on-first-receipt is important because `on_shutdown` sends a service call
+to slam_toolbox, which itself is also shutting down on Ctrl-C. The race is
+unreliable; an earlier save wins.
 
 ## Saving: one request, two drive modes
 
@@ -137,19 +146,27 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        node.trigger_shutdown()
+        try:
+            node.trigger_shutdown()
+        except Exception as e:
+            node.get_logger().warning(f"trigger_shutdown failed on exit: {e}")
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
 ```
 
+`trigger_shutdown()` is wrapped because rclpy's SIGINT handler invalidates the
+context before the `finally` block runs, making the lifecycle state machine's
+transition publisher raise. The warning logs the reason without crashing.
+
 ## Observations
 
-- The node self-drives its transitions in `main()`. If it is ever placed under a
-  Nav2 `lifecycle_manager`, that manager would own the transitions instead and
-  the explicit `trigger_*` calls should be removed.
-- `on_shutdown` runs a blocking `spin_until_future_complete`. The 5-second
-  timeout bounds a hang if slam_toolbox has already died, at the cost of possibly
-  giving up on a slow save.
-- Live verification (real Ctrl-C writes a fresh `.posegraph`/`.data`) still needs
-  a running slam_toolbox and is tracked as a manual task (TF07 T04).
+- The node self-drives its transitions in `main()` with `lifecycle_waittime=None`
+  in the launch file to prevent better_launch from also trying to drive them. If
+  it is ever placed under a Nav2 `lifecycle_manager`, remove the explicit
+  `trigger_*` calls and the `lifecycle_waittime` override.
+- `on_shutdown` still attempts a sync save even though the race with slam_toolbox
+  usually loses. Save-on-first-receipt is the reliable path; `on_shutdown` is a
+  best-effort bonus.
+- TF07 T04 verified on live robot (2026-06-18): fresh `.posegraph`/`.data` written,
+  `Pose graph saved` log appeared.

@@ -1,6 +1,6 @@
 ---
-version: "2.0"
-generated: "2026-06-17"
+version: "2.1"
+generated: "2026-06-18"
 ---
 
 # NavManagerNode — ROS2 Adapter for Intent Navigation
@@ -81,5 +81,7 @@ falls back to returning the first match.
 
 - `on_nav_feedback` is a no-op stub. Feedback could drive a progress status
   topic for UI consumers.
-- F06 will add `/amcl_pose` subscription and `/dome_nav/localization_status`
-  publisher to this node, delegating convergence logic to `NavManager.check_localization`.
+- F06 is complete: `/amcl_pose` subscription and `/dome_nav/localization_status`
+  publisher are wired; convergence logic delegates to `NavManager.check_localization`.
+- `main()` catches `KeyboardInterrupt` explicitly so Ctrl-C exits cleanly without
+  a traceback (rclpy's SIGINT handler raises it during `spin()`).

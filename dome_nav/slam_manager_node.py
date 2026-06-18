@@ -140,8 +140,8 @@ def main():
     finally:
         try:
             node.trigger_shutdown()
-        except Exception:
-            pass
+        except Exception as e:
+            node.get_logger().warning(f"trigger_shutdown failed on exit: {e}")
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
