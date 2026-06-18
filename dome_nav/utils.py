@@ -20,7 +20,7 @@ def yaml_override(base_file: str, override_file: str) -> str:
     with open(override_file) as f:
         override_params = yaml.safe_load(f) or {}
 
-    merged = _deep_merge(base_params, override_params)
+    merged = deep_merge(base_params, override_params)
     return write_config(merged)
 
 
@@ -29,15 +29,15 @@ def yaml_patch_dict(base_file: str, overrides: dict) -> str:
     with open(base_file) as f:
         base_params = yaml.safe_load(f) or {}
 
-    merged = _deep_merge(base_params, overrides)
+    merged = deep_merge(base_params, overrides)
     return write_config(merged)
 
 
-def _deep_merge(base: dict, override: dict) -> dict:
+def deep_merge(base: dict, override: dict) -> dict:
     result = base.copy()
     for key, value in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge(result[key], value)
+            result[key] = deep_merge(result[key], value)
         else:
             result[key] = value
     return result

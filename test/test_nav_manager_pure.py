@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# test_nav_manager_pure.py — pure unit tests for NavManager (no ROS2)
+# Author: Pito Salas and Claude Code
+# Open Source Under MIT license
+
 import json
 import pytest
 from dome_nav.nav_manager import NavManager
@@ -24,6 +28,16 @@ def test_on_targets_invalid_json(mgr):
 
 def test_on_targets_empty_list(mgr):
     assert mgr.on_targets("[]") is True
+    assert mgr.confirmed_targets == []
+
+
+def test_on_targets_dict_json_rejected(mgr):
+    assert mgr.on_targets(json.dumps({"label": "chair"})) is False
+    assert mgr.confirmed_targets == []
+
+
+def test_on_targets_scalar_json_rejected(mgr):
+    assert mgr.on_targets("42") is False
     assert mgr.confirmed_targets == []
 
 
@@ -56,6 +70,14 @@ def test_parse_intent_unknown_action(mgr):
 
 def test_parse_intent_missing_action(mgr):
     assert mgr.parse_intent(json.dumps({})) is None
+
+
+def test_parse_intent_list_json_rejected(mgr):
+    assert mgr.parse_intent(json.dumps(["go_to_object", "chair"])) is None
+
+
+def test_parse_intent_string_json_rejected(mgr):
+    assert mgr.parse_intent(json.dumps("go_to_object")) is None
 
 
 # --- find_nearest_confirmed ---
@@ -140,6 +162,12 @@ def test_check_localization_uses_max_of_two(mgr):
     status, score = mgr.check_localization(_cov(0.05, 0.8))
     assert abs(score - 0.2) < 1e-9
     assert status == "localizing"
+
+
+def test_check_localization_negative_cov_clamped_to_1(mgr):
+    status, score = mgr.check_localization(_cov(-1.0, -1.0))
+    assert score == 1.0
+    assert status == "converged"
 
 
 # --- navigate_status ---

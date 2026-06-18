@@ -16,15 +16,20 @@ class NavManager:
 
     def on_targets(self, json_str: str) -> bool:
         try:
-            self.confirmed_targets = json.loads(json_str)
-            return True
+            result = json.loads(json_str)
         except json.JSONDecodeError:
             return False
+        if not isinstance(result, list):
+            return False
+        self.confirmed_targets = result
+        return True
 
     def parse_intent(self, json_str: str) -> tuple[str, dict] | None:
         try:
             intent = json.loads(json_str)
         except json.JSONDecodeError:
+            return None
+        if not isinstance(intent, dict):
             return None
         action = intent.get("action", "")
         if action not in ("go_to_object", "cancel_navigation"):
@@ -47,7 +52,7 @@ class NavManager:
 
     def check_localization(self, covariance: list[float]) -> tuple[str, float]:
         worst = max(covariance[0], covariance[7])
-        score = max(0.0, 1.0 - worst / self.MAX_COV)
+        score = min(1.0, max(0.0, 1.0 - worst / self.MAX_COV))
         status = "converged" if score >= self.CONVERGED_THRESHOLD else "localizing"
         return (status, score)
 

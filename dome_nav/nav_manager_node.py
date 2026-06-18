@@ -19,7 +19,7 @@ class NavManagerNode(Node):
     def __init__(self):
         super().__init__("nav_manager_node")
 
-        self._manager = NavManager()
+        self.manager = NavManager()
 
         self.nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
         self.status_pub = self.create_publisher(String, "/dome_nav/nav_status", 10)
@@ -36,19 +36,20 @@ class NavManagerNode(Node):
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-        self._goal_handle = None
-        self._last_loc_status = "localizing"
-        self._last_loc_score = 0.0
-        self.create_timer(1.0, self._publish_localization)
+        self.goal_handle = None
+        self.last_loc_status = "localizing"
+        self.last_loc_score = 0.0
+        self.create_timer(1.0, self.publish_localization)
         self.get_logger().info("NavManagerNode ready.")
 
     def on_targets(self, msg: String):
-        if not self._manager.on_targets(msg.data):
+        if not self.manager.on_targets(msg.data):
             self.get_logger().warning("Could not parse /targets/confirmed JSON.")
 
     def on_intent(self, msg: String):
-        result = self._manager.parse_intent(msg.data)
+        result = self.manager.parse_intent(msg.data)
         if result is None:
+            self.get_logger().warning(f"Malformed or unknown intent: {msg.data!r}")
             return
         action, intent = result
         if action == "go_to_object":
@@ -64,7 +65,11 @@ class NavManagerNode(Node):
             self.publish_status(f"no_target:{label}")
             return
 
-        xyz = target.get("xyz_world", [0.0, 0.0, 0.0])
+        xyz = target.get("xyz_world")
+        if xyz is None:
+            self.get_logger().warning(f"Target {label!r} missing xyz_world — skipping.")
+            self.publish_status(f"no_target:{label}")
+            return
         goal_pose = PoseStamped()
         goal_pose.header.frame_id = "map"
         goal_pose.header.stamp = self.get_clock().now().to_msg()
@@ -83,20 +88,20 @@ class NavManagerNode(Node):
         self.get_logger().info(f"Navigating to {label} at {xyz}.")
         self.publish_status(f"navigating:{label}")
         future = self.nav_client.send_goal_async(goal, feedback_callback=self.on_nav_feedback)
-        future.add_done_callback(functools.partial(self._on_goal_accepted, label=label))
+        future.add_done_callback(functools.partial(self.on_goal_accepted, label=label))
 
-    def _on_goal_accepted(self, future, label: str):
+    def on_goal_accepted(self, future, label: str):
         goal_handle = future.result()
         if not goal_handle.accepted:
             self.get_logger().warning("Goal rejected by Nav2.")
             self.publish_status(f"goal_rejected:{label}")
             return
-        self._goal_handle = goal_handle
+        self.goal_handle = goal_handle
         result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(functools.partial(self._on_goal_result, label=label))
+        result_future.add_done_callback(functools.partial(self.on_goal_result, label=label))
 
-    def _on_goal_result(self, future, label: str):
-        self._goal_handle = None
+    def on_goal_result(self, future, label: str):
+        self.goal_handle = None
         result = future.result()
         if result.status == GoalStatus.STATUS_SUCCEEDED:
             self.publish_status(f"done:{label}")
@@ -104,23 +109,23 @@ class NavManagerNode(Node):
             self.publish_status(f"failed:{label}")
 
     def cancel_navigation(self):
-        if self._goal_handle is not None:
-            self._goal_handle.cancel_goal_async()
-            self._goal_handle = None
+        if self.goal_handle is not None:
+            self.goal_handle.cancel_goal_async()
+            self.goal_handle = None
             self.publish_status("cancelled")
 
     def on_amcl_pose(self, msg: PoseWithCovarianceStamped):
-        status, score = self._manager.check_localization(list(msg.pose.covariance))
-        self._last_loc_status = status
-        self._last_loc_score = score
-        self._publish_localization()
+        status, score = self.manager.check_localization(list(msg.pose.covariance))
+        self.last_loc_status = status
+        self.last_loc_score = score
+        self.publish_localization()
 
-    def _publish_localization(self):
+    def publish_localization(self):
         s_msg = String()
-        s_msg.data = self._last_loc_status
+        s_msg.data = self.last_loc_status
         self.loc_status_pub.publish(s_msg)
         f_msg = Float32()
-        f_msg.data = float(self._last_loc_score)
+        f_msg.data = float(self.last_loc_score)
         self.loc_score_pub.publish(f_msg)
 
     def on_nav_feedback(self, feedback_msg):
@@ -138,7 +143,7 @@ class NavManagerNode(Node):
         robot_xy = self.robot_xy_in_map()
         if robot_xy is None:
             self.get_logger().warning("map→base_footprint TF unavailable — returning first match.")
-        return self._manager.find_nearest_confirmed(label, robot_xy)
+        return self.manager.find_nearest_confirmed(label, robot_xy)
 
     def publish_status(self, status: str):
         msg = String()
