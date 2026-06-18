@@ -30,7 +30,7 @@ Map path: `~/.dome/slam_maps/basement1.yaml`. Params: `nav2_amcl_patch.yaml` mer
 **Test**: `colcon build` passes. Both launch files present in `install/dome_nav/share/`.
 
 ## T05 — manual smoke test
-**Status**: not done
+**Status**: done
 **Description**: With saved map at `~/.dome/slam_maps/basement1.yaml`, launch Mode B:
 `bl dome_nav robot_nav.launch.py`. Verify in RViz/Foxglove: map appears, AMCL particle
 cloud visible, `map→odom` TF published by amcl (not slam_toolbox).

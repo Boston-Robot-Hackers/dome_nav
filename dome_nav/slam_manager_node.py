@@ -138,7 +138,10 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        node.trigger_shutdown()
+        try:
+            node.trigger_shutdown()
+        except Exception:
+            pass
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
