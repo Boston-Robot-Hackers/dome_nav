@@ -4,9 +4,11 @@
 # Open Source Under MIT license
 
 import functools
+import math
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from action_msgs.msg import GoalStatus
 from std_msgs.msg import String, Float32
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
@@ -29,8 +31,13 @@ class NavManagerNode(Node):
 
         self.intent_sub = self.create_subscription(String, "/intent", self.on_intent, 10)
         self.targets_sub = self.create_subscription(String, "/targets/confirmed", self.on_targets, 10)
+        amcl_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
         self.amcl_sub = self.create_subscription(
-            PoseWithCovarianceStamped, "/amcl_pose", self.on_amcl_pose, 10
+            PoseWithCovarianceStamped, "/amcl_pose", self.on_amcl_pose, amcl_qos
         )
 
         self.tf_buffer = tf2_ros.Buffer()
@@ -76,7 +83,9 @@ class NavManagerNode(Node):
         goal_pose.pose.position.x = float(xyz[0])
         goal_pose.pose.position.y = float(xyz[1])
         goal_pose.pose.position.z = 0.0
-        goal_pose.pose.orientation.w = 1.0
+        yaw = float(target.get("yaw_world", 0.0))
+        goal_pose.pose.orientation.z = math.sin(yaw / 2.0)
+        goal_pose.pose.orientation.w = math.cos(yaw / 2.0)
 
         if not self.nav_client.wait_for_server(timeout_sec=5.0):
             self.get_logger().error("NavigateToPose action server not available.")

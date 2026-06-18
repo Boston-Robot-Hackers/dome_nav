@@ -20,9 +20,9 @@ class MapListener(Node):
     def __init__(self):
         super().__init__("test_map_listener")
         self.msg = None
-        self.sub = self.create_subscription(OccupancyGrid, "/map", self._cb, 10)
+        self.sub = self.create_subscription(OccupancyGrid, "/map", self.on_map, 10)
 
-    def _cb(self, msg: OccupancyGrid):
+    def on_map(self, msg: OccupancyGrid):
         self.msg = msg
 
     def wait_for_map(self, timeout_sec: float = 10.0) -> OccupancyGrid | None:

@@ -29,12 +29,12 @@ where `MAX_COV = 1.0` (class constant). Status: score >= 0.9 → `"converged"`, 
 **Test**: `colcon build --packages-select dome_nav` passes. Topics visible in `ros2 topic list`.
 
 ## T05 — clamp localization score to [0.0, 1.0] (I07)
-**Status**: not done
+**Status**: done — already implemented (min(1.0, max(0.0, ...))). Test test_check_localization_negative_cov_clamped_to_1 passes.
 **Description**: check_localization formula max(0.0, 1.0 - worst/MAX_COV) only clamps the low end. Negative covariance (theoretically impossible from AMCL but unguarded) produces score > 1.0. Change to min(1.0, max(0.0, ...)).
 **Test**: add test to test_nav_manager_pure.py: negative covariance input → score clamped to 1.0.
 
 ## T06 — add file headers to test files (I08)
-**Status**: not done
+**Status**: done — all 4 test files have correct headers.
 **Description**: test_nav_manager_pure.py and test_slam_manager_pure.py missing required header (module name, description, Author, MIT license). Add standard header block to both.
 **Test**: visual inspection.
 
