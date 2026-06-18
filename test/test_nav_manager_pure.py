@@ -44,19 +44,26 @@ def test_on_targets_scalar_json_rejected(mgr):
 # --- parse_intent ---
 
 def test_parse_intent_go_to_object(mgr):
-    payload = json.dumps({"action": "go_to_object", "label": "chair"})
+    payload = json.dumps({"name": "go_to_object", "source": "cli", "slots": {"label": "chair"}})
     result = mgr.parse_intent(payload)
     assert result is not None
     action, intent = result
     assert action == "go_to_object"
-    assert intent["label"] == "chair"
+    assert intent["slots"]["label"] == "chair"
 
 
 def test_parse_intent_cancel(mgr):
-    payload = json.dumps({"action": "cancel_navigation"})
+    payload = json.dumps({"name": "cancel_navigation", "source": "cli", "slots": {}})
     result = mgr.parse_intent(payload)
     assert result is not None
     assert result[0] == "cancel_navigation"
+
+
+def test_parse_intent_missing_slots_still_parses(mgr):
+    payload = json.dumps({"name": "go_to_object", "source": "cli"})
+    result = mgr.parse_intent(payload)
+    assert result is not None
+    assert result[0] == "go_to_object"
 
 
 def test_parse_intent_invalid_json(mgr):
@@ -64,11 +71,11 @@ def test_parse_intent_invalid_json(mgr):
 
 
 def test_parse_intent_unknown_action(mgr):
-    payload = json.dumps({"action": "fly_to_moon"})
+    payload = json.dumps({"name": "fly_to_moon", "source": "cli", "slots": {}})
     assert mgr.parse_intent(payload) is None
 
 
-def test_parse_intent_missing_action(mgr):
+def test_parse_intent_missing_name(mgr):
     assert mgr.parse_intent(json.dumps({})) is None
 
 

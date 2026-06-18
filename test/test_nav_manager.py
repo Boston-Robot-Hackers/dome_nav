@@ -96,7 +96,7 @@ def test_find_nearest_tf_unavailable_returns_first(node):
 def test_on_intent_go_to_object_calls_navigate(node):
     node.navigate_to_object = MagicMock()
     msg = MagicMock()
-    msg.data = json.dumps({"action": "go_to_object", "label": "chair"})
+    msg.data = json.dumps({"name": "go_to_object", "source": "cli", "slots": {"label": "chair"}})
     node.on_intent(msg)
     node.navigate_to_object.assert_called_once_with("chair")
 
@@ -104,7 +104,7 @@ def test_on_intent_go_to_object_calls_navigate(node):
 def test_on_intent_cancel_calls_cancel(node):
     node.cancel_navigation = MagicMock()
     msg = MagicMock()
-    msg.data = json.dumps({"action": "cancel_navigation"})
+    msg.data = json.dumps({"name": "cancel_navigation", "source": "cli", "slots": {}})
     node.on_intent(msg)
     node.cancel_navigation.assert_called_once()
 

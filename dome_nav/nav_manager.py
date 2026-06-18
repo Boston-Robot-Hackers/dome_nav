@@ -31,7 +31,7 @@ class NavManager:
             return None
         if not isinstance(intent, dict):
             return None
-        action = intent.get("action", "")
+        action = intent.get("name", "")
         if action not in ("go_to_object", "cancel_navigation"):
             return None
         return (action, intent)

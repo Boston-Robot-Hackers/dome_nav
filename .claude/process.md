@@ -28,7 +28,10 @@
 
 # issues
 * Numbered issues
-* Issues live in `05-issues/` as markdown files until they are converted into a feature or resolved
+* Issues live in `05-issues/open/`, `05-issues/closed/`, or `05-issues/deferred/`
+* New issues go into `05-issues/open/`
+* Move to `05-issues/closed/` when resolved or converted into a feature/task
+* Move to `05-issues/deferred/` when explicitly deferred
 * Follow the template
 
 # bootstrap
@@ -49,7 +52,9 @@
   - `04-tasks/done/` — folder for completed tasks
   - `04-tasks/deferred/` — folder for deferred tasks
   - `04-tasks/template.md` — copy from `.claude/templates/task_template.md`
-  - `05-issues/` — loose issues not yet converted into features
+  - `05-issues/open/` — active issues not yet converted into features
+  - `05-issues/closed/` — resolved or converted issues
+  - `05-issues/deferred/` — explicitly deferred issues
   - `05-issues/template.md` — copy from `.claude/templates/issue_template.md`
   - `run.bash` — executable shell script containing `uv run streamlit run src/book.py` (or the appropriate run command for the app); set executable with `chmod +x run.bash`
 * After scaffolding, prompt the user to fill in `02-doc/spec.md` and initialize `02-doc/current.md` before defining any features

@@ -60,7 +60,7 @@ class NavManagerNode(Node):
             return
         action, intent = result
         if action == "go_to_object":
-            label = intent.get("label", "")
+            label = intent.get("slots", {}).get("label", "")
             self.navigate_to_object(label)
         elif action == "cancel_navigation":
             self.cancel_navigation()

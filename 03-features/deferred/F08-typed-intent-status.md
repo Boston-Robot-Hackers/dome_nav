@@ -2,7 +2,7 @@
 
 **Priority**: Medium
 **Done:** no
-**Tasks File Created:** no
+**Tasks File Created:** yes
 **Tests Written:** no
 **Test Passing:** no
 **Description**: Replace the `std_msgs/String` + embedded-JSON interfaces with a minimal
