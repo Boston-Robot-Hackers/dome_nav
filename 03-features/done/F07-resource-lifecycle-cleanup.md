@@ -1,7 +1,7 @@
 # F07 — Resource Lifecycle and Cleanup
 
 **Priority**: High
-**Done:** no
+**Done:** yes
 **Tasks File Created:** yes
 **Tests Written:** yes (unit; manual shutdown verify pending live stack)
 **Test Passing:** yes (unit)

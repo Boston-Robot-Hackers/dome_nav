@@ -69,13 +69,13 @@ class NavManagerNode(Node):
         target = self.find_nearest_confirmed(label)
         if target is None:
             self.get_logger().warning(f"No confirmed target found for label={label!r}.")
-            self.publish_status(f"no_target:{label}")
+            self.publish_status(self.manager.navigate_status(label, None))
             return
 
         xyz = target.get("xyz_world")
         if xyz is None:
             self.get_logger().warning(f"Target {label!r} missing xyz_world — skipping.")
-            self.publish_status(f"no_target:{label}")
+            self.publish_status(self.manager.navigate_status(label, None))
             return
         goal_pose = PoseStamped()
         goal_pose.header.frame_id = "map"
@@ -95,7 +95,7 @@ class NavManagerNode(Node):
         goal = NavigateToPose.Goal()
         goal.pose = goal_pose
         self.get_logger().info(f"Navigating to {label} at {xyz}.")
-        self.publish_status(f"navigating:{label}")
+        self.publish_status(self.manager.navigate_status(label, target))
         future = self.nav_client.send_goal_async(goal, feedback_callback=self.on_nav_feedback)
         future.add_done_callback(functools.partial(self.on_goal_accepted, label=label))
 

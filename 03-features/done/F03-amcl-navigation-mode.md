@@ -1,7 +1,7 @@
 # F03 — Static Map + AMCL Navigation Mode
 
 **Priority**: High
-**Done:** no
+**Done:** yes
 **Tasks File Created:** yes
 **Tests Written:** no
 **Test Passing:** no

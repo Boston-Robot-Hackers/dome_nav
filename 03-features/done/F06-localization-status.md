@@ -3,7 +3,7 @@
 Feature file name: `F06-localization-status.md`
 
 **Priority**: Medium
-**Done:** no
+**Done:** yes
 **Tasks File Created:** yes
 **Tests Written:** yes
 **Test Passing:** yes

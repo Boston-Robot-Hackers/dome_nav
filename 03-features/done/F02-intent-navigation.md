@@ -3,7 +3,7 @@
 Feature file name: `F02-intent-navigation.md`
 
 **Priority**: High
-**Done:** no
+**Done:** yes
 **Tasks File Created:** yes
 **Tests Written:** yes (unit T01–T04; T05 manual pending live stack)
 **Test Passing:** yes (unit); T05 not yet run
