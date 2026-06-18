@@ -105,7 +105,7 @@ class NavIntentChecker(Node):
 
     def send_intent(self):
         msg = String()
-        msg.data = json.dumps({"action": "go_to_object", "label": LABEL})
+        msg.data = json.dumps({"name": "go_to_object", "source": "tool", "slots": {"label": LABEL}})
         # Wait until nav_manager's subscription is visible, then publish once
         deadline = time.time() + 5.0
         while time.time() < deadline:
