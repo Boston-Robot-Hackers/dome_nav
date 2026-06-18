@@ -11,3 +11,4 @@ slam_toolbox:
     tf_buffer_duration: 50.0       # upstream: 30.0 — larger buffer for slow systems
     message_queue_size: 20         # upstream: missing — prevent dropped scans
     map_start_at_dock: true
+    map_start_pose: [0.0, 0.0, 0.0]

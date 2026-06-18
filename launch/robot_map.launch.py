@@ -10,11 +10,11 @@ from dome_nav.utils import dome_home, yaml_override, yaml_patch_dict
 
 
 @launch_this(ui=True)
-def robot_launch(use_sim_time: str = "false"):
+def robot_launch(use_sim_time: str = "false", map_name: str = "basement1"):
     bl = BetterLaunch()
 
     home = dome_home()
-    slam_map_path = os.path.join(home, "slam_maps", "basement1")
+    slam_map_path = os.path.join(home, "slam_maps", map_name)
     os.makedirs(home, exist_ok=True)
 
     pkg = get_package_share_directory("dome_nav")
@@ -42,6 +42,7 @@ def robot_launch(use_sim_time: str = "false"):
         name="slam_manager",
         params={"map_persist_path": slam_map_path},
         ros_waittime=30.0,
+        lifecycle_waittime=None,
     )
 
     bl.node(

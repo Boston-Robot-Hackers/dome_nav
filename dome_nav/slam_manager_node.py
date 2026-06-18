@@ -82,12 +82,15 @@ class SlamManagerNode(LifecycleNode):
             os.makedirs(parent, exist_ok=True)
 
     def on_map(self, msg: OccupancyGrid):
-        if not self.map_ready:
+        first_map = not self.map_ready
+        if first_map:
             self.map_ready = True
             self.get_logger().info("Map received — slam_toolbox is mapping.")
         status = String()
         status.data = "mapping"
         self.status_pub.publish(status)
+        if first_map:
+            self.save_map_async()
 
     def periodic_save(self):
         if self.map_ready:

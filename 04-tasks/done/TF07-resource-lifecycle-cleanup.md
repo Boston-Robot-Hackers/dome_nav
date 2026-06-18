@@ -29,7 +29,7 @@ until lifecycle coordination with the Nav2 lifecycle_manager is actually needed.
 **Test**: n/a (deferred).
 
 ## T04 — manual shutdown verify (I01)
-**Status**: not done
+**Status**: done
 **Description**: Launch Mode A, build partial map, Ctrl-C, confirm
 `~/.dome/slam_maps/basement1.posegraph` and `.data` have fresh mtime and the
 "Pose graph saved" log appeared.
