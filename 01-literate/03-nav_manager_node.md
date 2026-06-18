@@ -16,18 +16,18 @@ delegate to the pure-Python `NavManager`.
 
 ```mermaid
 flowchart LR
-    A["/intent"] -->|String JSON| B[on_intent]
-    C["/targets/confirmed"] -->|String JSON| D[on_targets]
+    A[intent] -->|String JSON| B[on_intent]
+    C[targets confirmed] -->|String JSON| D[on_targets]
     B --> E[NavManager.parse_intent]
     D --> F[NavManager.on_targets]
     E -->|go_to_object| G[navigate_to_object]
     E -->|cancel| H[cancel_navigation]
     G --> I[NavigateToPose action]
-    I --> J["/dome_nav/nav_status"]
-    K["/amcl_pose"] --> L[on_amcl_pose]
+    I --> J[nav_status]
+    K[amcl_pose] --> L[on_amcl_pose]
     L --> M[NavManager.check_localization]
-    M --> N["/dome_nav/localization_status"]
-    M --> O["/dome_nav/localization_score"]
+    M --> N[localization_status]
+    M --> O[localization_score]
 ```
 
 ## Intent Dispatch
