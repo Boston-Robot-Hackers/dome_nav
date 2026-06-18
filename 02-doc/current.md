@@ -4,13 +4,15 @@
 
 **Date:** 2026-06-18
 **Branch:** main
-**Status:** F03 (AMCL/Mode B) and F07 (lifecycle + map persistence) both complete and
-verified on live robot. Shutdown tracebacks fixed. Save-on-first-map-receipt added.
+**Status:** F09 T01–T03 complete. dome_control ↔ dome_nav intent contract fixed.
+nav.go / nav.cancel CLI commands added to dome_control. 62 dome_nav + 198 dome_control
+tests pass. T04 (live smoke test) pending.
 
 ## What exists
 
-- `dome_nav/nav_manager.py` — pure Python `NavManager`: JSON parse, nearest-target,
-  localization score, status strings (KEPT — real algorithms, 21 pure tests)
+- `dome_nav/nav_manager.py` — pure Python `NavManager`: JSON parse (uses `"name"` key,
+  label from `slots.label`), nearest-target, localization score, status strings
+  (62 pure + ROS tests)
 - `dome_nav/slam_manager_node.py` — **LifecycleNode**: watches `/map`, saves pose graph
   on first map receipt + every 30s. Self-manages lifecycle (trigger_configure/activate in
   main(); better_launch lifecycle disabled via lifecycle_waittime=None).
@@ -21,45 +23,51 @@ verified on live robot. Shutdown tracebacks fixed. Save-on-first-map-receipt add
 - `config/` — slam_param_patch (map_start_pose: [0,0,0]), nav2_param_patch, nav2_amcl_patch
 - `launch/robot_map.launch.py` (Mode A) — accepts `map_name` arg (default: basement1)
 - `launch/robot_nav.launch.py` (Mode B) — AMCL + Nav2, verified working
-- Tests: `test_nav_manager_pure.py` (21), `test_utils_pure.py` (5),
+- `tools/nav_intent_check.py` — diagnostic: publishes target + intent, verifies nav pipeline
+- Tests: `test_nav_manager_pure.py` (22), `test_utils_pure.py` (5),
   `test_nav_manager.py` (18, ROS), `test_slam_manager.py` (11, ROS lifecycle),
   `test_map_validation.py` (4, manual/live only)
 
 ## Test status
 
-**55 passed, 4 deselected** (manual) via
+**62 passed, 4 deselected** (manual) via
 `python3 -m pytest src/dome_nav/test/ -m "not manual"`. The 4 manual tests need a live
 stack. Build: `colcon build --packages-select dome_nav --symlink-install`.
 
 ## This session's work
 
-- TF07 T04: verified map saved on Ctrl-C (Mode A). Fixed several issues along the way:
-  - better_launch lifecycle conflict → lifecycle_waittime=None + self-managed transitions
-  - save-on-first-map-receipt added (can't rely on shutdown save — race with slam_toolbox)
-  - map_start_pose: [0,0,0] added to slam_param_patch (fixes LocalizationSlamToolbox warning)
-  - map_name launch arg added to robot_map.launch.py
-  - shutdown tracebacks suppressed in slam_manager and nav_manager
-- TF03 T05: Mode B smoke test passed on live robot — AMCL pose at dock (x=-2.768,
-  y=0.145), map→odom TF publishing, /amcl_pose live.
+- Restructured `05-issues/` into `open/`, `closed/`, `deferred/` subdirs; updated
+  `process.md` (dome_nav + j3 template)
+- Updated `.gitignore` to ignore `build/`, `install/`, `log/`
+- Created F09 + TF09 for dome_control ↔ dome_nav integration
+- TF09 T01: fixed `parse_intent()` to read `"name"` key (was `"action"`); label now
+  from `slots.label`. Updated all tests.
+- TF09 T02: closed I02–I05 (already fixed in code last session)
+- TF09 T03: added `nav.go <label>` and `nav.cancel` CLI commands to dome_control
+  (`navigation_commands.py`, `robot_controller.py`). Payload matches dome_nav contract.
+- Fixed `tools/nav_intent_check.py` to use new intent format
 
-## Open issues (05-issues/)
+## Open issues (05-issues/open/)
 
-- I02–I05: nav_manager crashes/silent-drops (non-list/non-dict JSON, missing xyz_world,
-  silent intent drop) → TF02 T06–T09
-- I06: leading-underscore MUST violations (3 source + 3 test files) → TF02 T10
-- I07: localization score not clamped to 1.0 → TF06 T05
-- I08: test files missing header → TF06 T06
-- I09: `should_save()` was a 1-line method — now moot (folded into lifecycle node); verify
+- I06: leading-underscore MUST violations (3 source + 3 test files)
+- I07: localization score not clamped to 1.0 → already clamped in current code; verify
   before closing
-- I10: `navigate_status()` defined but bypassed by node (dead + DRY) → not yet tasked
+- I08: test files missing header
+- I09: `should_save()` 1-line method — verify moot before closing
 
 ## Likely next steps
 
-1. TF06 T05 + T06 — clamp score (5 lines) + add file headers (quick)
-2. TF02 T06–T09 — nav_manager crash fixes (boundary validation)
-3. TF02 T10 — underscore rename sweep
-4. I10 — wire node to call `NavManager.navigate_status()` instead of inline strings
-5. TF06 T04 / TF02 T05 — manual live-stack tests
+1. I06 — underscore rename sweep (dome_nav source + test files)
+2. I07, I08, I09 — verify/close quick wins
+3. TF09 T04 — manual live smoke test: `nav go chair` from dome_control CLI
+4. F05 — rosbag integration test (needs hardware recording)
+
+## dome_control nav commands (new)
+
+```
+nav go <label>    — publishes go_to_object intent with slots.label
+nav cancel        — publishes cancel_navigation intent
+```
 
 ## AMCL notes (unchanged)
 

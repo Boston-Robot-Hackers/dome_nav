@@ -1,5 +1,5 @@
 ---
-version: "2.1"
+version: "2.2"
 generated: "2026-06-18"
 ---
 
@@ -24,24 +24,35 @@ flowchart LR
     E -->|cancel| H[cancel_navigation]
     G --> I[NavigateToPose action]
     I --> J[/dome_nav/nav_status]
+    K[/amcl_pose] --> L[on_amcl_pose]
+    L --> M[NavManager.check_localization]
+    M --> N[/dome_nav/localization_status]
+    M --> O[/dome_nav/localization_score]
 ```
 
 ## Intent Dispatch
 
 `on_intent` delegates parsing to the manager, then dispatches on the action
-string. The node never inspects the JSON directly.
+string. The node never inspects the JSON directly. Label is extracted from
+`slots` — matching dome_control's intent contract.
 
 ```python
     def on_intent(self, msg: String):
-        result = self._manager.parse_intent(msg.data)
+        result = self.manager.parse_intent(msg.data)
         if result is None:
+            self.get_logger().warning(f"Malformed or unknown intent: {msg.data!r}")
             return
         action, intent = result
         if action == "go_to_object":
-            self.navigate_to_object(intent.get("label", ""))
+            label = intent.get("slots", {}).get("label", "")
+            self.navigate_to_object(label)
         elif action == "cancel_navigation":
             self.cancel_navigation()
 ```
+
+The warning log on `None` is important: previously a bad intent was silently
+dropped, making the mismatch between dome_control's `"name"` key and the old
+`"action"` key invisible. The log surfaces contract violations immediately.
 
 ## Navigation Goal Lifecycle
 
@@ -53,10 +64,24 @@ sequenceDiagram
     participant N as NavManagerNode
     participant A as Nav2 ActionServer
     N->>A: send_goal_async()
-    A-->>N: _on_goal_accepted(future)
+    A-->>N: on_goal_accepted(future)
     N->>A: get_result_async()
-    A-->>N: _on_goal_result(future)
+    A-->>N: on_goal_result(future)
     N->>N: publish_status(done/failed)
+```
+
+### xyz_world Guard
+
+Before building the Nav2 goal, the node checks that `xyz_world` is present in
+the target. A missing key previously caused the robot to navigate silently to
+map origin (0, 0).
+
+```python
+        xyz = target.get("xyz_world")
+        if xyz is None:
+            self.get_logger().warning(f"Target {label!r} missing xyz_world — skipping.")
+            self.publish_status(self.manager.navigate_status(label, None))
+            return
 ```
 
 ## TF-Based Robot Position
@@ -81,7 +106,7 @@ falls back to returning the first match.
 
 - `on_nav_feedback` is a no-op stub. Feedback could drive a progress status
   topic for UI consumers.
-- F06 is complete: `/amcl_pose` subscription and `/dome_nav/localization_status`
-  publisher are wired; convergence logic delegates to `NavManager.check_localization`.
+- The intent contract (`"name"` / `"slots"`) is dome_control's canonical format.
+  F08 (typed messages) would replace the JSON-in-String encoding but is deferred.
 - `main()` catches `KeyboardInterrupt` explicitly so Ctrl-C exits cleanly without
-  a traceback (rclpy's SIGINT handler raises it during `spin()`).
+  a traceback.

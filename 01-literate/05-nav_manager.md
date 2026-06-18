@@ -1,6 +1,6 @@
 ---
-version: "1.0"
-generated: "2026-06-17"
+version: "1.1"
+generated: "2026-06-18"
 ---
 
 # NavManager — Pure Python Navigation Logic
@@ -9,8 +9,8 @@ generated: "2026-06-17"
 
 `nav_manager.py` holds all testable navigation logic extracted from
 `nav_manager_node.py`. No ROS imports. Covers: JSON intent parsing,
-confirmed-target list maintenance, nearest-target selection, and status
-string generation.
+confirmed-target list maintenance, nearest-target selection, localization
+scoring, and status string generation.
 
 ## Confirmed Targets
 
@@ -22,20 +22,25 @@ is authoritative.
 ```python
     def on_targets(self, json_str: str) -> bool:
         try:
-            self.confirmed_targets = json.loads(json_str)
-            return True
+            result = json.loads(json_str)
         except json.JSONDecodeError:
             return False
+        if not isinstance(result, list):
+            return False
+        self.confirmed_targets = result
+        return True
 ```
 
-Returns `False` on bad JSON so the node can log a warning without this class
-needing a logger.
+Returns `False` on bad JSON or a non-list payload so the node can log a
+warning without this class needing a logger. The `isinstance` guard prevents
+a dict-shaped payload from corrupting `confirmed_targets` and causing a
+downstream `AttributeError`.
 
 ## Intent Parsing
 
-Intents arrive as JSON strings with an `action` field. Only two actions are
-recognized; anything else is rejected so the node ignores unknown intents
-rather than acting on them.
+Intents arrive as JSON strings matching dome_control's established contract:
+`{"name": ..., "source": ..., "slots": {...}}`. Only two action names are
+recognized; anything else returns `None` so the node ignores unknown intents.
 
 ```python
     def parse_intent(self, json_str: str) -> tuple[str, dict] | None:
@@ -43,14 +48,21 @@ rather than acting on them.
             intent = json.loads(json_str)
         except json.JSONDecodeError:
             return None
-        action = intent.get("action", "")
+        if not isinstance(intent, dict):
+            return None
+        action = intent.get("name", "")
         if action not in ("go_to_object", "cancel_navigation"):
             return None
         return (action, intent)
 ```
 
+The key is `"name"` — not `"action"` — because that is the field dome_control's
+`IntentPublisher` and `IntentParser` use. Using `"action"` would cause every
+real intent to be silently ignored. The label for `go_to_object` lives in
+`intent["slots"]["label"]`, following dome_control's slot convention.
+
 Returning `None` is a valid "nothing to do" signal — not an error. The node
-checks for `None` and returns early.
+checks for `None` and logs a warning before returning early.
 
 ## Nearest Target Selection
 
@@ -86,9 +98,29 @@ flowchart TD
 Falling back to the first match is a reasonable degradation — still navigates,
 just not necessarily to the closest instance.
 
+## Localization Scoring
+
+AMCL covariance diagonal entries [0] and [7] represent x and y position
+uncertainty in m². The score maps the worst of the two onto [0, 1] with 1 = fully
+converged and 0 = maximum uncertainty.
+
+```python
+    MAX_COV = 1.0
+    CONVERGED_THRESHOLD = 0.9
+
+    def check_localization(self, covariance: list[float]) -> tuple[str, float]:
+        worst = max(covariance[0], covariance[7])
+        score = min(1.0, max(0.0, 1.0 - worst / self.MAX_COV))
+        status = "converged" if score >= self.CONVERGED_THRESHOLD else "localizing"
+        return (status, score)
+```
+
+`min(1.0, ...)` clamps the top end — AMCL should never produce negative
+variances, but the guard is cheap.
+
 ## Status Strings
 
-`navigate_status` produces the string the node publishes on `/dome_nav/nav_status`.
+`navigate_status` produces the string published on `/dome_nav/nav_status`.
 Centralizing this in the pure class means tests can assert on status strings
 without a running publisher.
 
@@ -105,5 +137,6 @@ without a running publisher.
   in the future, this will need a merge strategy.
 - `find_nearest_confirmed` uses 2D Euclidean distance — correct for flat-floor
   navigation where Z is always ~0.
-- A `check_localization(covariance)` method is planned (F06) to sit alongside
-  this class, returning `"converged"` or `"localizing"` based on AMCL covariance.
+- The intent contract (`"name"` / `"slots"`) is defined by dome_control and
+  consumed here; F08 (typed messages) would eliminate the JSON-in-String encoding
+  entirely but is deferred pending cross-package coordination.
