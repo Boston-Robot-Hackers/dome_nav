@@ -43,27 +43,27 @@ def test_on_targets_scalar_json_rejected(mgr):
 
 # --- parse_intent ---
 
-def test_parse_intent_go_to_object(mgr):
-    payload = json.dumps({"name": "go_to_object", "source": "cli", "slots": {"label": "chair"}})
+def test_parse_intent_navigation_go(mgr):
+    payload = json.dumps({"name": "navigation_go", "source": "cli", "slots": {"label": "chair"}})
     result = mgr.parse_intent(payload)
     assert result is not None
     action, intent = result
-    assert action == "go_to_object"
+    assert action == "navigation_go"
     assert intent["slots"]["label"] == "chair"
 
 
-def test_parse_intent_cancel(mgr):
-    payload = json.dumps({"name": "cancel_navigation", "source": "cli", "slots": {}})
+def test_parse_intent_navigation_cancel(mgr):
+    payload = json.dumps({"name": "navigation_cancel", "source": "cli", "slots": {}})
     result = mgr.parse_intent(payload)
     assert result is not None
-    assert result[0] == "cancel_navigation"
+    assert result[0] == "navigation_cancel"
 
 
 def test_parse_intent_missing_slots_still_parses(mgr):
-    payload = json.dumps({"name": "go_to_object", "source": "cli"})
+    payload = json.dumps({"name": "navigation_go", "source": "cli"})
     result = mgr.parse_intent(payload)
     assert result is not None
-    assert result[0] == "go_to_object"
+    assert result[0] == "navigation_go"
 
 
 def test_parse_intent_invalid_json(mgr):
@@ -80,11 +80,11 @@ def test_parse_intent_missing_name(mgr):
 
 
 def test_parse_intent_list_json_rejected(mgr):
-    assert mgr.parse_intent(json.dumps(["go_to_object", "chair"])) is None
+    assert mgr.parse_intent(json.dumps(["navigation_go", "chair"])) is None
 
 
 def test_parse_intent_string_json_rejected(mgr):
-    assert mgr.parse_intent(json.dumps("go_to_object")) is None
+    assert mgr.parse_intent(json.dumps("navigation_go")) is None
 
 
 # --- find_nearest_confirmed ---

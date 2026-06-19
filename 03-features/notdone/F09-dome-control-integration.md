@@ -15,7 +15,7 @@ by dome_nav. Also close verified-fixed issues I02–I05.
 - Fix `parse_intent()` in `nav_manager.py` to read `"name"` key (dome_control contract)
   and accept `"slots"` dict for label extraction
 - Update all tests that use the old `"action"` key format
-- Add `go_to_object` and `cancel_navigation` as commands in dome_control that publish
+- Add `navigation_go` and `navigation_cancel` as commands in dome_control that publish
   the correct intent payload
 - Verify dome_control → `/intent` → dome_nav pipeline end-to-end on live robot
 - Close I02–I05 (already fixed in code, just need issue files moved)
@@ -30,7 +30,7 @@ by dome_nav. Also close verified-fixed issues I02–I05.
 
 **Steps**:
 1. Run dome_nav + dome_control together
-2. Issue `go_to_object chair` from dome_control CLI
+2. Issue `navigation_go chair` from dome_control CLI
 3. Verify dome_nav logs "Navigating to chair" and publishes nav_status
 
 **Expected output**: intent flows from dome_control CLI → `/intent` → dome_nav →

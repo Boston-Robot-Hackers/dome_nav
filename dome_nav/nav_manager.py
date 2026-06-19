@@ -32,10 +32,12 @@ class NavManager:
         if not isinstance(intent, dict):
             return None
         action = intent.get("name", "")
-        if action not in ("go_to_object", "cancel_navigation"):
+        if action not in ("navigation_go", "navigation_cancel"):
             return None
         return (action, intent)
 
+    # target dicts: {"label": str, "xyz_world": [x, y, z], ...}
+    # robot_xy None = no pose available; fall back to first match rather than blocking navigation
     def find_nearest_confirmed(self, label: str, robot_xy: tuple[float, float] | None) -> dict | None:
         matches = [t for t in self.confirmed_targets if t.get("label") == label]
         if not matches:
@@ -50,6 +52,8 @@ class NavManager:
 
         return min(matches, key=dist)
 
+    # covariance: 36-element row-major 6x6; [0]=xx, [7]=yy (meters²)
+    # score = 1.0 fully converged, 0.0 fully lost; MAX_COV is the "lost" ceiling
     def check_localization(self, covariance: list[float]) -> tuple[str, float]:
         worst = max(covariance[0], covariance[7])
         score = min(1.0, max(0.0, 1.0 - worst / self.MAX_COV))

@@ -1,6 +1,6 @@
 ---
-version: "1.1"
-generated: "2026-06-18"
+version: "1.2"
+generated: "2026-06-19"
 ---
 
 # NavManager — Pure Python Navigation Logic
@@ -51,14 +51,14 @@ recognized; anything else returns `None` so the node ignores unknown intents.
         if not isinstance(intent, dict):
             return None
         action = intent.get("name", "")
-        if action not in ("go_to_object", "cancel_navigation"):
+        if action not in ("navigation_go", "navigation_cancel"):
             return None
         return (action, intent)
 ```
 
 The key is `"name"` — not `"action"` — because that is the field dome_control's
 `IntentPublisher` and `IntentParser` use. Using `"action"` would cause every
-real intent to be silently ignored. The label for `go_to_object` lives in
+real intent to be silently ignored. The label for `navigation_go` lives in
 `intent["slots"]["label"]`, following dome_control's slot convention.
 
 Returning `None` is a valid "nothing to do" signal — not an error. The node

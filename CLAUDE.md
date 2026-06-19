@@ -3,7 +3,6 @@
 This file provides guidance to Claude Code when working with code in this repository.
 
 Read and follow all rules in the `.claude/` folder:
-- `.claude/how_to_be.md` — working principles for every session
 - `.claude/process.md` — development workflow and feature/task tracking rules
 - `.claude/style_guide.md` — coding standards, style rules, and review checklist
 - `02-doc/current.md` — session handoff and current status

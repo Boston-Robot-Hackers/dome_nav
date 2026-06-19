@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# robot.launch.py — slam_toolbox + Nav2 + dome_nav nodes for the physical robot
+# robot_explore.launch.py — Mode A stack + frontier exploration for autonomous map building
 # Author: Pito Salas and Claude Code
 # Open Source Under MIT license
 
@@ -10,9 +10,9 @@ from dome_nav.utils import dome_home, yaml_override, yaml_patch_dict
 
 
 @launch_this(ui=True)
-def robot_launch(use_sim_time: str = "false", map_name: str = ""):
+def robot_explore_launch(use_sim_time: str = "false", map_name: str = "", max_explore_radius: float = 0.0):
     if not map_name:
-        raise ValueError("map_name is required: bl robot_map.launch.py --map_name <name>")
+        raise ValueError("map_name is required: bl robot_explore.launch.py --map_name <name>")
 
     bl = BetterLaunch()
 
@@ -31,7 +31,9 @@ def robot_launch(use_sim_time: str = "false", map_name: str = ""):
 
     nav2_base = bl.find("nav2_bringup", "nav2_params.yaml")
     nav2_patch = os.path.join(pkg, "config", "nav2_param_patch.yaml")
+    explore_patch = os.path.join(pkg, "config", "explore_param_patch.yaml")
     nav2_config = yaml_override(nav2_base, nav2_patch)
+    nav2_config = yaml_override(nav2_config, explore_patch)
 
     bl.include("slam_toolbox", "online_async_launch.py",
         **{"slam_params_file": slam_config})
@@ -50,7 +52,8 @@ def robot_launch(use_sim_time: str = "false", map_name: str = ""):
 
     bl.node(
         "dome_nav",
-        "nav_manager_node",
-        name="nav_manager",
+        "explore_manager_node",
+        name="explore_manager",
+        params={"max_explore_radius": max_explore_radius},
         ros_waittime=30.0,
     )

@@ -1,0 +1,15 @@
+# explore_param_patch.yaml — Nav2 speed overrides for autonomous exploration.
+# Applied on top of nav2_param_patch.yaml. Slow speed reduces slam_toolbox
+# scan-matching errors during continuous motion.
+
+controller_server:
+  ros__parameters:
+    FollowPath:
+      desired_linear_vel: 0.12
+
+velocity_smoother:
+  ros__parameters:
+    max_velocity: [0.15, 0.0, 1.0]
+    min_velocity: [-0.15, 0.0, -1.0]
+    max_accel: [0.8, 0.0, 2.0]
+    max_decel: [-0.8, 0.0, -2.0]

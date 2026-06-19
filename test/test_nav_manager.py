@@ -93,20 +93,20 @@ def test_find_nearest_tf_unavailable_returns_first(node):
 
 # --- on_intent routing tests ---
 
-def test_on_intent_go_to_object_calls_navigate(node):
+def test_on_intent_navigation_go_calls_navigate(node):
     node.navigate_to_object = MagicMock()
     msg = MagicMock()
-    msg.data = json.dumps({"name": "go_to_object", "source": "cli", "slots": {"label": "chair"}})
+    msg.data = json.dumps({"name": "navigation_go", "source": "cli", "slots": {"label": "chair"}})
     node.on_intent(msg)
     node.navigate_to_object.assert_called_once_with("chair")
 
 
-def test_on_intent_cancel_calls_cancel(node):
-    node.cancel_navigation = MagicMock()
+def test_on_intent_navigation_cancel_calls_cancel(node):
+    node.navigation_cancel = MagicMock()
     msg = MagicMock()
-    msg.data = json.dumps({"name": "cancel_navigation", "source": "cli", "slots": {}})
+    msg.data = json.dumps({"name": "navigation_cancel", "source": "cli", "slots": {}})
     node.on_intent(msg)
-    node.cancel_navigation.assert_called_once()
+    node.navigation_cancel.assert_called_once()
 
 
 def test_on_intent_invalid_json_ignored(node):
@@ -154,12 +154,12 @@ def test_navigate_sends_goal_and_publishes_navigating(node):
     node.publish_status.assert_called_with("navigating:chair")
 
 
-# --- cancel_navigation tests ---
+# --- navigation_cancel tests ---
 
 def test_cancel_with_no_goal_handle_does_nothing(node):
     node.goal_handle = None
     node.publish_status = MagicMock()
-    node.cancel_navigation()
+    node.navigation_cancel()
     node.publish_status.assert_not_called()
 
 
@@ -167,7 +167,7 @@ def test_cancel_calls_goal_handle_cancel(node):
     mock_handle = MagicMock()
     node.goal_handle = mock_handle
     node.publish_status = MagicMock()
-    node.cancel_navigation()
+    node.navigation_cancel()
     mock_handle.cancel_goal_async.assert_called_once()
     node.publish_status.assert_called_once_with("cancelled")
     assert node.goal_handle is None

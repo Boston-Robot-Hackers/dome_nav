@@ -50,7 +50,7 @@ content, it's a bug to fix at the source.
 - [ ] SHOULD: New ROS parameters are declared, read, launch-overridable where useful, and covered by tests
 - [ ] SHOULD: Config defaults are defined in one place whenever practical
 - [ ] SHOULD: Dataclass fields are not hand-transcribed into YAML parsing or ROS parameter declaration when `dataclasses.fields()` can reasonably be used
-- [ ] SHOULD: Launch files use `better_launch` (`@launch_this`, `bl.node`, `bl.group`, `bl.include`)
+- [ ] MUST: Launch files use `better_launch` (`@launch_this`, `bl.node`, `bl.group`, `bl.include`). CLI invocation: `bl <launch_file>.launch.py --param_name value`. Error messages in launch files must use this form, not `ros2 launch` syntax.
 - [ ] SHOULD: ROS2 runtime deps are declared as `exec_depend` in `package.xml`, not in `pyproject.toml`
 - [ ] SHOULD: Tests in `tests/` run with plain `pytest`; no `colcon test` dependency
 - [ ] SHOULD: Optional topics and missing ROS graph dependencies do not crash the node

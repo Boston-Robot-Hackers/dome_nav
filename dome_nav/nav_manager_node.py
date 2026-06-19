@@ -59,11 +59,11 @@ class NavManagerNode(Node):
             self.get_logger().warning(f"Malformed or unknown intent: {msg.data!r}")
             return
         action, intent = result
-        if action == "go_to_object":
+        if action == "navigation_go":
             label = intent.get("slots", {}).get("label", "")
             self.navigate_to_object(label)
-        elif action == "cancel_navigation":
-            self.cancel_navigation()
+        elif action == "navigation_cancel":
+            self.navigation_cancel()
 
     def navigate_to_object(self, label: str):
         target = self.find_nearest_confirmed(label)
@@ -117,7 +117,7 @@ class NavManagerNode(Node):
         else:
             self.publish_status(f"failed:{label}")
 
-    def cancel_navigation(self):
+    def navigation_cancel(self):
         if self.goal_handle is not None:
             self.goal_handle.cancel_goal_async()
             self.goal_handle = None

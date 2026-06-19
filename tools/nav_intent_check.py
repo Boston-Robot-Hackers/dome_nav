@@ -105,7 +105,7 @@ class NavIntentChecker(Node):
 
     def send_intent(self):
         msg = String()
-        msg.data = json.dumps({"name": "go_to_object", "source": "tool", "slots": {"label": LABEL}})
+        msg.data = json.dumps({"name": "navigation_go", "source": "tool", "slots": {"label": LABEL}})
         # Wait until nav_manager's subscription is visible, then publish once
         deadline = time.time() + 5.0
         while time.time() < deadline:
@@ -171,7 +171,7 @@ def main():
     node.send_target(target)
     print(f"  targets subscribers found: {node.targets_pub.get_subscription_count()}")
 
-    print("\n[3/4] Sending go_to_object intent...")
+    print("\n[3/4] Sending navigation_go intent...")
     print(f"  intent subscribers found: {node.intent_pub.get_subscription_count()}")
     node.send_intent()
 

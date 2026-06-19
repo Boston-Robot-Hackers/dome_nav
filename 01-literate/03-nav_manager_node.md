@@ -1,6 +1,6 @@
 ---
-version: "2.2"
-generated: "2026-06-18"
+version: "2.3"
+generated: "2026-06-19"
 ---
 
 # NavManagerNode — ROS2 Adapter for Intent Navigation
@@ -20,8 +20,8 @@ flowchart LR
     C[targets confirmed] -->|String JSON| D[on_targets]
     B --> E[NavManager.parse_intent]
     D --> F[NavManager.on_targets]
-    E -->|go_to_object| G[navigate_to_object]
-    E -->|cancel| H[cancel_navigation]
+    E -->|navigation_go| G[navigate_to_object]
+    E -->|cancel| H[navigation_cancel]
     G --> I[NavigateToPose action]
     I --> J[nav_status]
     K[amcl_pose] --> L[on_amcl_pose]
@@ -43,11 +43,11 @@ string. The node never inspects the JSON directly. Label is extracted from
             self.get_logger().warning(f"Malformed or unknown intent: {msg.data!r}")
             return
         action, intent = result
-        if action == "go_to_object":
+        if action == "navigation_go":
             label = intent.get("slots", {}).get("label", "")
             self.navigate_to_object(label)
-        elif action == "cancel_navigation":
-            self.cancel_navigation()
+        elif action == "navigation_cancel":
+            self.navigation_cancel()
 ```
 
 The warning log on `None` is important: previously a bad intent was silently
