@@ -1,60 +1,44 @@
 # TF10 — Autonomous Exploration for F10
 
 ## T01 — Verify explore_lite available
-**Status**: not done
-**Description**: Confirm `ros-jazzy-explore-lite` installs and its topics/services match
-what we expect. Check: `/explore/start` and `/explore/stop` service names, costmap
-topic it subscribes to, and whether it auto-stops when no frontiers remain.
-Run `ros2 pkg list | grep explore` after install. Document actual topic/service names
-in `02-doc/notes.md` — F10 scope assumes names that may differ.
-**Test**: Manual — `apt install ros-jazzy-explore-lite`, verify pkg found, list its nodes and topics.
+**Status**: N/A — superseded
+**Description**: Originally planned to use `ros-jazzy-explore-lite`. Decided instead to
+build custom `frontier_explorer.py` (pure Python, no external ROS package dependency).
+This task is moot.
 
 ## T02 — Add explore_param_patch.yaml
-**Status**: not done
-**Description**: Create `config/explore_param_patch.yaml` with conservative exploration
-settings: reduced `max_vel_x` (≤0.15 m/s), increased costmap inflation radius, and
-any `explore_lite`-specific params (min_frontier_size, planner_frequency). Speed cap
-is critical — slam_toolbox scan-matching degrades at high speed.
-**Test**: Param file loads without error in launch (verified in T03).
+**Status**: done
+**Description**: `config/explore_param_patch.yaml` created with conservative exploration
+settings: `desired_linear_vel` 0.12 m/s, `max_velocity` [0.15, 0.0, 1.0], plus
+frontier params (`MIN_FRONTIER_SIZE`, `MIN_FRONTIER_DIST`, `BLACKLIST_RADIUS`,
+`GOAL_INSET_M`, `max_explore_radius`).
 
 ## T03 — Create robot_explore.launch.py
-**Status**: not done
-**Description**: New launch file `launch/robot_explore.launch.py`. Pattern mirrors
-`robot_map.launch.py`: requires `map_name` arg (error if missing, same error format).
-Includes slam_toolbox online_async + nav2 (with explore_param_patch applied on top of
-nav2_param_patch) + `explore_manager_node` + `explore_lite` node.
-`explore_lite` starts paused — `explore_manager_node` triggers it via intent.
-**Test**: `bl robot_explore.launch.py` (no map_name) → clear error message. Launch with
-`--map_name test` on live stack → no crash, all nodes appear in `ros2 node list`.
+**Status**: done
+**Description**: `launch/robot_explore.launch.py` (Mode E) exists. Requires `map_name`
+arg (error if missing). Includes slam_toolbox online_async + nav2 + explore_manager_node.
+Accepts `max_explore_radius` arg (default 0.0 = unlimited).
 
 ## T04 — Create explore_manager_node.py
-**Status**: not done
-**Description**: ROS2 node `dome_nav/explore_manager_node.py`. Subscribes `/intent`,
-acts on `exploration_start` (calls `/explore/start` service) and `exploration_stop`
-(calls `/explore/stop` service). Publishes `/explore/status` (String: idle | exploring | done).
-Transitions to `done` when explore_lite signals no more frontiers (subscribe to explore_lite
-status topic — confirm name in T01). Lifecycle: clean shutdown on node destroy.
-**Test**: Unit tests (mocked ROS2): intent routing, status transitions, service calls mocked.
-Mark hardware tests manual.
+**Status**: done
+**Description**: `dome_nav/explore_manager_node.py` subscribes `/intent`, routes
+`exploration_start` / `exploration_stop` intents → Nav2 NavigateToPose goals via
+custom `frontier_explorer.py`. Blacklisting, nudge inset, 2 Hz timer loop,
+publishes `/explore/status`. 84 tests pass including frontier_explorer pure tests.
 
 ## T05 — Add nav.explore / nav.explore.stop to dome_control
-**Status**: not done
-**Description**: In dome_control `navigation_commands.py`, add two commands:
-- `nav.explore` → `publish_intent_exploration_start` → intent `{"name": "exploration_start", "source": "cli", "slots": {}}`
-- `nav.explore.stop` → `publish_intent_exploration_stop` → intent `{"name": "exploration_stop", "source": "cli", "slots": {}}`
-Add matching methods to `robot_controller.py`.
-**Test**: Unit test in `test_command_dispatcher_text.py`: `nav explore` dispatches
-`publish_intent_exploration_start`; `nav explore stop` dispatches `publish_intent_exploration_stop`.
+**Status**: done
+**Description**: dome_control `nav explore` and `nav explore stop` publish
+`exploration_start` / `exploration_stop` intents with correct JSON payload.
 
-## T06 — Resolve open questions from F10
+## T06 — Resolve open hardware questions
 **Status**: not done
-**Description**: Answer on hardware before writing explore_manager auto-stop logic:
-1. Does explore_lite auto-stop when no frontiers? What signal does it emit?
-2. What speed cap avoids slam_toolbox degradation on linorobot2?
-3. Do narrow doorways (<0.8m) get traversed or blocked?
-Record answers in `02-doc/notes.md`. Update T04 implementation if auto-stop signal differs
-from assumed.
-**Test**: Manual — run T03 launch on real robot, observe behavior, record findings.
+**Description**: Answer on hardware:
+1. Does explore auto-stop cleanly when no frontiers remain?
+2. What speed cap avoids slam_toolbox degradation on linorobot2? (currently 0.12 m/s)
+3. Do narrow doorways (<0.8 m) get traversed or blocked by costmap?
+Record answers in `02-doc/notes.md`. Adjust params or auto-stop logic as needed.
+**Test**: Manual — run Mode E launch on real robot, observe behavior, record findings.
 
 ## T07 — Manual live smoke test
 **Status**: not done
@@ -62,6 +46,6 @@ from assumed.
 1. `bl robot_explore.launch.py --map_name basement_explore`
 2. `nav explore` from dome_control CLI
 3. Observe robot driving autonomously, map growing in Foxglove
-4. `nav explore stop` → robot stops, map saved
-Record: explore_lite node started, `/explore/status` transitions seen, map file written.
+4. `nav explore stop` → robot stops cleanly, map saved to `~/.dome/slam_maps/`
+Record: `/explore/status` transitions seen (idle → exploring → done/idle), map file written.
 **Test**: Manual — mark done only when all four observations confirmed.

@@ -23,8 +23,9 @@ class ExploreManagerNode(Node):
     MIN_FRONTIER_SIZE = 10
     BLACKLIST_RADIUS = 0.5
     MIN_FRONTIER_DIST = 0.5   # skip frontiers closer than this to robot — within goal tolerance, robot won't move
-    GOAL_INSET_M = 0.3        # pull goal inward so frontier-edge centroid lands inside costmap bounds
+    GOAL_INSET_M = 0.6        # pull goal inward so frontier-edge centroid lands inside costmap bounds
     EXPLORE_HZ = 2.0
+    NO_FRONTIER_PATIENCE = 8  # consecutive no-frontier ticks before declaring done
 
     def __init__(self):
         super().__init__("explore_manager_node")
@@ -45,6 +46,7 @@ class ExploreManagerNode(Node):
         self.goal_handle = None
         self.blacklist: set[tuple[float, float]] = set()
         self.start_xy: tuple[float, float] | None = None
+        self.no_frontier_count = 0
         self.get_logger().info("ExploreManagerNode ready.")
 
     def on_map(self, msg: OccupancyGrid):
@@ -59,6 +61,7 @@ class ExploreManagerNode(Node):
         name = intent.get("name", "")
         if name == "exploration_start" and self.state in ("idle", "done"):
             self.blacklist.clear()
+            self.no_frontier_count = 0
             self.start_xy = self.robot_xy_in_map()
             self.state = "exploring"
             self.publish_status("exploring")
@@ -95,11 +98,17 @@ class ExploreManagerNode(Node):
             self.MIN_FRONTIER_DIST,
         )
         if target is None:
-            self.get_logger().info("No frontiers remaining — exploration done.")
-            self.state = "done"
-            self.publish_status("done")
+            self.no_frontier_count += 1
+            self.get_logger().info(
+                f"No frontiers found (tick {self.no_frontier_count}/{self.NO_FRONTIER_PATIENCE})."
+            )
+            if self.no_frontier_count >= self.NO_FRONTIER_PATIENCE:
+                self.get_logger().info("Frontier patience exhausted — exploration done.")
+                self.state = "done"
+                self.publish_status("done")
             return
-        self.send_nav_goal(self.nudge_toward_robot(target, robot_xy))
+        self.no_frontier_count = 0
+        self.send_nav_goal(self.nudge_toward_robot(target, robot_xy), centroid=target)
 
     def nudge_toward_robot(self, xy: tuple[float, float], robot_xy: tuple[float, float]) -> tuple[float, float]:
         dx = robot_xy[0] - xy[0]
@@ -110,9 +119,9 @@ class ExploreManagerNode(Node):
         scale = self.GOAL_INSET_M / dist
         return (xy[0] + dx * scale, xy[1] + dy * scale)
 
-    def send_nav_goal(self, xy: tuple[float, float]):
-        if not self.nav_client.wait_for_server(timeout_sec=3.0):
-            self.get_logger().error("NavigateToPose server not available.")
+    def send_nav_goal(self, xy: tuple[float, float], centroid: tuple[float, float]):
+        if not self.nav_client.server_is_ready():
+            self.get_logger().warning("NavigateToPose server not ready — will retry.")
             return
         goal = NavigateToPose.Goal()
         goal.pose = PoseStamped()
@@ -122,31 +131,33 @@ class ExploreManagerNode(Node):
         goal.pose.pose.position.y = xy[1]
         goal.pose.pose.orientation.w = 1.0
         self.active_goal = True
-        self.get_logger().info(f"Sending frontier goal: ({xy[0]:.2f}, {xy[1]:.2f})")
+        self.get_logger().info(
+            f"Sending frontier goal: ({xy[0]:.2f}, {xy[1]:.2f}), centroid: ({centroid[0]:.2f}, {centroid[1]:.2f})"
+        )
         future = self.nav_client.send_goal_async(goal)
-        future.add_done_callback(functools.partial(self.on_goal_accepted, xy=xy))
+        future.add_done_callback(functools.partial(self.on_goal_accepted, xy=xy, centroid=centroid))
 
-    def on_goal_accepted(self, future, xy: tuple[float, float]):
+    def on_goal_accepted(self, future, xy: tuple[float, float], centroid: tuple[float, float]):
         handle = future.result()
         if not handle.accepted:
-            self.get_logger().warning(f"Goal rejected at {xy} — blacklisting.")
-            self.blacklist.add(xy)
+            self.get_logger().warning(f"Goal rejected at ({xy[0]:.2f}, {xy[1]:.2f}) — blacklisting centroid.")
+            self.blacklist.add(centroid)
             self.active_goal = False
             return
         self.goal_handle = handle
         result_future = handle.get_result_async()
-        result_future.add_done_callback(functools.partial(self.on_goal_result, xy=xy))
+        result_future.add_done_callback(functools.partial(self.on_goal_result, xy=xy, centroid=centroid))
 
-    def on_goal_result(self, future, xy: tuple[float, float]):
+    def on_goal_result(self, future, xy: tuple[float, float], centroid: tuple[float, float]):
         self.goal_handle = None
         self.active_goal = False
         result = future.result()
         if result.status == GoalStatus.STATUS_SUCCEEDED:
             self.get_logger().info(f"Reached frontier ({xy[0]:.2f}, {xy[1]:.2f}).")
         else:
-            self.get_logger().warning(f"Failed to reach ({xy[0]:.2f}, {xy[1]:.2f}) — blacklisting.")
-        # blacklist regardless of success — frontier visited, don't revisit same spot
-        self.blacklist.add(xy)
+            self.get_logger().warning(f"Failed to reach ({xy[0]:.2f}, {xy[1]:.2f}) — blacklisting centroid.")
+        # blacklist centroid (not nudged goal) so pick_best_frontier comparison is exact
+        self.blacklist.add(centroid)
 
     def stop_exploring(self, new_state: str):
         if self.goal_handle is not None:

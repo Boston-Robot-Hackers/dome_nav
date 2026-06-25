@@ -2,10 +2,10 @@
 
 ## Snapshot
 
-**Date:** 2026-06-19
+**Date:** 2026-06-24
 **Branch:** main
 **Status:** F10 T01–T05 implemented. Autonomous frontier exploration working on
-hardware (first live run completed). 84 dome_nav + 198 dome_control tests pass.
+hardware (first live run completed). 84 dome_nav + 202 dome_control tests pass.
 T06 (open questions) and T07 (full live smoke test) pending.
 
 ## What exists
@@ -64,6 +64,16 @@ T06 (open questions) and T07 (full live smoke test) pending.
   before closing
 - I08: test files missing header
 - I09: `should_save()` 1-line method — verify moot before closing
+
+## This session's work
+
+- Fixed dispatch_text 3-token bug: `nav explore stop` now routes to `nav.explore.stop`
+  (not `nav.explore`). Dispatcher tries `command.second.third` before `command.second`.
+- Added `nav.explore.status` command: reads `/explore/status` topic via
+  `ros2 topic echo --once`, does NOT publish any intent.
+- `explore_status()` added to robot_controller.py; `subprocess` + 3s timeout.
+- 3 new tests; 199 → 202 dome_control tests pass.
+- Regenerated literate docs: 11-robot_controller.md, 12-command_dispatcher.md, X04-navigation_commands.md.
 
 ## Likely next steps
 
