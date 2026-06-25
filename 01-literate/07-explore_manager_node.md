@@ -15,19 +15,44 @@ timer-based exploration loop, and publishes `/explore/status`.
 ## Architecture
 
 ```mermaid
-flowchart LR
-    A[intent] -->|exploration_start| B[on_intent]
-    A -->|exploration_stop| B
-    C[map] --> D[on_map]
-    E[Timer 2 Hz] --> F[explore_tick]
-    F -->|state==exploring, no active goal| G[find_and_send_frontier]
-    G --> H[FrontierExplorer]
-    H --> I[pick_best_frontier]
-    I --> J[nudge_toward_robot]
-    J --> K[NavigateToPose]
-    K -->|result| L[on_goal_result]
-    L -->|blacklist + next tick| G
-    G -->|no frontiers| M[publish done]
+flowchart TD
+    A["/intent topic"]
+    B["on_intent()"]
+    C["/map topic"]
+    D["on_map()"]
+    E["Timer 2 Hz"]
+    F["explore_tick()"]
+    G["find_and_send_frontier()"]
+    H["find_frontier_clusters()"]
+    I["pick_best_frontier()"]
+    J["nudge_toward_robot()"]
+    K["NavigateToPose action"]
+    L["on_goal_result()"]
+    M["publish done"]
+
+    A -->|"exploration_start / stop"| B
+    C --> D
+    E --> F
+    F -->|"state==exploring, no active goal"| G
+    G --> H
+    H --> I
+    I --> J
+    J --> K
+    K -->|"result callback"| L
+    L -->|"blacklist + next tick"| G
+    G -->|"no frontiers × 8 ticks"| M
+
+    classDef topic fill:#1a6b8a,stroke:#0d4f6e,color:#ffffff
+    classDef callback fill:#2d6a2d,stroke:#1a4d1a,color:#ffffff
+    classDef logic fill:#7a4f1e,stroke:#5c3a14,color:#ffffff
+    classDef nav fill:#6b2d6b,stroke:#4d1a4d,color:#ffffff
+    classDef terminal fill:#8a3030,stroke:#6e1a1a,color:#ffffff
+
+    class A,C topic
+    class B,D,F,L callback
+    class G,H,I,J logic
+    class K nav
+    class E,M terminal
 ```
 
 ## State Machine
@@ -37,11 +62,21 @@ intent-driven except the `done` transition which is map-driven.
 
 ```mermaid
 stateDiagram-v2
+    direction TB
     [*] --> idle
     idle --> exploring : exploration_start intent
     done --> exploring : exploration_start intent
     exploring --> idle : exploration_stop intent
-    exploring --> done : no frontiers remain
+    exploring --> done : no frontiers for 8 ticks
+    exploring --> done : goal timeout exhausts blacklist
+
+    classDef idleStyle fill:#1a6b8a,stroke:#0d4f6e,color:#ffffff
+    classDef exploringStyle fill:#2d6a2d,stroke:#1a4d1a,color:#ffffff
+    classDef doneStyle fill:#8a3030,stroke:#6e1a1a,color:#ffffff
+
+    class idle idleStyle
+    class exploring exploringStyle
+    class done doneStyle
 ```
 
 Starting from `done` (not just `idle`) allows re-exploration after a

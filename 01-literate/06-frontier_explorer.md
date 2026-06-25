@@ -1,6 +1,6 @@
 ---
-version: "1.0"
-generated: "2026-06-19"
+version: "1.1"
+generated: "2026-06-25"
 ---
 
 # FrontierExplorer — Pure Python Frontier Detection
@@ -87,44 +87,69 @@ a diagonal chain into many tiny single-cell clusters:
 
 ## Picking the Best Frontier
 
-`pick_best_frontier` applies four filters in sequence, then returns the
-nearest passing centroid to the robot:
+The original centroid-based approach had a critical failure mode: when a large
+frontier ring surrounds the robot (the common case at the start of exploration),
+the centroid of all those cells averages to approximately the robot's own
+position. Any `min_dist` filter then rejects the entire cluster — even though
+individual cells are far away at the map boundary.
+
+The fix: select the **nearest non-blacklisted cell** within the cluster rather
+than the centroid. The centroid is only retained for the `max_radius` check,
+where it serves as a cheap cluster-level position proxy.
 
 ```mermaid
 flowchart TD
     A[cluster] --> B{size >= min_size?}
-    B -- no --> skip
-    B -- yes --> C{centroid in blacklist radius?}
-    C -- yes --> skip
-    C -- no --> D{within max_radius of start?}
-    D -- no --> skip
-    D -- yes --> E{dist from robot >= min_dist?}
-    E -- no --> skip
-    E -- yes --> F[candidate — track if nearest]
+    B -- no --> Z[skip cluster]
+    B -- yes --> C{centroid within max_radius?}
+    C -- no --> Z
+    C -- yes --> D[for each cell in cluster]
+    D --> E{cell near blacklisted point?}
+    E -- yes --> D
+    E -- no --> F{dist to robot >= min_dist?}
+    F -- no --> D
+    F -- yes --> G[candidate cell — track if nearest to robot]
+    G --> D
+    D --> H{any candidate found?}
+    H -- no --> Z
+    H -- yes --> I[return nearest candidate cell]
+
+    classDef filter fill:#7a4f1e,stroke:#5c3a14,color:#ffffff
+    classDef action fill:#2d6a2d,stroke:#1a4d1a,color:#ffffff
+    classDef terminal fill:#8a3030,stroke:#6e1a1a,color:#ffffff
+    class B,C,E,F,H filter
+    class D,G action
+    class Z,I terminal
 ```
 
 **min_size** — avoids sending the robot to chase single-pixel noise.
 
-**blacklist_radius** — previously failed or visited goals are stored as world
-coordinates. Any centroid within 0.5 m of a blacklisted point is skipped,
-preventing infinite retry loops on unreachable frontiers.
-
 **max_radius / start_xy** — limits exploration to a circle around the start
-position, useful for mapping a single room without wandering the building.
-Disabled when `max_radius == 0.0`.
+position, useful for mapping a single room. Checked on the centroid as a fast
+cluster-level proxy. Disabled when `max_radius == 0.0`.
 
-**min_dist** — skips frontiers too close to the robot. Nav2's `xy_goal_tolerance`
-is 0.25 m; a frontier at 0.2 m is declared "reached" without movement, causing
-the same frontier to reappear immediately.
+**blacklist per-cell** — previously failed or visited goal positions are stored
+as world coordinates. Each cell in the cluster is individually compared against
+the blacklist, so only cells near previously attempted positions are excluded.
+The whole cluster is never rejected — the robot naturally traces along the
+frontier boundary as cells get blacklisted one by one.
+
+**min_dist** — skips cells too close to the robot. With the nudge applied in
+`explore_manager_node` (`GOAL_INSET_M`), the actual Nav2 goal lands at
+`frontier_dist - GOAL_INSET_M`. `min_dist` must be large enough that this
+result exceeds Nav2's `xy_goal_tolerance`, otherwise the goal is declared
+reached without movement.
 
 ## Observations
 
-- Performance: linear scan is O(W×H) per tick. A 200×200 map (2500 m² at 5 cm
-  resolution) = 40,000 cells — fast enough at 2 Hz. For very large maps (>10,000
-  m²) a BFS-from-robot approach like m-explore would be more efficient.
-- Frontier ranking uses pure distance. m-explore weights by `size × gain -
-  distance × scale`, which steers toward large unexplored regions over small
-  nearby gaps. A size-weighted score could improve exploration efficiency.
-- The blacklist uses exact centroid coordinates. A centroid computed from a
-  slightly different cluster (map updated between ticks) may not match exactly.
-  The `blacklist_radius` tolerance (0.5 m) covers this drift in practice.
+- Performance: linear scan is O(W×H) per tick plus O(C×B) for blacklist checks
+  per cell (C = cluster size, B = blacklist size). A 200×200 map at 2 Hz with
+  a 875-cell cluster and 10 blacklisted points = ~8,750 distance checks per
+  tick. Acceptable on a Raspberry Pi 4; for larger maps a spatial index would
+  help.
+- Frontier ranking uses pure nearest-cell distance. m-explore weights by
+  `size × gain - distance × scale`, steering toward large unexplored regions.
+  A size-weighted score could improve exploration efficiency for multi-room maps.
+- The blacklist stores goal positions (nudged coordinates from explore_manager),
+  not raw cell positions. A blacklisted position covers a 0.5 m radius, so
+  nearby cells are also excluded even if not exactly matching.

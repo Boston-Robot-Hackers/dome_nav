@@ -17,8 +17,11 @@ class MapInfo:
 
 
 def find_frontier_clusters(data: list[int], info: MapInfo) -> list[list[int]]:
-    # Frontier cell: free (0) with at least one unknown (-1) 4-neighbor.
-    # Clusters built with 8-connectivity flood-fill.
+    # Returns list[list[int]]: each inner list is a cluster of cell indices (flat
+    # offsets into data). row = idx // width, col = idx % width. Convert to world
+    # coords via cell_to_world(idx, info). A frontier cell is free (data[idx]==0)
+    # with at least one 4-neighbor that is unknown (data[nb]==-1). Adjacent
+    # frontier cells are grouped into clusters by 8-connectivity flood-fill.
     width, height = info.width, info.height
 
     def neighbors4(idx: int):
@@ -64,7 +67,6 @@ def find_frontier_clusters(data: list[int], info: MapInfo) -> list[list[int]]:
                 if nb not in visited and nb in is_frontier:
                     stack.append(nb)
         clusters.append(cluster)
-
     return clusters
 
 
@@ -75,10 +77,13 @@ def cell_to_world(idx: int, info: MapInfo) -> tuple[float, float]:
     return (x, y)
 
 
-# blacklist_radius: any frontier centroid within this distance of a blacklisted
-# position is skipped — prevents retrying goals Nav2 already failed to reach.
-# max_radius / start_xy: if max_radius > 0, frontiers beyond that distance from
-# start_xy are skipped — limits map to a circle around the exploration origin.
+# Returns the nearest non-blacklisted frontier cell (not centroid) beyond min_dist.
+# Using the nearest cell rather than centroid avoids the ring-cluster problem: a
+# large frontier surrounding the robot has centroid ≈ robot position, but individual
+# cells are at the map boundary where the robot actually needs to go.
+# Centroid is still used for max_radius filtering (cluster-level position proxy).
+# Blacklist is checked per-cell so only visited cells are excluded, not entire clusters.
+
 def pick_best_frontier(
     clusters: list[list[int]],
     info: MapInfo,
@@ -98,19 +103,28 @@ def pick_best_frontier(
     for cluster in clusters:
         if len(cluster) < min_size:
             continue
-        cx = sum(cell_to_world(i, info)[0] for i in cluster) / len(cluster)
-        cy = sum(cell_to_world(i, info)[1] for i in cluster) / len(cluster)
-        if any(math.sqrt((cx - bx) ** 2 + (cy - by) ** 2) < blacklist_radius for bx, by in bl):
-            continue
         if max_radius > 0.0 and start_xy is not None:
+            cx = sum(cell_to_world(i, info)[0] for i in cluster) / len(cluster)
+            cy = sum(cell_to_world(i, info)[1] for i in cluster) / len(cluster)
             sx, sy = start_xy
             if math.sqrt((cx - sx) ** 2 + (cy - sy) ** 2) > max_radius:
                 continue
-        dist = math.sqrt((cx - rx) ** 2 + (cy - ry) ** 2)
-        if min_dist > 0.0 and dist < min_dist:
+        goal: tuple[float, float] | None = None
+        goal_dist = float("inf")
+        for cell_idx in cluster:
+            wx, wy = cell_to_world(cell_idx, info)
+            if any(math.sqrt((wx - bx) ** 2 + (wy - by) ** 2) < blacklist_radius for bx, by in bl):
+                continue
+            d = math.sqrt((wx - rx) ** 2 + (wy - ry) ** 2)
+            if min_dist > 0.0 and d < min_dist:
+                continue
+            if d < goal_dist:
+                goal_dist = d
+                goal = (wx, wy)
+        if goal is None:
             continue
-        if dist < best_dist:
-            best_dist = dist
-            best = (cx, cy)
+        if goal_dist < best_dist:
+            best_dist = goal_dist
+            best = goal
 
     return best

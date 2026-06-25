@@ -54,6 +54,6 @@ def robot_explore_launch(use_sim_time: str = "false", map_name: str = "", max_ex
         "dome_nav",
         "explore_manager_node",
         name="explore_manager",
-        params={"max_explore_radius": max_explore_radius},
+        params={"max_explore_radius": max_explore_radius, "map_name": map_name},
         ros_waittime=30.0,
     )

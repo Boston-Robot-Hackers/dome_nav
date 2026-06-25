@@ -202,3 +202,21 @@ def test_max_radius_no_start_xy_disables_filter():
     far_cluster = [15]
     result = pick_best_frontier([far_cluster], info, (0.0, 0.0), min_size=1, max_radius=3.0, start_xy=None)
     assert result is not None
+
+
+def test_pick_ring_cluster_centroid_near_robot():
+    # Regression: large frontier ring surrounds robot — centroid ≈ robot position.
+    # Must still return a valid goal (nearest cell beyond min_dist), not None.
+    # 5x5 grid, robot at center (2,2) in world = (2.5, 2.5) at resolution=1.0.
+    # Ring of frontier cells: all 4 cells at distance ~1.4 from center (corners of inner ring).
+    # centroid of ring = (2.5, 2.5) = robot position → old code filtered it, new code must not.
+    info = make_info(5, 5, resolution=1.0)
+    # cells [6,8,16,18] form a ring at distance 1.4 from center cell 12
+    ring = [6, 8, 16, 18]  # world coords: (1.5,1.5),(2.5,1.5),(1.5,3.5),(2.5,3.5) — wait, need symmetric
+    # Use cells equidistant from center: (1,1),(3,1),(1,3),(3,3) = indices 6,8,16,18
+    robot_xy = (2.5, 2.5)  # center of 5x5 grid at resolution 1.0
+    result = pick_best_frontier([ring], info, robot_xy, min_size=1, min_dist=0.5)
+    assert result is not None
+    # nearest cell in ring to robot: all at distance sqrt(2) ≈ 1.414, all > 0.5 min_dist
+    dist = math.sqrt((result[0] - robot_xy[0]) ** 2 + (result[1] - robot_xy[1]) ** 2)
+    assert dist >= 0.5
