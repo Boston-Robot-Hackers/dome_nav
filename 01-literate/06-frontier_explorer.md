@@ -1,5 +1,5 @@
 ---
-version: "1.1"
+version: "1.2"
 generated: "2026-06-25"
 ---
 
@@ -139,6 +139,27 @@ frontier boundary as cells get blacklisted one by one.
 `frontier_dist - GOAL_INSET_M`. `min_dist` must be large enough that this
 result exceeds Nav2's `xy_goal_tolerance`, otherwise the goal is declared
 reached without movement.
+
+## frontier_diag
+
+`_frontier_diag` is a diagnostic helper called only when `pick_best_frontier`
+returns `None`. It makes a second pass over the clusters to count how many
+were rejected at each filter stage:
+
+| field | meaning |
+|---|---|
+| `too_small` | clusters with `len < min_size` |
+| `large_clusters` | clusters that passed min_size |
+| `all_cells_too_close` | large clusters where every cell is within `min_dist` of the robot |
+
+These counts are written into the `no_frontier` telemetry event. If
+`all_cells_too_close > 0` and `large_clusters == all_cells_too_close`, the
+frontier exists but `MIN_FRONTIER_DIST` is too large for the current map size
+— reduce it.
+
+The function is named with a leading underscore because it is an internal
+diagnostic helper, not part of the public API — callers outside
+`explore_manager_node` should not depend on it.
 
 ## nudge_toward_robot
 

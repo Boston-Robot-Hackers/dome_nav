@@ -32,8 +32,12 @@ def robot_explore_launch(use_sim_time: str = "false", map_name: str = "", max_ex
     nav2_base = bl.find("nav2_bringup", "nav2_params.yaml")
     nav2_patch = os.path.join(pkg, "config", "nav2_param_patch.yaml")
     explore_patch = os.path.join(pkg, "config", "explore_param_patch.yaml")
+    dock_db = os.path.join(pkg, "config", "empty_dock_database.yaml")
     nav2_config = yaml_override(nav2_base, nav2_patch)
     nav2_config = yaml_override(nav2_config, explore_patch)
+    nav2_config = yaml_patch_dict(nav2_config, {
+        "docking_server": {"ros__parameters": {"dock_database": dock_db}}
+    })
 
     bl.include("slam_toolbox", "online_async_launch.py",
         **{"slam_params_file": slam_config})

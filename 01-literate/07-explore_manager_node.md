@@ -1,6 +1,6 @@
 ---
-version: "1.0"
-generated: "2026-06-19"
+version: "1.2"
+generated: "2026-06-25"
 ---
 
 # ExploreManagerNode — Autonomous Frontier Exploration
@@ -89,7 +89,11 @@ Rather than a recursive `makePlan()` call (m-explore's approach), we use a
 
 ```python
     def explore_tick(self):
-        if self.state != "exploring" or self.active_goal:
+        self.publish_status(self.state)
+        if self.state != "exploring":
+            return
+        if self.has_active_goal:
+            self.check_goal_timeout()
             return
         self.find_and_send_frontier()
 ```
@@ -99,25 +103,14 @@ result arrives. This prevents double-sending while a goal is in flight.
 
 ## Frontier Goal Selection and Inset
 
-After picking the best frontier centroid, the goal is nudged 0.3 m toward
-the robot. Frontier centroids sit at the edge of known space — placing the
-goal there lands it on or past the costmap boundary, causing a
-`worldToMap failed` planner error.
+After picking the best frontier cell, the goal is nudged 0.3 m toward the
+robot via `nudge_toward_robot()` (pure function in `frontier_explorer.py`).
+Frontier cells sit at the edge of known space — placing the goal there lands
+it on or past the costmap boundary, causing a `worldToMap failed` planner error.
 
-```python
-    def nudge_toward_robot(self, xy, robot_xy):
-        dx = robot_xy[0] - xy[0]
-        dy = robot_xy[1] - xy[1]
-        dist = math.sqrt(dx * dx + dy * dy)
-        if dist < self.GOAL_INSET_M:
-            return xy
-        scale = self.GOAL_INSET_M / dist
-        return (xy[0] + dx * scale, xy[1] + dy * scale)
-```
-
-The guard `if dist < GOAL_INSET_M` avoids a division-by-zero when the
-centroid is already very close to the robot (caught earlier by `MIN_FRONTIER_DIST`,
-but defensive here too).
+`MIN_FRONTIER_DIST` (0.8 m) ensures the frontier cell is far enough that the
+nudged goal (`frontier_dist − 0.3 m`) still exceeds Nav2's `xy_goal_tolerance`
+(0.25 m). Minimum valid value: `GOAL_INSET_M + xy_goal_tolerance = 0.55 m`.
 
 ## Blacklisting
 

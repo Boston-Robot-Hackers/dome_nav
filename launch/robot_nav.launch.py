@@ -32,7 +32,11 @@ def robot_nav_launch(use_sim_time: str = "false"):
         map=map_path, params_file=loc_config, use_sim_time=use_sim_time)
 
     # Navigation: planner + controller + costmap (no AMCL, no map_server)
+    dock_db = os.path.join(pkg, "config", "empty_dock_database.yaml")
     nav_config = yaml_override(nav2_base, nav2_patch)
+    nav_config = yaml_patch_dict(nav_config, {
+        "docking_server": {"ros__parameters": {"dock_database": dock_db}}
+    })
 
     bl.include("nav2_bringup", "navigation_launch.py",
         params_file=nav_config, use_sim_time=use_sim_time,

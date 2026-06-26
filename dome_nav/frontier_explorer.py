@@ -134,6 +134,33 @@ def pick_best_frontier(
     return best
 
 
+def _frontier_diag(
+    clusters: list[list[int]],
+    info: MapInfo,
+    robot_xy: tuple[float, float],
+    min_size: int,
+    min_dist: float,
+) -> dict:
+    # Returns filter-stage counts for telemetry. Cheap extra pass; only called
+    # when pick_best_frontier returns None so normal-path performance is unaffected.
+    rx, ry = robot_xy
+    too_small = sum(1 for c in clusters if len(c) < min_size)
+    large = [c for c in clusters if len(c) >= min_size]
+    all_too_close = 0
+    for cluster in large:
+        if all(
+            math.sqrt((cell_to_world(i, info)[0] - rx) ** 2
+                      + (cell_to_world(i, info)[1] - ry) ** 2) < min_dist
+            for i in cluster
+        ):
+            all_too_close += 1
+    return {
+        "too_small": too_small,
+        "large_clusters": len(large),
+        "all_cells_too_close": all_too_close,
+    }
+
+
 def nudge_toward_robot(
     xy: tuple[float, float], robot_xy: tuple[float, float], inset_m: float
 ) -> tuple[float, float]:

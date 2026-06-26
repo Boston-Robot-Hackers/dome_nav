@@ -12,9 +12,9 @@ class TelemetryWriter:
     def __init__(self, map_name: str, log_fn):
         telemetry_dir = os.path.join(os.path.expanduser("~"), ".dome", "telemetry")
         os.makedirs(telemetry_dir, exist_ok=True)
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(telemetry_dir, f"{map_name}_{ts}.jsonl")
-        self.file = open(path, "w")
+        date = time.strftime("%Y%m%d")
+        path = os.path.join(telemetry_dir, f"explore-{map_name}-{date}.jsonl")
+        self.file = open(path, "a")
         log_fn(f"Telemetry: {path}")
 
     def write(self, event: str, **kwargs):

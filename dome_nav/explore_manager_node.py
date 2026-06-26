@@ -20,6 +20,7 @@ import tf2_ros
 from dome_nav.explore_telemetry import TelemetryWriter
 from dome_nav.frontier_explorer import (
     MapInfo,
+    _frontier_diag,
     find_frontier_clusters,
     nudge_toward_robot,
     pick_best_frontier,
@@ -42,10 +43,10 @@ class ExploreManagerNode(Node):
     BLACKLIST_RADIUS = 0.5
 
     # Robot must be at least this far from a frontier cell for it to be a valid goal.
-    # Prevents goals that Nav2 considers already-reached (xy_goal_tolerance = 0.5 m).
+    # Prevents goals Nav2 considers already-reached (xy_goal_tolerance = 0.25 m in patch).
     # Must satisfy: MIN_FRONTIER_DIST > GOAL_INSET_M + xy_goal_tolerance.
-    # At current values: 2.0 > 0.3 + 0.5 = 0.8 ✓. Raising this skips nearby frontiers.
-    MIN_FRONTIER_DIST = 2.0
+    # At current values: 0.8 > 0.3 + 0.25 = 0.55 ✓. Raising this skips nearby frontiers.
+    MIN_FRONTIER_DIST = 0.8
 
     # Nudge the frontier goal this far toward the robot before sending to Nav2.
     # Frontier cells sit at the known/unknown boundary — placing the goal exactly
@@ -138,7 +139,7 @@ class ExploreManagerNode(Node):
         self.publish_status(self.state)
         if self.state != "exploring":
             return
-        if self.active_goal:
+        if self.has_active_goal:
             self.check_goal_timeout()
             return
         self.find_and_send_frontier()
@@ -172,10 +173,12 @@ class ExploreManagerNode(Node):
         # nearest valid one, nudge it inward, and send a Nav2 goal. If no valid
         # frontier exists for NO_FRONTIER_PATIENCE consecutive ticks, declares done.
         if self.latest_map is None:
+            self.telemetry.write("no_frontier", reason="no_map")
             return
         robot_xy = self.robot_xy_in_map()
         if robot_xy is None:
             self.get_logger().warning("TF map→base_footprint unavailable — waiting.")
+            self.telemetry.write("no_frontier", reason="no_tf")
             return
         m = self.latest_map
         info = MapInfo(
@@ -194,9 +197,17 @@ class ExploreManagerNode(Node):
                 f"No frontiers found "
                 f"(tick {self.no_frontier_count}/{self.NO_FRONTIER_PATIENCE})."
             )
+            diag = _frontier_diag(
+                clusters, info, robot_xy,
+                self.MIN_FRONTIER_SIZE, self.MIN_FRONTIER_DIST,
+            )
             self.telemetry.write(
-                "no_frontier", tick=self.no_frontier_count,
-                patience=self.NO_FRONTIER_PATIENCE, blacklisted=len(self.blacklist),
+                "no_frontier", reason="filtered",
+                tick=self.no_frontier_count,
+                patience=self.NO_FRONTIER_PATIENCE,
+                raw_clusters=len(clusters),
+                blacklisted=len(self.blacklist),
+                **diag,
             )
             if self.no_frontier_count >= self.NO_FRONTIER_PATIENCE:
                 self.get_logger().info(

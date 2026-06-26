@@ -4,8 +4,9 @@
 
 **Date:** 2026-06-25
 **Branch:** main
-**Status:** F10 exploration code refactored and fully tested. 117 tests pass.
-T06/T07 (live smoke test) still pending hardware runs.
+**Status:** F10 live testing in progress. 117 tests pass. Nav2 docking_server crash
+fixed. MIN_FRONTIER_DIST reduced 2.0→0.8m. Telemetry enriched with filter diagnostics.
+F11 (RViz markers) feature+task files written, not yet implemented.
 
 ## What exists
 
@@ -85,10 +86,28 @@ T06/T07 (live smoke test) still pending hardware runs.
 - I08: test files missing header
 - I09: `should_save()` 1-line method — verify moot before closing
 
+## Live test observations (2026-06-25 session E telemetry)
+
+Goals are being generated and sent — exploration loop working. But robot barely moved:
+
+- **Goals reached in 0.1s without movement**: goal ~0.5m away, robot stayed at origin.
+  Nav2 BT declared reached without driving. Possible cause: goal lands inside BT's
+  already-reached check, or goal in already-navigated space.
+- **Goals 11–22 aborted in 0.1–0.5s**: Nav2 planner rejecting almost instantly.
+  Frontier goals land near free/unknown boundary. Costmap inflation may mark those
+  cells lethal. `GOAL_INSET_M=0.3m` may not be enough.
+- **Robot xy barely changes through goal 22**: confirms robot not actually driving.
+
+**Hypotheses to investigate:**
+1. Increase `GOAL_INSET_M` from 0.3 → 0.5m to push goal further from frontier edge
+2. Check what Nav2 is logging for the aborted goals (planner failure vs controller)
+3. Costmap inflation_radius (currently 0.2m local, 0.5m global) may be too large for
+   narrow corridors — goals land in inflated zone
+
 ## Likely next steps
 
-1. TF10 T06 — resolve open hardware questions: does explore auto-stop cleanly?
-   speed cap tuning? narrow doorway behavior? (testing in progress)
+1. TF10 T06 — investigate Nav2 abort cause: increase GOAL_INSET_M to 0.5m, check
+   Nav2 planner logs for aborted goals, tune inflation_radius
 2. TF10 T07 — full live smoke test: `nav explore` from dome_control CLI, complete run
 3. I06 — underscore rename sweep in remaining files
 4. I07, I08, I09 — verify/close quick wins
@@ -111,7 +130,7 @@ All intents: `{"name": <intent>, "source": "cli", "slots": {...}}`
 - `max_velocity`: [0.15, 0.0, 1.0]
 - `deadband_velocity`: [0.05, 0.0, 0.1]
 - `MIN_FRONTIER_SIZE`: 10 cells (noise threshold; good range 5–20)
-- `MIN_FRONTIER_DIST`: 2.0 m (must exceed GOAL_INSET_M + xy_goal_tolerance)
+- `MIN_FRONTIER_DIST`: 0.8 m (must exceed GOAL_INSET_M + xy_goal_tolerance = 0.55 m)
 - `BLACKLIST_RADIUS`: 0.5 m (covers centroid drift across map updates)
 - `GOAL_INSET_M`: 0.3 m (nudge goal off frontier boundary)
 - `GOAL_TIMEOUT_S`: 25.0 s (break Nav2 BT recovery loops)
