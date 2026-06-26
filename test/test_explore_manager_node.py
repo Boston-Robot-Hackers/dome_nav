@@ -1,0 +1,320 @@
+#!/usr/bin/env python3
+# test_explore_manager_node.py — unit tests for ExploreManagerNode (mocked ROS2)
+# Author: Pito Salas and Claude Code
+# Open Source Under MIT license
+
+import json
+import math
+import time
+from unittest.mock import MagicMock, patch
+import pytest
+import rclpy
+from nav_msgs.msg import OccupancyGrid
+
+PATCH_FFC = "dome_nav.explore_manager_node.find_frontier_clusters"
+PATCH_PBF = "dome_nav.explore_manager_node.pick_best_frontier"
+from std_msgs.msg import String
+
+
+@pytest.fixture(scope="module")
+def ros():
+    rclpy.init()
+    yield
+    rclpy.shutdown()
+
+
+@pytest.fixture
+def node(ros):
+    from dome_nav.explore_manager_node import ExploreManagerNode
+    with patch("tf2_ros.TransformListener"), \
+         patch("rclpy.action.ActionClient"), \
+         patch("dome_nav.explore_manager_node.TelemetryWriter",
+               return_value=MagicMock()):
+        n = ExploreManagerNode()
+    yield n
+    n.destroy_node()
+
+
+def make_map():
+    return OccupancyGrid()
+
+
+def make_intent(name):
+    msg = String()
+    msg.data = json.dumps({"name": name, "source": "cli", "slots": {}})
+    return msg
+
+
+# --- on_intent state transitions ---
+
+def test_intent_start_from_idle(node):
+    node.state = "idle"
+    node.robot_xy_in_map = MagicMock(return_value=(1.0, 2.0))
+    node.on_intent(make_intent("exploration_start"))
+    assert node.state == "exploring"
+
+
+def test_intent_start_from_done(node):
+    node.state = "done"
+    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
+    node.on_intent(make_intent("exploration_start"))
+    assert node.state == "exploring"
+
+
+def test_intent_start_while_exploring_ignored(node):
+    node.state = "exploring"
+    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
+    node.goal_count = 3
+    node.on_intent(make_intent("exploration_start"))
+    assert node.state == "exploring"
+    assert node.goal_count == 3  # not reset
+
+
+def test_intent_stop_sets_idle(node):
+    node.state = "exploring"
+    node.goal_handle = None
+    node.on_intent(make_intent("exploration_stop"))
+    assert node.state == "idle"
+
+
+def test_intent_malformed_json_no_crash(node):
+    msg = String()
+    msg.data = "not json {"
+    node.on_intent(msg)  # must not raise
+
+
+def test_intent_unknown_name_no_state_change(node):
+    node.state = "idle"
+    node.on_intent(make_intent("navigation_go"))
+    assert node.state == "idle"
+
+
+def test_intent_start_resets_blacklist(node):
+    node.state = "idle"
+    node.blacklist = {(1.0, 2.0), (3.0, 4.0)}
+    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
+    node.on_intent(make_intent("exploration_start"))
+    assert node.blacklist == set()
+
+
+def test_intent_start_resets_counters(node):
+    node.state = "idle"
+    node.goal_count = 5
+    node.goals_reached = 3
+    node.goals_failed = 2
+    node.no_frontier_count = 4
+    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
+    node.on_intent(make_intent("exploration_start"))
+    assert node.goal_count == 0
+    assert node.goals_reached == 0
+    assert node.goals_failed == 0
+    assert node.no_frontier_count == 0
+
+
+# --- find_and_send_frontier ---
+
+def test_find_frontier_no_map_early_return(node):
+    node.state = "exploring"
+    node.latest_map = None
+    node.send_nav_goal = MagicMock()
+    node.find_and_send_frontier()
+    node.send_nav_goal.assert_not_called()
+
+
+def test_find_frontier_no_robot_xy_early_return(node):
+    node.state = "exploring"
+    node.latest_map = make_map()
+    node.robot_xy_in_map = MagicMock(return_value=None)
+    node.send_nav_goal = MagicMock()
+    node.find_and_send_frontier()
+    node.send_nav_goal.assert_not_called()
+
+
+def test_find_frontier_no_target_increments_count(node):
+    node.state = "exploring"
+    node.latest_map = make_map()
+    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
+    node.no_frontier_count = 0
+    node.send_nav_goal = MagicMock()
+    with patch(PATCH_FFC, return_value=[]):
+        with patch(PATCH_PBF, return_value=None):
+            node.find_and_send_frontier()
+    assert node.no_frontier_count == 1
+    node.send_nav_goal.assert_not_called()
+
+
+def test_find_frontier_patience_exhausted_sets_done(node):
+    node.state = "exploring"
+    node.latest_map = make_map()
+    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
+    node.no_frontier_count = node.NO_FRONTIER_PATIENCE - 1
+    node.send_nav_goal = MagicMock()
+    with patch(PATCH_FFC, return_value=[]):
+        with patch(PATCH_PBF, return_value=None):
+            node.find_and_send_frontier()
+    assert node.state == "done"
+    node.send_nav_goal.assert_not_called()
+
+
+def test_find_frontier_found_resets_patience_count(node):
+    node.state = "exploring"
+    node.latest_map = make_map()
+    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
+    node.no_frontier_count = 5
+    node.send_nav_goal = MagicMock()
+    with patch(PATCH_FFC, return_value=[[(0, 5)]]):
+        with patch(PATCH_PBF, return_value=(3.0, 0.0)):
+            node.find_and_send_frontier()
+    assert node.no_frontier_count == 0
+    node.send_nav_goal.assert_called_once()
+
+
+def test_find_frontier_nudges_goal_inward(node):
+    node.state = "exploring"
+    node.latest_map = make_map()
+    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
+    node.send_nav_goal = MagicMock()
+    # frontier at (4.0, 0.0), robot at origin → nudged = (3.7, 0.0)
+    with patch(PATCH_FFC, return_value=[[(0, 10)]]):
+        with patch(PATCH_PBF, return_value=(4.0, 0.0)):
+            node.find_and_send_frontier()
+    call_args = node.send_nav_goal.call_args
+    nudged_xy = call_args[0][0]
+    centroid = call_args[1]["centroid"]
+    assert abs(nudged_xy[0] - 3.7) < 1e-5
+    assert centroid == (4.0, 0.0)
+
+
+# --- check_goal_timeout ---
+
+def test_timeout_not_expired_does_nothing(node):
+    node.has_active_goal = True
+    node.goal_start_time = time.monotonic()
+    node.goal_handle = MagicMock()
+    node.current_goal_centroid = (1.0, 0.0)
+    node.current_goal_xy = (0.7, 0.0)
+    node.check_goal_timeout()
+    node.goal_handle.cancel_goal_async.assert_not_called()
+    assert node.has_active_goal is True
+
+
+def test_timeout_expired_cancels_goal(node):
+    node.has_active_goal = True
+    node.goal_start_time = 0.0  # ancient → always expired
+    mock_handle = MagicMock()
+    node.goal_handle = mock_handle
+    node.current_goal_centroid = (5.0, 5.0)
+    node.current_goal_xy = (4.7, 5.0)
+    node.check_goal_timeout()
+    mock_handle.cancel_goal_async.assert_called_once()
+
+
+def test_timeout_expired_blacklists_centroid(node):
+    node.has_active_goal = True
+    node.goal_start_time = 0.0
+    node.goal_handle = MagicMock()
+    node.current_goal_centroid = (5.0, 5.0)
+    node.current_goal_xy = (4.7, 5.0)
+    node.blacklist = set()
+    node.check_goal_timeout()
+    assert (5.0, 5.0) in node.blacklist
+
+
+def test_timeout_expired_clears_active_state(node):
+    node.has_active_goal = True
+    node.goal_start_time = 0.0
+    node.goal_handle = MagicMock()
+    node.current_goal_centroid = (1.0, 0.0)
+    node.current_goal_xy = (0.7, 0.0)
+    node.check_goal_timeout()
+    assert node.has_active_goal is False
+    assert node.goal_start_time is None
+    assert node.current_goal_centroid is None
+    assert node.current_goal_xy is None
+
+
+def test_timeout_no_start_time_does_nothing(node):
+    node.goal_start_time = None
+    node.goal_handle = MagicMock()
+    node.check_goal_timeout()
+    node.goal_handle.cancel_goal_async.assert_not_called()
+
+
+# --- publish_status JSON shape ---
+
+def test_publish_status_idle_json(node):
+    node.goals_reached = 0
+    node.goals_failed = 0
+    node.robot_xy_in_map = MagicMock(return_value=None)
+    published = []
+    node.status_pub.publish = lambda m: published.append(json.loads(m.data))
+    node.publish_status("idle")
+    assert published == [{"state": "idle", "reached": 0, "failed": 0}]
+
+
+def test_publish_status_done_carries_counters(node):
+    node.goals_reached = 5
+    node.goals_failed = 1
+    node.robot_xy_in_map = MagicMock(return_value=None)
+    published = []
+    node.status_pub.publish = lambda m: published.append(json.loads(m.data))
+    node.publish_status("done")
+    assert published[0] == {"state": "done", "reached": 5, "failed": 1}
+
+
+def test_publish_status_exploring_no_goal(node):
+    node.current_goal_xy = None
+    node.goals_reached = 1
+    node.goals_failed = 0
+    node.goal_count = 2
+    node.blacklist = set()
+    node.no_frontier_count = 3
+    node.robot_xy_in_map = MagicMock(return_value=(1.0, 2.0))
+    published = []
+    node.status_pub.publish = lambda m: published.append(json.loads(m.data))
+    node.publish_status("exploring")
+    d = published[0]
+    assert d["state"] == "exploring"
+    assert d["reached"] == 1
+    assert d["goal_num"] == 2
+    assert d["no_frontier_ticks"] == 3
+    assert "goal_xy" not in d
+    assert "dist_m" not in d
+
+
+def test_publish_status_exploring_with_goal_fields(node):
+    node.current_goal_xy = (3.0, 4.0)
+    node.goals_reached = 2
+    node.goals_failed = 0
+    node.goal_count = 3
+    node.goal_start_time = time.monotonic() - 5.0
+    node.blacklist = {(1.0, 0.0), (2.0, 0.0)}
+    node.no_frontier_count = 0
+    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
+    published = []
+    node.status_pub.publish = lambda m: published.append(json.loads(m.data))
+    node.publish_status("exploring")
+    d = published[0]
+    assert d["state"] == "exploring"
+    assert d["reached"] == 2
+    assert d["failed"] == 0
+    assert d["goal_num"] == 3
+    assert d["goal_xy"] == [3.0, 4.0]
+    assert d["blacklisted"] == 2
+    assert d["no_frontier_ticks"] == 0
+    assert abs(d["dist_m"] - round(math.sqrt(9 + 16), 2)) < 1e-6
+
+
+def test_publish_status_dist_correct(node):
+    node.current_goal_xy = (3.0, 0.0)
+    node.goals_reached = 0
+    node.goals_failed = 0
+    node.goal_count = 1
+    node.goal_start_time = time.monotonic()
+    node.blacklist = set()
+    node.no_frontier_count = 0
+    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
+    published = []
+    node.status_pub.publish = lambda m: published.append(json.loads(m.data))
+    node.publish_status("exploring")
+    assert published[0]["dist_m"] == 3.0

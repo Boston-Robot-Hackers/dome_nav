@@ -21,6 +21,7 @@ from dome_nav.explore_telemetry import TelemetryWriter
 from dome_nav.frontier_explorer import (
     MapInfo,
     find_frontier_clusters,
+    nudge_toward_robot,
     pick_best_frontier,
 )
 
@@ -30,15 +31,42 @@ GOAL_STATUS_NAMES = {4: "succeeded", 5: "canceled", 6: "aborted"}
 
 
 class ExploreManagerNode(Node):
+    # Clusters smaller than this are noise (wall edges, single-pixel artifacts).
+    # Too low → robot chases tiny artifacts. Too high → misses tight doorway gaps.
+    # Good range: 5–20 cells at 0.05 m/cell resolution.
     MIN_FRONTIER_SIZE = 10
+
+    # Frontier cell is skipped if within this distance of any blacklisted point.
+    # Must be large enough to cover centroid drift across map updates (~0.1–0.2 m)
+    # but small enough not to block adjacent valid cells. 0.5 m works well in practice.
     BLACKLIST_RADIUS = 0.5
-    # nudged goal = frontier_dist - GOAL_INSET_M; must exceed xy_goal_tolerance (0.5m)
+
+    # Robot must be at least this far from a frontier cell for it to be a valid goal.
+    # Prevents goals that Nav2 considers already-reached (xy_goal_tolerance = 0.5 m).
+    # Must satisfy: MIN_FRONTIER_DIST > GOAL_INSET_M + xy_goal_tolerance.
+    # At current values: 2.0 > 0.3 + 0.5 = 0.8 ✓. Raising this skips nearby frontiers.
     MIN_FRONTIER_DIST = 2.0
-    # pull goal off frontier boundary to avoid Nav2 worldToMap boundary errors
+
+    # Nudge the frontier goal this far toward the robot before sending to Nav2.
+    # Frontier cells sit at the known/unknown boundary — placing the goal exactly
+    # there causes Nav2 worldToMap out-of-bounds errors. 0.3 m keeps the goal
+    # comfortably inside the costmap. Must be < MIN_FRONTIER_DIST − xy_goal_tolerance.
     GOAL_INSET_M = 0.3
+
+    # Timer frequency for the exploration loop. 2 Hz is responsive without
+    # flooding the action server. Lower values (1 Hz) add latency between goals;
+    # higher values (5 Hz) are unnecessary since Nav2 goals are async.
     EXPLORE_HZ = 2.0
+
+    # How many consecutive ticks with no valid frontier before declaring done.
+    # At 2 Hz this is 4 s of patience. Too low → quits while map is still updating.
+    # Too high → long wait at end of a complete map. 8 ticks (4 s) works well.
     NO_FRONTIER_PATIENCE = 8
-    # cancel goal to avoid blocking during Nav2 BT recovery loops
+
+    # Cancel active goal after this many seconds to break Nav2 BT recovery loops.
+    # Nav2's default BT runs spin + retry before aborting, which can take 60+ s.
+    # 25 s is enough for Nav2 to reach most goals; shorter values cause false timeouts
+    # on long traversals. Cancelled goal is blacklisted so the same spot is not retried.
     GOAL_TIMEOUT_S = 25.0
 
     def __init__(self):
@@ -61,19 +89,9 @@ class ExploreManagerNode(Node):
         self.map_name: str = self.get_parameter("map_name").value
         self.telemetry = TelemetryWriter(self.map_name, self.get_logger().info)
 
-        self.state = "idle"
         self.latest_map: OccupancyGrid | None = None
-        self.active_goal = False
-        self.goal_handle = None
-        self.blacklist: set[XY] = set()
-        self.start_xy: XY | None = None
-        self.no_frontier_count = 0
-        self.goal_start_time: float | None = None
-        self.current_goal_centroid: XY | None = None
-        self.current_goal_xy: XY | None = None
-        self.goal_count = 0
-        self.goals_reached = 0
-        self.goals_failed = 0
+        self.reset_session()
+        self.clear_active_goal()
         self.get_logger().info("ExploreManagerNode ready.")
 
     def on_map(self, msg: OccupancyGrid):
@@ -92,11 +110,7 @@ class ExploreManagerNode(Node):
             return
         name = intent.get("name", "")
         if name == "exploration_start" and self.state in ("idle", "done"):
-            self.blacklist.clear()
-            self.no_frontier_count = 0
-            self.goal_count = 0
-            self.goals_reached = 0
-            self.goals_failed = 0
+            self.reset_session()
             self.start_xy = self.robot_xy_in_map()
             self.state = "exploring"
             self.publish_status("exploring")
@@ -149,13 +163,9 @@ class ExploreManagerNode(Node):
         )
         if self.goal_handle is not None:
             self.goal_handle.cancel_goal_async()
-            self.goal_handle = None
         if self.current_goal_centroid is not None:
             self.blacklist.add(self.current_goal_centroid)
-        self.active_goal = False
-        self.goal_start_time = None
-        self.current_goal_centroid = None
-        self.current_goal_xy = None
+        self.clear_active_goal()
 
     def find_and_send_frontier(self):
         # Core exploration step: scan latest map for frontier clusters, pick the
@@ -192,27 +202,31 @@ class ExploreManagerNode(Node):
                 self.get_logger().info(
                     "Frontier patience exhausted — exploration done."
                 )
-                self.telemetry.write(
-                    "session_end", reason="done", goals_sent=self.goal_count,
-                    reached=self.goals_reached, failed=self.goals_failed,
-                )
-                self.state = "done"
-                self.publish_status("done")
+                self.stop_exploring("done")
             return
         self.no_frontier_count = 0
-        self.send_nav_goal(self.nudge_toward_robot(target, robot_xy), centroid=target)
+        goal_xy = nudge_toward_robot(target, robot_xy, self.GOAL_INSET_M)
+        self.send_nav_goal(goal_xy, centroid=target)
 
-    def nudge_toward_robot(self, xy: XY, robot_xy: XY) -> XY:
-        # Pulls frontier centroid GOAL_INSET_M toward robot so the nav goal lands
-        # inside the costmap rather than on the unknown-cell boundary (which causes
-        # worldToMap out-of-bounds errors in Nav2).
-        dx = robot_xy[0] - xy[0]
-        dy = robot_xy[1] - xy[1]
-        dist = math.sqrt(dx * dx + dy * dy)
-        if dist < self.GOAL_INSET_M:
-            return xy
-        scale = self.GOAL_INSET_M / dist
-        return (xy[0] + dx * scale, xy[1] + dy * scale)
+    def reset_session(self):
+        # Resets per-session counters and blacklist.
+        # Called on __init__ and exploration_start.
+        self.state = "idle"
+        self.blacklist: set[XY] = set()
+        self.start_xy: XY | None = None
+        self.no_frontier_count = 0
+        self.goal_count = 0
+        self.goals_reached = 0
+        self.goals_failed = 0
+
+    def clear_active_goal(self):
+        # Resets all goal-tracking fields after a goal completes,
+        # times out, or is cancelled.
+        self.goal_handle = None
+        self.has_active_goal = False
+        self.goal_start_time = None
+        self.current_goal_centroid = None
+        self.current_goal_xy = None
 
     def send_nav_goal(self, xy: XY, centroid: XY):
         # Sends NavigateToPose goal (nudged xy) to Nav2. Centroid is stored
@@ -228,7 +242,7 @@ class ExploreManagerNode(Node):
         goal.pose.pose.position.x = xy[0]
         goal.pose.pose.position.y = xy[1]
         goal.pose.pose.orientation.w = 1.0
-        self.active_goal = True
+        self.has_active_goal = True
         self.goal_start_time = time.monotonic()
         self.current_goal_centroid = centroid
         self.current_goal_xy = xy
@@ -264,7 +278,7 @@ class ExploreManagerNode(Node):
                 f"Goal rejected at ({xy[0]:.2f}, {xy[1]:.2f}) — blacklisting centroid."
             )
             self.blacklist.add(centroid)
-            self.active_goal = False
+            self.has_active_goal = False
             return
         self.goal_handle = handle
         result_future = handle.get_result_async()
@@ -275,15 +289,11 @@ class ExploreManagerNode(Node):
     def on_goal_result(self, future, xy: XY, centroid: XY):
         # Called when Nav2 finishes (success or failure). Always blacklists centroid
         # to prevent re-visiting the same frontier on the next tick.
-        self.goal_handle = None
-        self.active_goal = False
         elapsed = (
             round(time.monotonic() - self.goal_start_time, 1)
             if self.goal_start_time else 0.0
         )
-        self.goal_start_time = None
-        self.current_goal_centroid = None
-        self.current_goal_xy = None
+        self.clear_active_goal()
         result = future.result()
         robot_xy = self.robot_xy_in_map()
         if result.status == GoalStatus.STATUS_SUCCEEDED:
@@ -312,11 +322,11 @@ class ExploreManagerNode(Node):
 
     def stop_exploring(self, new_state: str):
         # Cancels any active Nav2 goal and transitions state. Called by
-        # exploration_stop intent (→ "idle") or patience exhausted (→ "done").
+        # exploration_stop intent (→ "idle") and patience exhaustion (→ "done").
         if self.goal_handle is not None:
             self.goal_handle.cancel_goal_async()
             self.goal_handle = None
-        self.active_goal = False
+        self.has_active_goal = False
         self.state = new_state
         self.publish_status(new_state)
         self.get_logger().info(f"Exploration stopped → {new_state}.")
@@ -343,20 +353,25 @@ class ExploreManagerNode(Node):
     def publish_status(self, status: str):
         # Publishes JSON to /explore/status at 2Hz.
         robot_xy = self.robot_xy_in_map()
-        data: dict = {"state": status}
-        has_goal = self.current_goal_xy is not None and robot_xy is not None
-        is_active = status == "exploring" and has_goal
-        if is_active:
-            gx, gy = self.current_goal_xy
-            dist = math.sqrt((gx - robot_xy[0]) ** 2 + (gy - robot_xy[1]) ** 2)
+        data: dict = {
+            "state": status,
+            "reached": self.goals_reached,
+            "failed": self.goals_failed,
+        }
+        if status == "exploring":
             data["goal_num"] = self.goal_count
-            data["goal_xy"] = [round(gx, 2), round(gy, 2)]
-            data["dist_m"] = round(dist, 2)
-            data["elapsed_s"] = (
-                round(time.monotonic() - self.goal_start_time, 1)
-                if self.goal_start_time else None
-            )
             data["blacklisted"] = len(self.blacklist)
+            data["no_frontier_ticks"] = self.no_frontier_count
+            has_goal = self.current_goal_xy is not None and robot_xy is not None
+            if has_goal:
+                gx, gy = self.current_goal_xy
+                dist = math.sqrt((gx - robot_xy[0]) ** 2 + (gy - robot_xy[1]) ** 2)
+                data["goal_xy"] = [round(gx, 2), round(gy, 2)]
+                data["dist_m"] = round(dist, 2)
+                data["elapsed_s"] = (
+                    round(time.monotonic() - self.goal_start_time, 1)
+                    if self.goal_start_time else None
+                )
         msg = String()
         msg.data = json.dumps(data)
         self.status_pub.publish(msg)

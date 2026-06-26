@@ -113,7 +113,11 @@ def pick_best_frontier(
         goal_dist = float("inf")
         for cell_idx in cluster:
             wx, wy = cell_to_world(cell_idx, info)
-            if any(math.sqrt((wx - bx) ** 2 + (wy - by) ** 2) < blacklist_radius for bx, by in bl):
+            too_close = any(
+                math.sqrt((wx - bx) ** 2 + (wy - by) ** 2) < blacklist_radius
+                for bx, by in bl
+            )
+            if too_close:
                 continue
             d = math.sqrt((wx - rx) ** 2 + (wy - ry) ** 2)
             if min_dist > 0.0 and d < min_dist:
@@ -128,3 +132,17 @@ def pick_best_frontier(
             best = goal
 
     return best
+
+
+def nudge_toward_robot(
+    xy: tuple[float, float], robot_xy: tuple[float, float], inset_m: float
+) -> tuple[float, float]:
+    # Pull xy toward robot_xy by inset_m. Keeps the nav goal inside the costmap
+    # boundary rather than on the unknown-cell edge (avoids Nav2 worldToMap errors).
+    dx = robot_xy[0] - xy[0]
+    dy = robot_xy[1] - xy[1]
+    dist = math.sqrt(dx * dx + dy * dy)
+    if dist < inset_m:
+        return xy
+    scale = inset_m / dist
+    return (xy[0] + dx * scale, xy[1] + dy * scale)

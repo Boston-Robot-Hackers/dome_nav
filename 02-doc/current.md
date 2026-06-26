@@ -4,9 +4,8 @@
 
 **Date:** 2026-06-25
 **Branch:** main
-**Status:** F10 live hardware testing in progress. Ring-cluster bug fixed,
-telemetry added, goal timeout working. 85 dome_nav tests pass.
-T06/T07 (live smoke test) still pending full completion.
+**Status:** F10 exploration code refactored and fully tested. 117 tests pass.
+T06/T07 (live smoke test) still pending hardware runs.
 
 ## What exists
 
@@ -14,10 +13,12 @@ T06/T07 (live smoke test) still pending full completion.
   label from `slots.label`), nearest-target, localization score, status strings
 - `dome_nav/frontier_explorer.py` — pure Python frontier detection: OccupancyGrid scan,
   8-connectivity clustering, blacklist-aware nearest-cell selection (NOT centroid),
-  max_radius and min_dist filters
+  max_radius and min_dist filters, `nudge_toward_robot` geometry helper
 - `dome_nav/explore_manager_node.py` — ROS2 node: `exploration_start`/`exploration_stop`
   intents → Nav2 NavigateToPose goals, blacklisting, 2 Hz timer loop, `/explore/status`
-  (JSON), goal timeout (25s), telemetry via TelemetryWriter
+  (JSON), goal timeout (25s), telemetry via TelemetryWriter. Key methods:
+  `reset_session()`, `clear_active_goal()`, `find_and_send_frontier()`,
+  `check_goal_timeout()`, `stop_exploring()`, `publish_status()`
 - `dome_nav/explore_telemetry.py` — JSONL session logger: one file per session in
   `~/.dome/telemetry/<map_name>_<ts>.jsonl`
 - `dome_nav/slam_manager_node.py` — **LifecycleNode**: watches `/map`, saves pose graph
@@ -34,53 +35,46 @@ T06/T07 (live smoke test) still pending full completion.
 - `tools/nav_intent_check.py` — diagnostic: publishes target + intent, verifies nav pipeline
 - Tests: `test_nav_manager_pure.py` (22), `test_utils_pure.py` (5),
   `test_nav_manager.py` (18, ROS), `test_slam_manager.py` (11, ROS lifecycle),
-  `test_frontier_explorer.py` (23, pure), `test_map_validation.py` (4, manual/live only)
+  `test_frontier_explorer.py` (31, pure), `test_explore_manager_node.py` (30, ROS mock),
+  `test_map_validation.py` (4, manual/live only)
 
 ## Test status
 
-**85 passed, 4 deselected** (manual) via
+**117 passed, 4 deselected** (manual) via
 `python3 -m pytest src/dome_nav/test/ -m "not manual"`.
 
 ## This session's work
 
-### Live hardware testing of F10 (Mode E exploration)
+### Refactoring and tests for F10 explore logic
 
-Diagnosed and fixed multiple issues during live runs:
+1. **New test file** `test_explore_manager_node.py` (30 tests) covering:
+   - `nudge_toward_robot` (moved to frontier_explorer.py — 4 tests there)
+   - `on_intent` state machine (start/stop/reset/malformed/unknown)
+   - `find_and_send_frontier` (no map, no TF, no frontier, patience→done, nudge applied)
+   - `check_goal_timeout` (not expired, expired→cancel+blacklist+clear)
+   - `publish_status` JSON shape (idle, done, exploring no goal, exploring with goal)
 
-1. **No frontiers found immediately** — slam_toolbox loaded existing .posegraph file.
-   Fix: use a fresh map_name each run.
+2. **Additional frontier_explorer tests** (4 new, total 31):
+   - `test_cell_to_world_nonzero_origin`
+   - `test_diagonal_frontier_cells_form_one_cluster` (2D 8-connectivity)
+   - `test_pick_returns_nearest_cell_not_centroid` (key invariant)
+   - `test_pick_all_cells_under_min_dist_skips_cluster`
 
-2. **Ring-cluster bug** — large frontier ring surrounding robot has centroid ≈ robot
-   position → filtered by MIN_FRONTIER_DIST. Fix: `pick_best_frontier` now returns
-   nearest cell in cluster (not centroid). Blacklist checked per-cell, not per-cluster.
-   Regression test added: `test_pick_ring_cluster_centroid_near_robot`.
+3. **Code review fixes** in `explore_manager_node.py`:
+   - `active_goal` → `has_active_goal` (boolean naming SHOULD)
+   - `clear_active_goal()` extracted (DRY: was duplicated in check_goal_timeout + on_goal_result)
+   - `stop_exploring("done")` called from patience path (DRY: removed 4 duplicate lines)
+   - `reset_session()` extracted (DRY: was duplicated between __init__ and on_intent)
+   - `nudge_toward_robot` moved to `frontier_explorer.py` as standalone function
+   - `publish_status` enriched: always includes `reached`, `failed`; exploring adds
+     `goal_num`, `blacklisted`, `no_frontier_ticks`
+   - All lines brought to ≤ 88 chars
+   - Constants annotated with range guidance and invariants
 
-3. **Goals too close** — GOAL_INSET_M was too large (1.0m), placing goals inside
-   Nav2's xy_goal_tolerance (0.5m). Fixed: MIN_FRONTIER_DIST=2.0m, GOAL_INSET_M=0.3m.
-   Nudged goal lands ~1.7m from robot.
-
-4. **Long pauses between goals** — Nav2 BT running full recovery cycle (spin, retry)
-   before reporting failure. Fix: 25s goal timeout in explore_manager_node. Cancels
-   goal, blacklists centroid, picks next frontier immediately.
-
-5. **`/explore/status` not publishing** — was only publishing on state transitions.
-   Fix: publish at 2Hz in explore_tick. Now JSON with state, goal_num, goal_xy,
-   dist_m, elapsed_s, blacklisted count.
-
-6. **Telemetry** — `TelemetryWriter` extracted to `explore_telemetry.py`. Session
-   file at `~/.dome/telemetry/<map_name>_<ts>.jsonl`. Events: session_start,
-   goal_sent, goal_result (reached/failed/canceled/timeout), no_frontier, session_end.
-
-7. **Style guide review** — leading underscores removed, debug cluster log removed,
-   GOAL_STATUS_NAMES extracted as module constant, `check_goal_timeout` extracted,
-   all lines ≤ 88 chars, telemetry in separate module.
-
-8. **Method comments** — all ExploreManagerNode methods have comments explaining
-   when they are called and why.
-
-9. **Literate docs** — `07-explore_manager_node.md` updated (TD diagrams, colors,
-   state machine updated). `06-frontier_explorer.md` updated (ring-cluster fix
-   documented). `X05-explore_telemetry.md` created.
+4. **Literate docs updated**:
+   - `07-explore_manager_node.md` — blacklist section rewritten (triggers, centroid vs
+     nudged, per-cell check, ring-cluster, reset), status JSON format updated
+   - `06-frontier_explorer.md` — nudge_toward_robot documented
 
 ## Open issues (05-issues/open/)
 
@@ -116,11 +110,12 @@ All intents: `{"name": <intent>, "source": "cli", "slots": {...}}`
 - `desired_linear_vel`: 0.12 m/s
 - `max_velocity`: [0.15, 0.0, 1.0]
 - `deadband_velocity`: [0.05, 0.0, 0.1]
-- `MIN_FRONTIER_SIZE`: 10 cells
+- `MIN_FRONTIER_SIZE`: 10 cells (noise threshold; good range 5–20)
 - `MIN_FRONTIER_DIST`: 2.0 m (must exceed GOAL_INSET_M + xy_goal_tolerance)
-- `BLACKLIST_RADIUS`: 0.5 m
+- `BLACKLIST_RADIUS`: 0.5 m (covers centroid drift across map updates)
 - `GOAL_INSET_M`: 0.3 m (nudge goal off frontier boundary)
-- `GOAL_TIMEOUT_S`: 25.0 s
+- `GOAL_TIMEOUT_S`: 25.0 s (break Nav2 BT recovery loops)
+- `NO_FRONTIER_PATIENCE`: 8 ticks = 4 s at 2 Hz
 - `max_explore_radius`: 0.0 = unlimited (pass via `--max_explore_radius <m>`)
 
 ## Launch commands
@@ -161,10 +156,15 @@ tail -f ~/.dome/telemetry/*.jsonl
 ## /explore/status JSON format
 
 ```json
-{"state": "exploring", "goal_num": 3, "goal_xy": [1.23, 4.56], "dist_m": 1.87, "elapsed_s": 4.2, "blacklisted": 2}
+{"state": "exploring", "reached": 3, "failed": 1, "goal_num": 5,
+ "blacklisted": 2, "no_frontier_ticks": 0,
+ "goal_xy": [1.23, 4.56], "dist_m": 1.87, "elapsed_s": 4.2}
 ```
 
-Idle/done: `{"state": "idle"}` or `{"state": "done"}`
+Idle/done: `{"state": "idle", "reached": 0, "failed": 0}` or
+`{"state": "done", "reached": 5, "failed": 1}`
+
+`goal_xy`, `dist_m`, `elapsed_s` omitted when no active goal or TF unavailable.
 
 ## AMCL notes (unchanged)
 

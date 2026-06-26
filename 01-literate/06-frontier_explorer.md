@@ -140,6 +140,27 @@ frontier boundary as cells get blacklisted one by one.
 result exceeds Nav2's `xy_goal_tolerance`, otherwise the goal is declared
 reached without movement.
 
+## nudge_toward_robot
+
+Pulls a frontier coordinate toward the robot by `inset_m` along the
+robot→frontier vector. Keeps the Nav2 goal inside the costmap boundary rather
+than on the unknown-cell edge (which causes `worldToMap` out-of-bounds errors).
+
+```python
+def nudge_toward_robot(xy, robot_xy, inset_m):
+    dx = robot_xy[0] - xy[0]
+    dy = robot_xy[1] - xy[1]
+    dist = math.sqrt(dx*dx + dy*dy)
+    if dist < inset_m:
+        return xy
+    scale = inset_m / dist
+    return (xy[0] + dx*scale, xy[1] + dy*scale)
+```
+
+The guard `dist < inset_m` returns the point unchanged if it is already
+closer than `inset_m` — avoids division by zero and prevents the nudge
+from overshooting past the robot.
+
 ## Observations
 
 - Performance: linear scan is O(W×H) per tick plus O(C×B) for blacklist checks
@@ -150,6 +171,7 @@ reached without movement.
 - Frontier ranking uses pure nearest-cell distance. m-explore weights by
   `size × gain - distance × scale`, steering toward large unexplored regions.
   A size-weighted score could improve exploration efficiency for multi-room maps.
-- The blacklist stores goal positions (nudged coordinates from explore_manager),
-  not raw cell positions. A blacklisted position covers a 0.5 m radius, so
-  nearby cells are also excluded even if not exactly matching.
+- The blacklist stores frontier centroids (original `pick_best_frontier` return
+  values), not nudged goal coordinates. This keeps the per-cell comparison in
+  `pick_best_frontier` exact — the same centroid that was blacklisted is the
+  same value compared on the next tick.

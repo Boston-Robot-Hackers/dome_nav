@@ -94,7 +94,7 @@ Rather than a recursive `makePlan()` call (m-explore's approach), we use a
         self.find_and_send_frontier()
 ```
 
-`active_goal` is a boolean set True when a goal is sent and False when the
+`has_active_goal` is a boolean set True when a goal is sent and False when the
 result arrives. This prevents double-sending while a goal is in flight.
 
 ## Frontier Goal Selection and Inset
@@ -121,18 +121,52 @@ but defensive here too).
 
 ## Blacklisting
 
-Every completed goal — success or failure — is added to the blacklist:
+The blacklist is a `set[tuple[float, float]]` of world-coordinate points.
+`pick_best_frontier` skips any frontier cell within `BLACKLIST_RADIUS` (0.5 m)
+of a blacklisted point. Without it the robot re-picks the same unreachable
+frontier every tick and gets stuck indefinitely.
+
+**Three events add to the blacklist**, all using the frontier centroid (the
+original `pick_best_frontier` return value, not the nudged nav goal):
+
+| Event | Code |
+|---|---|
+| Goal completed (success or failure) | `on_goal_result` → `self.blacklist.add(centroid)` |
+| Goal timed out (25 s) | `check_goal_timeout` → `self.blacklist.add(self.current_goal_centroid)` |
+| Goal rejected by Nav2 action server | `on_goal_accepted` → `self.blacklist.add(centroid)` |
+
+Blacklisting on **success** prevents re-visiting a frontier the map hasn't
+yet updated to mark as explored — without it the same cell reappears on the
+next tick and Nav2 declares it already reached (within `xy_goal_tolerance`).
+
+**Centroid, not nudged goal, is stored.** `pick_best_frontier` returns the
+nearest frontier cell; that exact coordinate is what gets blacklisted and
+what the per-cell distance check in `pick_best_frontier` compares against.
+Using the nudged coordinate instead would introduce drift and require a
+larger radius to compensate.
+
+**Check is per-cell, not per-cluster.** Inside `pick_best_frontier`:
 
 ```python
-    def on_goal_result(self, future, xy):
-        ...
-        self.blacklist.add(xy)
+for cell_idx in cluster:
+    wx, wy = cell_to_world(cell_idx, info)
+    if any(math.sqrt((wx-bx)**2 + (wy-by)**2) < blacklist_radius for bx, by in bl):
+        continue
+    ...
 ```
 
-Blacklisting on success prevents revisiting a frontier that the map hasn't
-yet updated to mark as explored. Without this, the same frontier reappears
-on the next tick and the robot drives there again without moving (because
-Nav2's `xy_goal_tolerance` declares it already reached).
+Only cells near a blacklisted point are skipped. The rest of the cluster
+remains valid. As goals are sent and blacklisted one by one, the robot
+progressively works around the frontier boundary.
+
+**Ring-cluster case.** A large frontier ring surrounding the robot has a
+centroid ≈ robot position, filtered by `MIN_FRONTIER_DIST`. The code picks
+the nearest individual cell instead (beyond `MIN_FRONTIER_DIST`). After that
+goal completes, that cell's coordinates are blacklisted. The next tick picks
+the next-nearest unblacklisted cell in the ring, and so on.
+
+**Blacklist resets** only on `exploration_start`. It persists for the entire
+session so previously-failed frontiers are not retried.
 
 ## Max Radius Constraint
 
@@ -140,14 +174,33 @@ Nav2's `xy_goal_tolerance` declares it already reached).
 to a circle around the position captured at `exploration_start`. Useful for
 mapping a single room. Passed through to `pick_best_frontier`.
 
+## /explore/status JSON
+
+Published at 2 Hz. Always includes `state`, `reached`, `failed`. Additional
+fields when exploring:
+
+```json
+{
+  "state": "exploring",
+  "reached": 3,
+  "failed": 1,
+  "goal_num": 5,
+  "blacklisted": 2,
+  "no_frontier_ticks": 0,
+  "goal_xy": [1.23, 4.56],
+  "dist_m": 1.87,
+  "elapsed_s": 4.2
+}
+```
+
+`goal_xy`, `dist_m`, and `elapsed_s` are omitted when no goal is currently
+active (between goals or when TF is unavailable).
+
 ## Observations
 
-- No progress timeout: if Nav2 navigates slowly but never aborts, the node
-  waits indefinitely. m-explore blacklists a goal after 30 s of no progress.
-  Adding a watchdog timer would close this gap.
-- Blacklist stores nudged goal coordinates, not raw centroids. If the same
-  frontier is picked again at a slightly different centroid (map updated),
-  the nudged coordinate may differ and escape the blacklist. The 0.5 m
-  `BLACKLIST_RADIUS` covers most of this drift.
-- `/explore/status` publishes String (idle/exploring/done). A structured
-  message (frontier count, blacklist size, coverage %) would help monitoring.
+- Goal timeout (25 s) prevents Nav2 BT recovery loops from blocking the
+  exploration tick indefinitely. The cancelled goal's centroid is blacklisted
+  so the same frontier is not immediately retried.
+- Blacklist grows monotonically within a session. In a large space with many
+  unreachable pockets the set could grow large, but the per-cell O(B) scan
+  is fast in practice (B stays small relative to cluster size).
