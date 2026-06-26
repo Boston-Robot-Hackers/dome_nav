@@ -1,6 +1,6 @@
 ---
-version: "1.2"
-generated: "2026-06-25"
+version: "1.3"
+generated: "2026-06-26"
 ---
 
 # ExploreManagerNode — Autonomous Frontier Exploration
@@ -188,6 +188,24 @@ fields when exploring:
 
 `goal_xy`, `dist_m`, and `elapsed_s` are omitted when no goal is currently
 active (between goals or when TF is unavailable).
+
+## /explore/markers MarkerArray
+
+Published at 2 Hz alongside `/explore/status`. Three namespaces:
+
+| namespace | Marker type | color | content |
+|---|---|---|---|
+| `frontiers` (id=0) | POINTS | yellow | all cells from clusters with `len >= MIN_FRONTIER_SIZE` |
+| `blacklist` (id=1) | POINTS | red | all `(x, y)` in `self.blacklist` |
+| `goal` (id=2) | SPHERE | cyan | `current_goal_xy`; action=DELETE when no active goal |
+
+`frontiers` and `goal` use `action=DELETE` when `state != "exploring"` to clear
+stale markers from RViz2. `blacklist` always publishes (blacklist persists for
+the full session and remains useful after exploration stops).
+
+`self.latest_clusters` and `self.latest_map_info` are stored each tick in
+`find_and_send_frontier` so `publish_markers()` can read them without
+recomputing the frontier scan.
 
 ## Observations
 

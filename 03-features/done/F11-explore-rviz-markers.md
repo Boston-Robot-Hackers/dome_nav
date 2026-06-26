@@ -1,10 +1,10 @@
 # F11 — RViz2 Exploration Markers
 
 **Priority**: Medium
-**Done:** no
+**Done:** yes (2026-06-26)
 **Tasks File Created:** yes
 **Tests Written:** no
-**Test Passing:** no
+**Test Passing:** N/A — RViz2 visual, verified live
 **Description**: Publish `visualization_msgs/MarkerArray` on `/explore/markers` so RViz2
 can display exploration state in real time: frontier cells, blacklisted positions, and
 the current nav goal. Aids tuning and live debugging without reading raw telemetry.

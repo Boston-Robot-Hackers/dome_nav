@@ -12,8 +12,9 @@ from rclpy.node import Node
 from rclpy.action import ActionClient
 from action_msgs.msg import GoalStatus
 from std_msgs.msg import String
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import Point, PoseStamped
 from nav_msgs.msg import OccupancyGrid
+from visualization_msgs.msg import Marker, MarkerArray
 from nav2_msgs.action import NavigateToPose
 import tf2_ros
 
@@ -21,6 +22,7 @@ from dome_nav.explore_telemetry import TelemetryWriter
 from dome_nav.frontier_explorer import (
     MapInfo,
     _frontier_diag,
+    cell_to_world,
     find_frontier_clusters,
     nudge_toward_robot,
     pick_best_frontier,
@@ -43,7 +45,7 @@ class ExploreManagerNode(Node):
     BLACKLIST_RADIUS = 0.5
 
     # Robot must be at least this far from a frontier cell for it to be a valid goal.
-    # Prevents goals Nav2 considers already-reached (xy_goal_tolerance = 0.25 m in patch).
+    # Prevents goals Nav2 deems already-reached (xy_goal_tolerance=0.25 m in patch).
     # Must satisfy: MIN_FRONTIER_DIST > GOAL_INSET_M + xy_goal_tolerance.
     # At current values: 0.8 > 0.3 + 0.25 = 0.55 ✓. Raising this skips nearby frontiers.
     MIN_FRONTIER_DIST = 0.8
@@ -74,6 +76,7 @@ class ExploreManagerNode(Node):
         super().__init__("explore_manager_node")
         self.nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
         self.status_pub = self.create_publisher(String, "/explore/status", 10)
+        self.marker_pub = self.create_publisher(MarkerArray, "/explore/markers", 10)
         self.intent_sub = self.create_subscription(
             String, "/intent", self.on_intent, 10
         )
@@ -91,6 +94,8 @@ class ExploreManagerNode(Node):
         self.telemetry = TelemetryWriter(self.map_name, self.get_logger().info)
 
         self.latest_map: OccupancyGrid | None = None
+        self.latest_clusters: list[list[int]] = []
+        self.latest_map_info: MapInfo | None = None
         self.reset_session()
         self.clear_active_goal()
         self.get_logger().info("ExploreManagerNode ready.")
@@ -137,6 +142,7 @@ class ExploreManagerNode(Node):
         # Timer callback at EXPLORE_HZ. Skips if not exploring or a goal is active.
         # One goal at a time: next frontier only sent after previous goal completes.
         self.publish_status(self.state)
+        self.publish_markers()
         if self.state != "exploring":
             return
         if self.has_active_goal:
@@ -186,6 +192,8 @@ class ExploreManagerNode(Node):
             origin_x=m.info.origin.position.x, origin_y=m.info.origin.position.y,
         )
         clusters = find_frontier_clusters(list(m.data), info)
+        self.latest_clusters = clusters
+        self.latest_map_info = info
         target = pick_best_frontier(
             clusters, info, robot_xy,
             self.MIN_FRONTIER_SIZE, self.blacklist, self.BLACKLIST_RADIUS,
@@ -360,6 +368,79 @@ class ExploreManagerNode(Node):
             tf2_ros.ConnectivityException,
         ):
             return None
+
+    def publish_markers(self):
+        now = self.get_clock().now().to_msg()
+        markers = MarkerArray()
+        is_exploring = self.state == "exploring"
+
+        frontier_marker = Marker()
+        frontier_marker.header.frame_id = "map"
+        frontier_marker.header.stamp = now
+        frontier_marker.ns = "frontiers"
+        frontier_marker.id = 0
+        frontier_marker.type = Marker.POINTS
+        frontier_marker.action = Marker.ADD if is_exploring else Marker.DELETE
+        frontier_marker.scale.x = 0.05
+        frontier_marker.scale.y = 0.05
+        frontier_marker.color.r = 1.0
+        frontier_marker.color.g = 1.0
+        frontier_marker.color.b = 0.0
+        frontier_marker.color.a = 1.0
+        if is_exploring and self.latest_map_info is not None:
+            for cluster in self.latest_clusters:
+                if len(cluster) >= self.MIN_FRONTIER_SIZE:
+                    for idx in cluster:
+                        wx, wy = cell_to_world(idx, self.latest_map_info)
+                        p = Point()
+                        p.x = wx
+                        p.y = wy
+                        frontier_marker.points.append(p)
+        markers.markers.append(frontier_marker)
+
+        blacklist_marker = Marker()
+        blacklist_marker.header.frame_id = "map"
+        blacklist_marker.header.stamp = now
+        blacklist_marker.ns = "blacklist"
+        blacklist_marker.id = 1
+        blacklist_marker.type = Marker.POINTS
+        blacklist_marker.action = Marker.ADD
+        blacklist_marker.scale.x = 0.1
+        blacklist_marker.scale.y = 0.1
+        blacklist_marker.color.r = 1.0
+        blacklist_marker.color.g = 0.0
+        blacklist_marker.color.b = 0.0
+        blacklist_marker.color.a = 1.0
+        for bx, by in self.blacklist:
+            p = Point()
+            p.x = bx
+            p.y = by
+            blacklist_marker.points.append(p)
+        markers.markers.append(blacklist_marker)
+
+        goal_marker = Marker()
+        goal_marker.header.frame_id = "map"
+        goal_marker.header.stamp = now
+        goal_marker.ns = "goal"
+        goal_marker.id = 2
+        goal_marker.type = Marker.SPHERE
+        if is_exploring and self.current_goal_xy is not None:
+            goal_marker.action = Marker.ADD
+            goal_marker.pose.position.x = self.current_goal_xy[0]
+            goal_marker.pose.position.y = self.current_goal_xy[1]
+            goal_marker.pose.orientation.w = 1.0
+            goal_marker.scale.x = 0.2
+            goal_marker.scale.y = 0.2
+            goal_marker.scale.z = 0.2
+            goal_marker.color.r = 0.0
+            goal_marker.color.g = 1.0
+            goal_marker.color.b = 1.0
+            goal_marker.color.a = 1.0
+        else:
+            goal_marker.action = Marker.DELETE
+        markers.markers.append(goal_marker)
+
+        self.marker_pub.publish(markers)
 
     def publish_status(self, status: str):
         # Publishes JSON to /explore/status at 2Hz.

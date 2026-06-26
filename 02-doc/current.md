@@ -2,11 +2,11 @@
 
 ## Snapshot
 
-**Date:** 2026-06-25
+**Date:** 2026-06-26
 **Branch:** main
-**Status:** F10 live testing in progress. 117 tests pass. Nav2 docking_server crash
-fixed. MIN_FRONTIER_DIST reduced 2.0→0.8m. Telemetry enriched with filter diagnostics.
-F11 (RViz markers) feature+task files written, not yet implemented.
+**Status:** F11 (RViz markers) implemented and verified live. 117 tests pass.
+Exploration working on hardware — robot moving, goals reaching. MIN_FRONTIER_DIST
+hop-size issue identified.
 
 ## What exists
 
@@ -17,9 +17,10 @@ F11 (RViz markers) feature+task files written, not yet implemented.
   max_radius and min_dist filters, `nudge_toward_robot` geometry helper
 - `dome_nav/explore_manager_node.py` — ROS2 node: `exploration_start`/`exploration_stop`
   intents → Nav2 NavigateToPose goals, blacklisting, 2 Hz timer loop, `/explore/status`
-  (JSON), goal timeout (25s), telemetry via TelemetryWriter. Key methods:
-  `reset_session()`, `clear_active_goal()`, `find_and_send_frontier()`,
-  `check_goal_timeout()`, `stop_exploring()`, `publish_status()`
+  (JSON), `/explore/markers` (MarkerArray), goal timeout (25s), telemetry via
+  TelemetryWriter. Key methods: `reset_session()`, `clear_active_goal()`,
+  `find_and_send_frontier()`, `check_goal_timeout()`, `stop_exploring()`,
+  `publish_status()`, `publish_markers()`
 - `dome_nav/explore_telemetry.py` — JSONL session logger: one file per session in
   `~/.dome/telemetry/<map_name>_<ts>.jsonl`
 - `dome_nav/slam_manager_node.py` — **LifecycleNode**: watches `/map`, saves pose graph
@@ -46,36 +47,36 @@ F11 (RViz markers) feature+task files written, not yet implemented.
 
 ## This session's work
 
-### Refactoring and tests for F10 explore logic
+### F11 — RViz2 Exploration Markers (T01–T05 complete)
 
-1. **New test file** `test_explore_manager_node.py` (30 tests) covering:
-   - `nudge_toward_robot` (moved to frontier_explorer.py — 4 tests there)
-   - `on_intent` state machine (start/stop/reset/malformed/unknown)
-   - `find_and_send_frontier` (no map, no TF, no frontier, patience→done, nudge applied)
-   - `check_goal_timeout` (not expired, expired→cancel+blacklist+clear)
-   - `publish_status` JSON shape (idle, done, exploring no goal, exploring with goal)
+1. **T01**: `package.xml` — added `<depend>visualization_msgs</depend>`
+2. **T02**: `explore_manager_node.py` — added `marker_pub`, `latest_clusters`,
+   `latest_map_info` state; imported `Point`, `Marker`, `MarkerArray`, `cell_to_world`
+3. **T03**: `find_and_send_frontier` — stores `self.latest_clusters` and
+   `self.latest_map_info` each tick
+4. **T04**: `publish_markers()` — three namespaces: `frontiers` (yellow POINTS),
+   `blacklist` (red POINTS), `goal` (cyan SPHERE). DELETE markers when not exploring.
+5. **T05**: `explore_tick()` — calls `publish_markers()` alongside `publish_status()`
+6. **T06**: Manual RViz2 smoke test — **verified live**. Yellow frontier starburst,
+   cyan goal sphere visible. Markers working correctly.
 
-2. **Additional frontier_explorer tests** (4 new, total 31):
-   - `test_cell_to_world_nonzero_origin`
-   - `test_diagonal_frontier_cells_form_one_cluster` (2D 8-connectivity)
-   - `test_pick_returns_nearest_cell_not_centroid` (key invariant)
-   - `test_pick_all_cells_under_min_dist_skips_cluster`
+### Live test observations (2026-06-26, test_run4 telemetry)
 
-3. **Code review fixes** in `explore_manager_node.py`:
-   - `active_goal` → `has_active_goal` (boolean naming SHOULD)
-   - `clear_active_goal()` extracted (DRY: was duplicated in check_goal_timeout + on_goal_result)
-   - `stop_exploring("done")` called from patience path (DRY: removed 4 duplicate lines)
-   - `reset_session()` extracted (DRY: was duplicated between __init__ and on_intent)
-   - `nudge_toward_robot` moved to `frontier_explorer.py` as standalone function
-   - `publish_status` enriched: always includes `reached`, `failed`; exploring adds
-     `goal_num`, `blacklisted`, `no_frontier_ticks`
-   - All lines brought to ≤ 88 chars
-   - Constants annotated with range guidance and invariants
+Exploration IS working — robot moving and reaching goals:
+- Goals 2 and 4 reached in 2–3s with ~0.3m actual robot movement
+- Goals 1 and 3 timed out (25s) — Nav2 BT recovery loops, then blacklisted + skipped
 
-4. **Literate docs updated**:
-   - `07-explore_manager_node.md` — blacklist section rewritten (triggers, centroid vs
-     nudged, per-cell check, ring-cluster, reset), status JSON format updated
-   - `06-frontier_explorer.md` — nudge_toward_robot documented
+**Key finding — hop size issue:**
+All frontier picks land at exactly MIN_FRONTIER_DIST (0.8m) from robot. After
+GOAL_INSET_M=0.3m nudge, goal is always ~0.5m away. Robot makes tiny hops.
+
+From telemetry: frontier_xy distances from robot are all ~0.80m (1–4 goals).
+`pick_best_frontier` returns the nearest frontier cell → always at the threshold.
+
+**Two fixes under consideration:**
+1. Increase `MIN_FRONTIER_DIST` 0.8→1.5m — force larger hops, faster coverage
+2. Change `pick_best_frontier` to prefer large clusters over nearest cell —
+   avoids tiny wall-edge clusters close by, prefers open-area clusters further away
 
 ## Open issues (05-issues/open/)
 
@@ -86,32 +87,15 @@ F11 (RViz markers) feature+task files written, not yet implemented.
 - I08: test files missing header
 - I09: `should_save()` 1-line method — verify moot before closing
 
-## Live test observations (2026-06-25 session E telemetry)
-
-Goals are being generated and sent — exploration loop working. But robot barely moved:
-
-- **Goals reached in 0.1s without movement**: goal ~0.5m away, robot stayed at origin.
-  Nav2 BT declared reached without driving. Possible cause: goal lands inside BT's
-  already-reached check, or goal in already-navigated space.
-- **Goals 11–22 aborted in 0.1–0.5s**: Nav2 planner rejecting almost instantly.
-  Frontier goals land near free/unknown boundary. Costmap inflation may mark those
-  cells lethal. `GOAL_INSET_M=0.3m` may not be enough.
-- **Robot xy barely changes through goal 22**: confirms robot not actually driving.
-
-**Hypotheses to investigate:**
-1. Increase `GOAL_INSET_M` from 0.3 → 0.5m to push goal further from frontier edge
-2. Check what Nav2 is logging for the aborted goals (planner failure vs controller)
-3. Costmap inflation_radius (currently 0.2m local, 0.5m global) may be too large for
-   narrow corridors — goals land in inflated zone
-
 ## Likely next steps
 
-1. TF10 T06 — investigate Nav2 abort cause: increase GOAL_INSET_M to 0.5m, check
-   Nav2 planner logs for aborted goals, tune inflation_radius
-2. TF10 T07 — full live smoke test: `nav explore` from dome_control CLI, complete run
-3. I06 — underscore rename sweep in remaining files
-4. I07, I08, I09 — verify/close quick wins
-5. TF09 T04 — manual live smoke test: `nav go chair` from dome_control CLI
+1. **TF10 T06** — resolve hop-size issue: pick between MIN_FRONTIER_DIST increase
+   vs. cluster-size-preference strategy in `pick_best_frontier`
+2. **TF10 T07** — full live smoke test after tuning
+3. **TF11 T06** — already done (verified live this session)
+4. **TF09 T04** — live smoke test `nav go chair`
+5. **I06** — underscore rename sweep in remaining files
+6. **I07, I08, I09** — verify/close quick wins
 
 ## Intent contract
 
@@ -184,6 +168,14 @@ Idle/done: `{"state": "idle", "reached": 0, "failed": 0}` or
 `{"state": "done", "reached": 5, "failed": 1}`
 
 `goal_xy`, `dist_m`, `elapsed_s` omitted when no active goal or TF unavailable.
+
+## /explore/markers MarkerArray
+
+| namespace | type | color | content |
+|---|---|---|---|
+| `frontiers` (id=0) | POINTS | yellow | frontier cells from large clusters |
+| `blacklist` (id=1) | POINTS | red | all blacklisted positions |
+| `goal` (id=2) | SPHERE | cyan | current nav goal; DELETE when none |
 
 ## AMCL notes (unchanged)
 
