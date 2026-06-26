@@ -50,6 +50,10 @@ collision_monitor:
       min_points: 1           # collision_monitor not actively used on dome
 
 
+docking_server:
+  ros__parameters:
+    dock_database: ""
+
 lifecycle_manager:
   ros__parameters:
     node_names:
