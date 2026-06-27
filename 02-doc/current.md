@@ -4,8 +4,10 @@
 
 **Date:** 2026-06-27
 **Branch:** main
-**Status:** F12 (Pluggable Exploration Algorithm) complete. 42 pure-Python tests pass.
-`tools/algo_demo.py` interactive CLI demo working with 5 maps including new `large` (30×30).
+**Status:** F12 complete + mid-navigation redirect implemented. 42 pure-Python tests pass.
+`tools/algo_demo.py` demo now uncovers cells along the robot's travel path (not just at
+destination). `pluggable_explore_manager_node.py` re-evaluates the frontier every tick
+during transit and cancels/redirects if the best goal has shifted >1.5 m.
 
 ## What exists
 
@@ -23,8 +25,9 @@
 - `dome_nav/explore_markers.py` — **(F12 new)** pure functions for RViz `MarkerArray`
   construction (frontiers/blacklist/goal markers); extracted for node file-length budget
 - `dome_nav/pluggable_explore_manager_node.py` — **(F12 new)** copy-and-modify of
-  `explore_manager_node.py` that accepts injected `ExplorationAlgorithm`; identical
-  behavior to original but algorithm is swappable
+  `explore_manager_node.py` that accepts injected `ExplorationAlgorithm`; adds
+  mid-navigation re-evaluation via `check_goal_redirect()` + `is_redirecting` flag:
+  cancels current goal without blacklisting if best frontier shifts >1.5 m (`REDIRECT_THRESHOLD`)
 - `dome_nav/explore_telemetry.py` — JSONL session logger
 - `dome_nav/slam_manager_node.py` — **LifecycleNode**: watches `/map`, saves pose graph
   on first map receipt + every 30s
@@ -35,7 +38,9 @@
 - `tools/algo_demo.py` — **(F12 new)** interactive CLI demo of `FrontierAlgorithm` on
   hand-crafted ASCII maps. ANSI 256-color; shows clusters A-Z, target T, goal G, robot R,
   blacklist B. Maps: `room`, `corridor`, `ring`, `maze`, `large` (30×30, 3-room layout).
-  Args: `--map`, `--inset`, `--min-size`, `--min-dist`, `--sensor-radius`, `--auto`
+  Now simulates lidar scanning along travel path via `uncover_along_path()` (sweeps at
+  radius/2 steps from old to new robot position). Args: `--map`, `--inset`, `--min-size`,
+  `--min-dist`, `--sensor-radius`, `--auto`
 - `config/` — slam_param_patch, nav2_param_patch, nav2_amcl_patch, explore_param_patch
 - `launch/robot_map.launch.py` (Mode A), `robot_nav.launch.py` (Mode B),
   `robot_explore.launch.py` (Mode E)
@@ -70,9 +75,18 @@ All tasks done. Architecture is additive — original files untouched.
 - **T06** Full suite regression — 42/42 pure tests pass
 - **T07** `tools/algo_demo.py` — interactive CLI demo with color, clusters, 5 maps
 
-**Future direction noted in `02-doc/notes.md`**: `CostmapFrontierAlgorithm` using
-`/global_costmap/costmap` instead of raw `/map` — fits pluggable design with no changes
-to existing code.
+**Post-F12 enhancements (same session):**
+- `algo_demo.py`: `uncover_along_path()` — sweeps lidar reveal along travel path, not
+  just at destination. Step size = sensor_radius/2 ensures full coverage.
+- `pluggable_explore_manager_node.py`: `check_goal_redirect()` — mid-navigation
+  re-evaluation every tick. Cancels current goal (without blacklisting, via
+  `is_redirecting` flag) if best frontier shifts >1.5 m (`REDIRECT_THRESHOLD`).
+  Telemetry event: `"redirect"` with old/new goal xy and shift distance.
+
+**Future directions noted in `02-doc/notes.md`**:
+- `CostmapFrontierAlgorithm` using `/global_costmap/costmap` instead of raw `/map`
+- Adaptive goal distance (prefer far frontiers when near ones are on the travel path)
+- Directional continuity bonus (discount frontiers already covered by path scanning)
 
 ## Open issues (05-issues/open/)
 

@@ -49,6 +49,37 @@ This fits cleanly into the pluggable design (F12): implement as a new class
 `CostmapFrontierAlgorithm` in a new file, drop-in replacement for
 `FrontierAlgorithm`, injected at node construction. No existing code changes.
 
+## Future: path-aware frontier selection
+
+The lidar scans continuously during transit, not just at the destination. By the
+time the robot arrives at a frontier goal, cells along the entire path are already
+uncovered. Three algorithmic improvements follow from this:
+
+**1. Mid-navigation re-evaluation (implemented in `pluggable_explore_manager_node.py`)**
+Run the frontier algorithm every tick even with an active goal. If the best frontier
+has shifted more than `REDIRECT_THRESHOLD` (currently 1.5 m) from the current goal,
+cancel and redirect. Implemented via `check_goal_redirect()` and the `is_redirecting`
+flag (suppresses blacklisting on preemptive cancel). The pluggable design supports
+this without touching `FrontierAlgorithm`.
+
+**2. Adaptive goal distance (not yet implemented)**
+Frontiers that fall within the path-scan corridor to the current goal will be
+uncovered for free — they don't need to be directly targeted. The algorithm should
+prefer farther frontiers when nearby ones lie along the expected travel path, to
+avoid arriving at a destination that is already explored. Would require the algorithm
+to know the planned path or at least the current heading.
+
+**3. Directional continuity bonus (not yet implemented)**
+A frontier roughly ahead of the robot's current heading costs less than one requiring
+a detour, because path scanning along the current direction is a byproduct of travel.
+A utility function that discounts frontiers in the current travel direction (they'll
+be covered en route) and values frontiers off the current axis (genuinely new
+territory) would improve coverage efficiency. Fits the pluggable design as a new
+`DirectionalFrontierAlgorithm` class.
+
+The nearest-frontier selection and blacklist logic remain correct. The nudge geometry
+is unchanged. Only point 1 has been implemented.
+
 ## Known risks
 
 - First traversal of any new area has no loop closure — deduplication in WorldTracker

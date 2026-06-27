@@ -1,5 +1,5 @@
 ---
-version: "1.0"
+version: "1.1"
 generated: "2026-06-27"
 ---
 
@@ -21,7 +21,7 @@ is identical for normal operation. In tests or experiments, any object satisfyin
 `ExplorationAlgorithm` protocol can be passed in instead.
 
 This approach — "the same node, but open at the algorithm seam" — is a deliberate
-tradeoff against an alternative such as a strategy registry or ROS parameter-driven
+tradeoff against alternatives such as a strategy registry or ROS parameter-driven
 algorithm selection. Those would require more infrastructure and would still not give
 unit tests clean access to inject a mock.
 
@@ -138,6 +138,7 @@ def explore_tick(self):
         return
     if self.has_active_goal:
         self.check_goal_timeout()
+        self.check_goal_redirect()
         return
     self.find_and_send_frontier()
 ```
@@ -152,6 +153,12 @@ The `has_active_goal` guard ensures only one Nav2 goal is in flight at a time. N
 `send_goal_async` while one is accepted would confuse the goal handle tracking. The timer
 approach — send a goal, wait for the result callback, then send the next — is simpler
 and more debuggable than managing a queue.
+
+When `has_active_goal` is `True`, the tick calls both `check_goal_timeout()` and
+`check_goal_redirect()` before returning. These are independent checks: a goal can be
+stale in time, stale in space (the map changed under it), or both. Running them on every
+tick means the worst-case detection latency is one tick period (500 ms at 2 Hz), which
+is acceptable.
 
 **Why 2 Hz?** Nav2 goal dispatch and result callbacks are asynchronous. There is no
 benefit to ticking faster — a new goal cannot be sent until the current one completes,
@@ -212,6 +219,216 @@ blacklist is consistent; the blacklist radius (0.5 m) absorbs any sub-0.5 m drif
 
 ---
 
+## Goal Timeout and Blacklisting
+
+Nav2's Behavior Tree executor can enter recovery loops — spinning in place, clearing
+costmaps, retrying — that can extend a single goal to 60 seconds or more. Without a
+hard timeout, one stuck goal blocks the entire exploration loop.
+
+```python
+def check_goal_timeout(self):
+    if self.goal_start_time is None:
+        return
+    if (time.monotonic() - self.goal_start_time) <= self.GOAL_TIMEOUT_S:
+        return
+    elapsed = round(time.monotonic() - self.goal_start_time, 1)
+    self.get_logger().warning(
+        f"Goal timed out after {elapsed}s — cancelling and blacklisting."
+    )
+    ...
+    if self.goal_handle is not None:
+        self.goal_handle.cancel_goal_async()
+    if self.current_goal_centroid is not None:
+        self.blacklist.add(self.current_goal_centroid)
+    self.clear_active_goal()
+```
+
+`GOAL_TIMEOUT_S = 25.0` was chosen to be comfortably above the time needed for Nav2 to
+reach most normal goals (typically 5–15 seconds in the DOME environment) while being well
+below the 60-second BT loop upper bound. Shorter values (10 s) produce false timeouts
+when traversal is long; longer values (40 s) unnecessarily extend a stuck session.
+
+The timed-out goal's centroid is blacklisted immediately on timeout, before the cancel
+future completes. This is intentional: the cancel is fire-and-forget. If the result
+callback eventually fires after a cancel, `clear_active_goal()` has already run and the
+result is harmlessly processed (the centroid was already blacklisted). Crucially, if the
+cancel was issued by `check_goal_redirect` rather than `check_goal_timeout`, the
+`is_redirecting` flag guards against double-blacklisting — see the next section.
+
+---
+
+## Mid-Navigation Redirect: Staying on the Best Frontier
+
+### The Problem
+
+When the node sends a goal, the robot begins navigating toward that frontier. But the
+robot carries a lidar that is scanning the environment continuously during transit. By the
+time the robot arrives, the map has changed: previously-unknown cells along the path have
+been classified as free or occupied. The frontier that was best at goal-send time may have
+already been fully explored by incidental scanning, while a completely different — and
+better — frontier has emerged on the freshly-revealed side of the map.
+
+The original design had no mechanism to catch this. The robot would arrive at a now-stale
+goal, discover the frontier was already explored (or missing), then pick a new one. The
+missed-opportunity window was the entire traversal time, sometimes 10–20 seconds.
+
+### REDIRECT_THRESHOLD = 1.5 m
+
+```python
+# If the best frontier moves more than this many metres from the current goal,
+# cancel mid-flight and redirect. Accounts for the map updating during transit
+# (lidar reveals new cells along the path). Too small → constant churn; too
+# large → stale goals persist after the map changes significantly.
+REDIRECT_THRESHOLD = 1.5
+```
+
+The 1.5 m value is a deliberate midpoint in a tradeoff:
+
+- **Too small (e.g., 0.3 m):** Any map update — even a single newly-revealed free cell
+  nudging the best frontier slightly — triggers a redirect. The robot churns: it cancels
+  and re-sends goals constantly, never completing traversal. Nav2 cancels have a
+  non-trivial cost (decelerate, replan, re-accelerate), so frequent redirects degrade
+  overall coverage speed.
+
+- **Too large (e.g., 5.0 m):** Significant map changes are ignored. The robot travels to
+  a frontier that is 4 m away from where the real best frontier now is, wasting
+  traversal time and possibly missing the better target entirely before the map update
+  is acted upon.
+
+1.5 m was validated empirically in the DOME environment: it is larger than the noise
+floor of frontier centroid drift from minor map updates, and smaller than the typical
+gap between meaningfully distinct frontier clusters. At this threshold, redirects
+happen when the map has changed enough to matter, not on every minor scan update.
+
+### check_goal_redirect()
+
+```python
+def check_goal_redirect(self):
+    if self.is_redirecting or self.latest_map is None or self.current_goal_xy is None:
+        return
+    robot_xy = self.robot_xy_in_map()
+    if robot_xy is None:
+        return
+    m = self.latest_map
+    info = MapInfo(
+        width=m.info.width, height=m.info.height, resolution=m.info.resolution,
+        origin_x=m.info.origin.position.x, origin_y=m.info.origin.position.y,
+    )
+    ctx = ExplorationContext(
+        map_data=list(m.data),
+        map_info=info,
+        robot_xy=robot_xy,
+        blacklist=self.blacklist,
+        start_xy=self.start_xy,
+        params=self.params,
+    )
+    new_goal = self.algorithm.next_goal(ctx)
+    if new_goal is None:
+        return
+    dist = math.sqrt(
+        (new_goal[0] - self.current_goal_xy[0]) ** 2
+        + (new_goal[1] - self.current_goal_xy[1]) ** 2
+    )
+    if dist < self.REDIRECT_THRESHOLD:
+        return
+    self.get_logger().info(
+        f"Redirect: best frontier moved {dist:.2f}m from current goal "
+        f"— cancelling #{self.goal_count} and redirecting."
+    )
+    self.telemetry.write(
+        "redirect", goal_num=self.goal_count,
+        old_goal_xy=[round(self.current_goal_xy[0], 3),
+                     round(self.current_goal_xy[1], 3)],
+        new_goal_xy=[round(new_goal[0], 3), round(new_goal[1], 3)],
+        shift_m=round(dist, 3),
+    )
+    self.is_redirecting = True
+    if self.goal_handle is not None:
+        self.goal_handle.cancel_goal_async()
+```
+
+This method runs every tick while `has_active_goal` is `True`. It re-invokes the full
+algorithm against the current map — the same `ExplorationContext` assembly used in
+`find_and_send_frontier` — and computes the Euclidean distance between the new best goal
+and the goal currently being navigated to. If the shift exceeds `REDIRECT_THRESHOLD`, it
+sets `is_redirecting = True` and cancels the active goal asynchronously.
+
+Several design choices here are worth noting:
+
+- **Re-running the full algorithm per tick** is a deliberate repetition of the
+  `find_and_send_frontier` assembly logic. An alternative would be to factor out a shared
+  `build_context()` helper. The duplication was kept because the two call sites have
+  slightly different intent — one is for initial goal selection, the other for
+  mid-transit re-evaluation — and merging them would complicate the flow for marginal
+  gain. This is a known tradeoff, noted in Observations below.
+
+- **Early return if `is_redirecting`** prevents the method from triggering a second
+  cancel while a cancel is already in flight. Once set, `is_redirecting` remains `True`
+  until `clear_active_goal()` is called in the result callback.
+
+- **The cancelled goal is not blacklisted.** The existing goal was valid when sent;
+  the redirect is because something better appeared, not because this goal is
+  unreachable. Blacklisting it would permanently exclude a reachable frontier.
+
+### is_redirecting and the Result Callback
+
+The `is_redirecting` flag is the critical bridge between the cancel-and-redirect
+initiation and the eventual arrival of the cancel result in `on_goal_result`:
+
+```python
+def on_goal_result(self, future, xy: XY, centroid: XY):
+    elapsed = (
+        round(time.monotonic() - self.goal_start_time, 1)
+        if self.goal_start_time else 0.0
+    )
+    if self.is_redirecting:
+        # Cancelled for a better frontier — not a failure, do not blacklist.
+        self.clear_active_goal()
+        return
+    self.clear_active_goal()
+    result = future.result()
+    ...
+    if result.status == GoalStatus.STATUS_SUCCEEDED:
+        self.goals_reached += 1
+        ...
+    else:
+        self.goals_failed += 1
+        ...
+    self.blacklist.add(centroid)
+```
+
+When `is_redirecting` is `True`, the result callback skips all the status-checking,
+failure-counting, and blacklisting logic and just clears the active goal. This is
+important for two reasons:
+
+1. **Suppresses false failure counts.** A redirect-cancelled goal did not fail; counting
+   it as `goals_failed` would corrupt session statistics and affect any logic gated on
+   failure rates.
+
+2. **Prevents spurious blacklisting.** If the cancelled goal's centroid were blacklisted,
+   that frontier would be permanently excluded for the rest of the session, even though
+   it may still be the best available target for the new goal that is about to be sent.
+
+`is_redirecting` is reset to `False` inside `clear_active_goal()`, not in the result
+callback directly. This ensures the flag is always cleared as part of the same atomic
+state reset that clears `has_active_goal`, `goal_handle`, and `current_goal_xy`.
+
+```python
+def clear_active_goal(self):
+    self.goal_handle = None
+    self.has_active_goal = False
+    self.goal_start_time = None
+    self.current_goal_centroid = None
+    self.current_goal_xy = None
+    self.is_redirecting = False
+```
+
+After `clear_active_goal()` returns in the redirect path, the next `explore_tick` will
+find `has_active_goal = False` and call `find_and_send_frontier()`, which re-runs the
+algorithm and sends the (now-fresh) best frontier as the next goal.
+
+---
+
 ## Goal Dispatch and the Async Callback Chain
 
 Nav2 goal dispatch is a three-step async chain:
@@ -252,59 +469,16 @@ action callbacks.
 
 The orientation is set to `w=1.0` (identity quaternion — facing "forward" in the map
 frame). Nav2's navigator rotates the robot to face the goal before beginning traversal, so
-the orientation at the goal point doesn't matter for exploration purposes.
+the orientation at the goal point does not matter for exploration purposes.
 
----
-
-## Goal Timeout and Blacklisting
-
-Nav2's Behavior Tree executor can enter recovery loops — spinning in place, clearing
-costmaps, retrying — that can extend a single goal to 60 seconds or more. Without a
-hard timeout, one stuck goal blocks the entire exploration loop.
-
-```python
-def check_goal_timeout(self):
-    if self.goal_start_time is None:
-        return
-    if (time.monotonic() - self.goal_start_time) <= self.GOAL_TIMEOUT_S:
-        return
-    elapsed = round(time.monotonic() - self.goal_start_time, 1)
-    self.get_logger().warning(
-        f"Goal timed out after {elapsed}s — cancelling and blacklisting."
-    )
-    ...
-    if self.goal_handle is not None:
-        self.goal_handle.cancel_goal_async()
-    if self.current_goal_centroid is not None:
-        self.blacklist.add(self.current_goal_centroid)
-    self.clear_active_goal()
-```
-
-`GOAL_TIMEOUT_S = 25.0` was chosen to be comfortably above the time needed for Nav2 to
-reach most normal goals (typically 5–15 seconds in the DOME environment) while being well
-below the 60-second BT loop upper bound. Shorter values (10 s) produce false timeouts
-when traversal is long; longer values (40 s) unnecessarily extend a stuck session.
-
-The timed-out goal's centroid is blacklisted immediately on timeout, before the cancel
-future completes. This is intentional: the cancel is fire-and-forget. If the result
-callback eventually fires after a cancel, `clear_active_goal()` has already run and the
-result is harmlessly processed (the centroid was already blacklisted).
-
-**All outcomes blacklist.** On goal completion — success, failure, timeout, or rejection
-— the centroid is always added to the blacklist:
-
-```python
-def on_goal_result(self, future, xy: XY, centroid: XY):
-    ...
-    self.blacklist.add(centroid)
-```
-
-Blacklisting on success prevents the robot from re-selecting a frontier whose occupancy
-cells have not yet been updated to `known-occupied` by `slam_toolbox` — a common race
-condition at 2 Hz. Blacklisting on failure and timeout prevents re-attempting a spot where
-Nav2 already struggled. The blacklist grows monotonically within a session and is never
-pruned; it resets only when `reset_session()` is called at the start of a new
-`exploration_start`.
+**All genuine failures blacklist.** On goal completion — success, failure, timeout, or
+rejection — the centroid is added to the blacklist. Redirected cancels are the only
+exception, guarded by `is_redirecting`. Blacklisting on success prevents the robot from
+re-selecting a frontier whose occupancy cells have not yet been updated by `slam_toolbox`
+— a common race condition at 2 Hz. Blacklisting on failure and timeout prevents
+re-attempting a spot where Nav2 already struggled. The blacklist grows monotonically
+within a session and is never pruned; it resets only when `reset_session()` is called at
+the start of a new `exploration_start`.
 
 ---
 
@@ -318,12 +492,17 @@ Every significant event is written to a JSONL file via `TelemetryWriter`:
 self.telemetry = TelemetryWriter(self.map_name, self.get_logger().info)
 ```
 
-`TelemetryWriter` appends one JSON object per line to `~/.dome/telemetry/explore-<map>-<date>.jsonl`.
-Each record has an `event` field and a monotonic `ts` timestamp. Event types include
-`session_start`, `session_end`, `goal_sent`, `goal_result`, `no_frontier`, and
-`shutdown`. This file is the primary post-hoc analysis tool — it captures the full
-sequence of decisions, durations, and outcomes for every exploration session without
-requiring a rosbag.
+`TelemetryWriter` appends one JSON object per line to
+`~/.dome/telemetry/explore-<map>-<date>.jsonl`. Each record has an `event` field and a
+monotonic `ts` timestamp. Event types include `session_start`, `session_end`,
+`goal_sent`, `goal_result`, `no_frontier`, `redirect`, and `shutdown`. The `redirect`
+event is new in this version and records `old_goal_xy`, `new_goal_xy`, and `shift_m`,
+making it possible to reconstruct exactly when and how far the best frontier moved during
+a transit.
+
+This file is the primary post-hoc analysis tool — it captures the full sequence of
+decisions, durations, and outcomes for every exploration session without requiring a
+rosbag.
 
 The `no_frontier` record is particularly diagnostic: it includes the raw cluster count
 from the algorithm's `latest_clusters` and any diagnostic fields from `latest_diag`. When
@@ -381,9 +560,9 @@ received, not at node startup. A robot that starts the node at origin but drives
 triggering exploration would get the wrong `start_xy` if it were captured in `__init__`.
 
 `clear_active_goal` is called once at startup (not in `reset_session`) to initialize the
-goal-tracking fields. If `exploration_stop` arrives mid-goal, `stop_exploring` cancels
-the goal handle and sets `has_active_goal = False` without calling `clear_active_goal`,
-which avoids a double-cancel.
+goal-tracking fields, including `is_redirecting`. If `exploration_stop` arrives mid-goal,
+`stop_exploring` cancels the goal handle and sets `has_active_goal = False` without
+calling `clear_active_goal`, which avoids a double-cancel.
 
 ---
 
@@ -393,8 +572,10 @@ which avoids a double-cancel.
 |---|---|---|
 | Algorithm source | Hard-coded; calls `find_frontier_clusters`, `pick_best_frontier`, `nudge_toward_robot` directly | Injected via constructor; defaults to `FrontierAlgorithm()` |
 | Centroid tracking | Passes raw `pick_best_frontier` result as `centroid`, nudged point as `xy` | Passes `goal_xy` as both; algorithm owns nudging |
+| Mid-transit redirect | None; robot always completes traversal before re-evaluating | `check_goal_redirect()` re-evaluates every tick; cancels and redirects if best frontier shifted > 1.5 m |
+| Redirect guard | N/A | `is_redirecting` flag in `clear_active_goal`; suppresses blacklisting and failure count on cancel-for-redirect |
 | Testability | Algorithm cannot be mocked without patching module-level functions | Any `ExplorationAlgorithm`-protocol object can be injected |
-| Production behaviour | Identical frontier exploration | Identical when using default `FrontierAlgorithm` |
+| Production behaviour | Identical frontier exploration | Identical when using default `FrontierAlgorithm`, plus dynamic redirect |
 
 The original node was deliberately left untouched so that a regression in the pluggable
 node does not affect a known-working deployment path.
@@ -402,6 +583,21 @@ node does not affect a known-working deployment path.
 ---
 
 ## Observations
+
+**Context assembly duplication.** `find_and_send_frontier` and `check_goal_redirect` both
+build an `ExplorationContext` from `self.latest_map` using identical code. This is a
+known DRY violation. A shared `build_context(robot_xy)` helper method would eliminate
+the duplication without changing behaviour. The duplication was tolerated during initial
+implementation because the two call sites have different surrounding logic, but it should
+be extracted before this code grows further.
+
+**Redirect storms on noisy maps.** If `slam_toolbox` produces a rapidly oscillating best
+frontier — due to scan noise at the boundary of a large open space — `check_goal_redirect`
+may trigger repeatedly in quick succession. `is_redirecting` prevents double-cancellation
+within one cancel cycle, but after the redirect completes and a new goal is sent, the
+next tick could immediately redirect again. A minimum time-between-redirects guard (e.g.,
+do not redirect within 2 seconds of the last redirect) would bound this in pathological
+environments.
 
 **Centroid drift.** Using `goal_xy` (the nudged coordinate) as the blacklist centroid
 rather than the pre-nudge frontier cell creates a small geometric inconsistency. The
@@ -416,10 +612,11 @@ from frontier-based to spiral coverage when the frontier count drops below a thr
 A composite algorithm object could implement this internally without changing the node.
 
 **TF polling.** `robot_xy_in_map()` calls `lookup_transform` on every tick with
-`rclpy.time.Time()` (latest available). If the TF tree is slow to update, consecutive
-ticks may get the same stale position. A cached TF with a staleness guard would be more
-robust but adds complexity that is not warranted for the current DOME deployment where TF
-runs reliably.
+`rclpy.time.Time()` (latest available). In `check_goal_redirect` this means the robot
+position is re-queried on every tick in addition to the `explore_tick` calls already
+making the same query. If the TF tree is slow to update, consecutive ticks may get the
+same stale position. A cached TF with a staleness guard would be more robust but adds
+complexity that is not warranted for the current DOME deployment where TF runs reliably.
 
 **Blacklist never pruned.** The blacklist grows throughout a session. In a large
 environment with many failed frontiers, a very large blacklist imposes an O(B) check per
@@ -429,9 +626,10 @@ environments where hundreds of frontiers fail per session, a time-decaying or
 distance-bounded blacklist would be worthwhile.
 
 **No re-entry protection on `stop_exploring`.** If `exploration_stop` is received twice
-rapidly, `stop_exploring` could cancel a `None` goal handle (guarded by `if self.goal_handle
-is not None`) and log a redundant `session_end` telemetry event. A `self.state != "exploring"`
-guard at the top of `stop_exploring` would make this fully idempotent.
+rapidly, `stop_exploring` could cancel a `None` goal handle (guarded by
+`if self.goal_handle is not None`) and log a redundant `session_end` telemetry event. A
+`self.state != "exploring"` guard at the top of `stop_exploring` would make this fully
+idempotent.
 
 **Algorithm `latest_diag` contract is implicit.** The protocol declares `latest_diag:
 dict | None` but does not specify which keys are expected. The telemetry write does

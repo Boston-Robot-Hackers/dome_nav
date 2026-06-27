@@ -269,6 +269,26 @@ def uncover_around_robot(
     return data
 
 
+def uncover_along_path(
+    data: list[int],
+    info: MapInfo,
+    from_xy: tuple[float, float],
+    to_xy: tuple[float, float],
+    radius: float,
+) -> list[int]:
+    # Sweep sensor reveal along the straight-line path in steps of radius/2,
+    # so the robot uncovers cells it passes through, not just the destination.
+    dx = to_xy[0] - from_xy[0]
+    dy = to_xy[1] - from_xy[1]
+    dist = math.sqrt(dx ** 2 + dy ** 2)
+    steps = max(1, int(dist / (radius / 2)))
+    for i in range(steps + 1):
+        t = i / steps
+        pos = (from_xy[0] + t * dx, from_xy[1] + t * dy)
+        data = uncover_around_robot(data, info, pos, radius)
+    return data
+
+
 def main():
     parser = argparse.ArgumentParser(description="FrontierAlgorithm interactive demo")
     parser.add_argument("--map", choices=list(MAPS.keys()), default="room",
@@ -352,8 +372,8 @@ def main():
             legend = cluster_legend(algo.latest_clusters, params.min_frontier_size)
             print(f"\nStep {step}: goal=({goal_xy[0]:.2f},{goal_xy[1]:.2f})"
                   f"  dist={dist:.2f}  blacklisted={len(blacklist)}{legend}")
+            data = uncover_along_path(data, info, robot_xy, goal_xy, args.sensor_radius)
             robot_xy = goal_xy
-            data = uncover_around_robot(data, info, robot_xy, args.sensor_radius)
             blacklist.add(goal_xy)
 
         step += 1

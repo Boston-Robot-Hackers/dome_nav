@@ -50,6 +50,12 @@ class PluggableExploreManagerNode(Node):
     # on long traversals. Cancelled goal is blacklisted so the same spot is not retried.
     GOAL_TIMEOUT_S = 25.0
 
+    # If the best frontier moves more than this many metres from the current goal,
+    # cancel mid-flight and redirect. Accounts for the map updating during transit
+    # (lidar reveals new cells along the path). Too small → constant churn; too
+    # large → stale goals persist after the map changes significantly.
+    REDIRECT_THRESHOLD = 1.5
+
     def __init__(self, algorithm: ExplorationAlgorithm | None = None):
         super().__init__("explore_manager_node")
         self.nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
@@ -122,6 +128,7 @@ class PluggableExploreManagerNode(Node):
             return
         if self.has_active_goal:
             self.check_goal_timeout()
+            self.check_goal_redirect()
             return
         self.find_and_send_frontier()
 
@@ -147,6 +154,52 @@ class PluggableExploreManagerNode(Node):
         if self.current_goal_centroid is not None:
             self.blacklist.add(self.current_goal_centroid)
         self.clear_active_goal()
+
+    def check_goal_redirect(self):
+        # Re-evaluate the frontier each tick while in transit. If the best goal
+        # has moved more than REDIRECT_THRESHOLD from the current goal (because
+        # the map updated as the robot scanned along its path), cancel and redirect.
+        if self.is_redirecting or self.latest_map is None or self.current_goal_xy is None:
+            return
+        robot_xy = self.robot_xy_in_map()
+        if robot_xy is None:
+            return
+        m = self.latest_map
+        info = MapInfo(
+            width=m.info.width, height=m.info.height, resolution=m.info.resolution,
+            origin_x=m.info.origin.position.x, origin_y=m.info.origin.position.y,
+        )
+        ctx = ExplorationContext(
+            map_data=list(m.data),
+            map_info=info,
+            robot_xy=robot_xy,
+            blacklist=self.blacklist,
+            start_xy=self.start_xy,
+            params=self.params,
+        )
+        new_goal = self.algorithm.next_goal(ctx)
+        if new_goal is None:
+            return
+        dist = math.sqrt(
+            (new_goal[0] - self.current_goal_xy[0]) ** 2
+            + (new_goal[1] - self.current_goal_xy[1]) ** 2
+        )
+        if dist < self.REDIRECT_THRESHOLD:
+            return
+        self.get_logger().info(
+            f"Redirect: best frontier moved {dist:.2f}m from current goal "
+            f"— cancelling #{self.goal_count} and redirecting."
+        )
+        self.telemetry.write(
+            "redirect", goal_num=self.goal_count,
+            old_goal_xy=[round(self.current_goal_xy[0], 3),
+                         round(self.current_goal_xy[1], 3)],
+            new_goal_xy=[round(new_goal[0], 3), round(new_goal[1], 3)],
+            shift_m=round(dist, 3),
+        )
+        self.is_redirecting = True
+        if self.goal_handle is not None:
+            self.goal_handle.cancel_goal_async()
 
     def find_and_send_frontier(self):
         if self.latest_map is None:
@@ -218,6 +271,7 @@ class PluggableExploreManagerNode(Node):
         self.goal_start_time = None
         self.current_goal_centroid = None
         self.current_goal_xy = None
+        self.is_redirecting = False
 
     def send_nav_goal(self, xy: XY, centroid: XY):
         if not self.nav_client.server_is_ready():
@@ -277,6 +331,10 @@ class PluggableExploreManagerNode(Node):
             round(time.monotonic() - self.goal_start_time, 1)
             if self.goal_start_time else 0.0
         )
+        if self.is_redirecting:
+            # Cancelled for a better frontier — not a failure, do not blacklist.
+            self.clear_active_goal()
+            return
         self.clear_active_goal()
         result = future.result()
         robot_xy = self.robot_xy_in_map()
