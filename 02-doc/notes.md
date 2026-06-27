@@ -23,6 +23,32 @@ and only needed for Nav2 static layer on localization-only runs.
 `map_file_name` in slam.yaml is hardcoded to `~/.dome/slam_map`. slam_toolbox
 silently starts fresh if the files do not exist — safe to always include this param.
 
+## Future: costmap-based frontier exploration
+
+The current `FrontierAlgorithm` reads `/map` (raw slam_toolbox occupancy grid,
+unknown = -1). An alternative worth exploring is subscribing to Nav2's
+`/global_costmap/costmap` instead.
+
+Key differences:
+
+- Inflation layer: free cells near obstacles are inflated to higher cost values
+  (not occupied). Goals placed in the inflated zone will be reached but may be
+  slightly blocked; Nav2's planner avoids them naturally. Using the costmap means
+  the nudge (`goal_inset_m`) toward the robot may become unnecessary since frontier
+  cells won't be on the raw obstacle boundary.
+- Unknown encoding: costmap encodes unknown as 255 (uint8), not -1. A
+  `CostmapFrontierAlgorithm` must treat 255 as unknown when finding frontier
+  cells (free cells adjacent to 255 cells).
+- Dynamic obstacles: global costmap incorporates the local costmap's dynamic
+  obstacle layer, so transient obstacles (e.g., a person walking by) affect
+  goal selection. Could be a benefit or a source of jitter.
+- Potential benefit: exploration goals would naturally land in navigable space
+  without any nudge or boundary-check workaround.
+
+This fits cleanly into the pluggable design (F12): implement as a new class
+`CostmapFrontierAlgorithm` in a new file, drop-in replacement for
+`FrontierAlgorithm`, injected at node construction. No existing code changes.
+
 ## Known risks
 
 - First traversal of any new area has no loop closure — deduplication in WorldTracker

@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+# test_frontier_algorithm.py — unit tests for FrontierAlgorithm (pure Python, no ROS2)
+# Author: Pito Salas and Claude Code
+# Open Source Under MIT license
+
+import math
+import pytest
+from dome_nav.explore_context import ExplorationContext, ExploreParams
+from dome_nav.frontier_algorithm import FrontierAlgorithm
+from dome_nav.frontier_explorer import MapInfo
+
+
+def make_info(width: int, height: int, resolution: float = 1.0) -> MapInfo:
+    return MapInfo(
+        width=width, height=height, resolution=resolution,
+        origin_x=0.0, origin_y=0.0,
+    )
+
+
+def flat_map(width: int, height: int, value: int) -> list[int]:
+    return [value] * (width * height)
+
+
+def make_ctx(
+    map_data: list[int],
+    map_info: MapInfo,
+    robot_xy: tuple[float, float] = (0.0, 0.0),
+    blacklist: set[tuple[float, float]] | None = None,
+    start_xy: tuple[float, float] | None = None,
+    params: ExploreParams | None = None,
+) -> ExplorationContext:
+    return ExplorationContext(
+        map_data=map_data,
+        map_info=map_info,
+        robot_xy=robot_xy,
+        blacklist=blacklist or set(),
+        start_xy=start_xy,
+        params=params or ExploreParams(min_frontier_size=1, min_frontier_dist=0.0),
+    )
+
+
+# --- next_goal returns None on fully-explored map ---
+
+def test_next_goal_no_frontiers_all_free():
+    algo = FrontierAlgorithm()
+    info = make_info(3, 3)
+    ctx = make_ctx(flat_map(3, 3, 0), info)
+    assert algo.next_goal(ctx) is None
+
+
+def test_next_goal_no_frontiers_all_unknown():
+    algo = FrontierAlgorithm()
+    info = make_info(3, 3)
+    ctx = make_ctx(flat_map(3, 3, -1), info)
+    assert algo.next_goal(ctx) is None
+
+
+# --- next_goal returns valid (x, y) on map with frontier cells ---
+
+def test_next_goal_returns_xy_on_frontier_map():
+    algo = FrontierAlgorithm()
+    info = make_info(5, 1)
+    # [free, free, free, unknown, unknown] → cells 0-2 free, 3-4 unknown
+    # Cell 2 is free with unknown neighbor at cell 3 → frontier
+    data = [0, 0, 0, -1, -1]
+    ctx = make_ctx(data, info)
+    result = algo.next_goal(ctx)
+    assert result is not None
+    assert isinstance(result, tuple)
+    assert len(result) == 2
+
+
+# --- latest_clusters populated after each call ---
+
+def test_latest_clusters_populated_after_call():
+    algo = FrontierAlgorithm()
+    assert algo.latest_clusters == []
+    info = make_info(5, 1)
+    data = [0, 0, 0, -1, -1]
+    ctx = make_ctx(data, info)
+    algo.next_goal(ctx)
+    assert len(algo.latest_clusters) >= 1
+
+
+def test_latest_clusters_empty_on_explored_map():
+    algo = FrontierAlgorithm()
+    info = make_info(3, 3)
+    ctx = make_ctx(flat_map(3, 3, 0), info)
+    algo.next_goal(ctx)
+    assert algo.latest_clusters == []
+
+
+# --- latest_diag set when None, cleared otherwise ---
+
+def test_latest_diag_set_when_no_frontier():
+    algo = FrontierAlgorithm()
+    info = make_info(3, 3)
+    ctx = make_ctx(flat_map(3, 3, 0), info)
+    algo.next_goal(ctx)
+    assert algo.latest_diag is not None
+    assert isinstance(algo.latest_diag, dict)
+
+
+def test_latest_diag_cleared_when_frontier_found():
+    algo = FrontierAlgorithm()
+    info = make_info(5, 1)
+    data = [0, 0, 0, -1, -1]
+    ctx = make_ctx(data, info)
+    # First call with frontiers → diag cleared
+    algo.next_goal(ctx)
+    assert algo.latest_diag is None
+
+
+def test_latest_diag_transitions():
+    algo = FrontierAlgorithm()
+    info = make_info(5, 1)
+    # Call with no frontiers → diag set
+    ctx_empty = make_ctx(flat_map(5, 1, 0), info)
+    algo.next_goal(ctx_empty)
+    assert algo.latest_diag is not None
+    # Call with frontiers → diag cleared
+    ctx_frontier = make_ctx([0, 0, 0, -1, -1], info)
+    algo.next_goal(ctx_frontier)
+    assert algo.latest_diag is None
+
+
+# --- blacklist is respected ---
+
+def test_blacklist_causes_none_when_only_frontier_blocked():
+    algo = FrontierAlgorithm()
+    info = make_info(5, 1)
+    # Cell 2 (x=2.5) is the only frontier cell
+    data = [0, 0, 0, -1, -1]
+    blacklist = {(2.5, 0.5)}
+    ctx = make_ctx(data, info, blacklist=blacklist,
+                   params=ExploreParams(min_frontier_size=1, min_frontier_dist=0.0,
+                                        blacklist_radius=1.0))
+    result = algo.next_goal(ctx)
+    assert result is None
+
+
+# --- goal_inset_m nudge is applied ---
+
+def test_nudge_applied_goal_closer_than_raw_cell():
+    algo = FrontierAlgorithm()
+    # 10x1 map: cells 0-4 free, 5-9 unknown → frontier at cell 4 (x=4.5)
+    info = make_info(10, 1)
+    data = [0] * 5 + [-1] * 5
+    robot_xy = (0.0, 0.0)
+    inset = 0.3
+    ctx = make_ctx(data, info, robot_xy=robot_xy,
+                   params=ExploreParams(min_frontier_size=1, min_frontier_dist=0.0,
+                                        goal_inset_m=inset))
+    result = algo.next_goal(ctx)
+    assert result is not None
+    # The raw frontier cell is at x=4.5 (or nearby). The nudged result
+    # should be closer to the robot than the raw cell.
+    raw_dist = 4.5  # approximate distance of nearest frontier cell
+    result_dist = math.sqrt(result[0] ** 2 + result[1] ** 2)
+    assert result_dist < raw_dist
+
+
+def test_nudge_amount_correct():
+    algo = FrontierAlgorithm()
+    # 10x1 map with frontier at cell 4 (x=4.5, y=0.5), robot at origin
+    info = make_info(10, 1)
+    data = [0] * 5 + [-1] * 5
+    robot_xy = (0.0, 0.0)
+    inset = 0.3
+    ctx = make_ctx(data, info, robot_xy=robot_xy,
+                   params=ExploreParams(min_frontier_size=1, min_frontier_dist=0.0,
+                                        goal_inset_m=inset))
+    result = algo.next_goal(ctx)
+    assert result is not None
+    # Nearest frontier cell is cell 4 at (4.5, 0.5). After nudge toward (0,0)
+    # by 0.3m, the distance should be reduced by exactly 0.3m.
+    raw_xy = (4.5, 0.5)
+    raw_dist = math.sqrt(raw_xy[0] ** 2 + raw_xy[1] ** 2)
+    result_dist = math.sqrt(result[0] ** 2 + result[1] ** 2)
+    assert abs((raw_dist - result_dist) - inset) < 1e-6

@@ -2,11 +2,10 @@
 
 ## Snapshot
 
-**Date:** 2026-06-26
+**Date:** 2026-06-27
 **Branch:** main
-**Status:** F11 (RViz markers) implemented and verified live. 117 tests pass.
-Exploration working on hardware — robot moving, goals reaching. MIN_FRONTIER_DIST
-hop-size issue identified.
+**Status:** F12 (Pluggable Exploration Algorithm) complete. 42 pure-Python tests pass.
+`tools/algo_demo.py` interactive CLI demo working with 5 maps including new `large` (30×30).
 
 ## What exists
 
@@ -15,111 +14,92 @@ hop-size issue identified.
 - `dome_nav/frontier_explorer.py` — pure Python frontier detection: OccupancyGrid scan,
   8-connectivity clustering, blacklist-aware nearest-cell selection (NOT centroid),
   max_radius and min_dist filters, `nudge_toward_robot` geometry helper
-- `dome_nav/explore_manager_node.py` — ROS2 node: `exploration_start`/`exploration_stop`
-  intents → Nav2 NavigateToPose goals, blacklisting, 2 Hz timer loop, `/explore/status`
-  (JSON), `/explore/markers` (MarkerArray), goal timeout (25s), telemetry via
-  TelemetryWriter. Key methods: `reset_session()`, `clear_active_goal()`,
-  `find_and_send_frontier()`, `check_goal_timeout()`, `stop_exploring()`,
-  `publish_status()`, `publish_markers()`
-- `dome_nav/explore_telemetry.py` — JSONL session logger: one file per session in
-  `~/.dome/telemetry/<map_name>_<ts>.jsonl`
+- `dome_nav/explore_manager_node.py` — **original, untouched** ROS2 node: all F12 work
+  is additive; this file reverts to before F12 if needed
+- `dome_nav/explore_context.py` — **(F12 new)** `ExploreParams`, `ExplorationContext`
+  dataclasses and `ExplorationAlgorithm` Protocol
+- `dome_nav/frontier_algorithm.py` — **(F12 new)** `FrontierAlgorithm` class wrapping
+  the pure frontier functions behind the protocol
+- `dome_nav/explore_markers.py` — **(F12 new)** pure functions for RViz `MarkerArray`
+  construction (frontiers/blacklist/goal markers); extracted for node file-length budget
+- `dome_nav/pluggable_explore_manager_node.py` — **(F12 new)** copy-and-modify of
+  `explore_manager_node.py` that accepts injected `ExplorationAlgorithm`; identical
+  behavior to original but algorithm is swappable
+- `dome_nav/explore_telemetry.py` — JSONL session logger
 - `dome_nav/slam_manager_node.py` — **LifecycleNode**: watches `/map`, saves pose graph
-  on first map receipt + every 30s.
+  on first map receipt + every 30s
 - `dome_nav/nav_manager_node.py` — ROS2 node: `/intent` → NavigateToPose, status,
-  `/amcl_pose` → localization status/score.
+  `/amcl_pose` → localization status/score
 - `dome_nav/utils.py` — `dome_home()`, `yaml_override()`, `yaml_patch_dict()`,
   `write_config()`
+- `tools/algo_demo.py` — **(F12 new)** interactive CLI demo of `FrontierAlgorithm` on
+  hand-crafted ASCII maps. ANSI 256-color; shows clusters A-Z, target T, goal G, robot R,
+  blacklist B. Maps: `room`, `corridor`, `ring`, `maze`, `large` (30×30, 3-room layout).
+  Args: `--map`, `--inset`, `--min-size`, `--min-dist`, `--sensor-radius`, `--auto`
 - `config/` — slam_param_patch, nav2_param_patch, nav2_amcl_patch, explore_param_patch
-- `launch/robot_map.launch.py` (Mode A) — accepts `map_name` arg (required, no default)
-- `launch/robot_nav.launch.py` (Mode B) — AMCL + Nav2
-- `launch/robot_explore.launch.py` (Mode E) — Mode A + explore_manager_node; accepts
-  `map_name` (required) and `max_explore_radius` (default 0.0 = unlimited)
+- `launch/robot_map.launch.py` (Mode A), `robot_nav.launch.py` (Mode B),
+  `robot_explore.launch.py` (Mode E)
 - `tools/nav_intent_check.py` — diagnostic: publishes target + intent, verifies nav pipeline
-- Tests: `test_nav_manager_pure.py` (22), `test_utils_pure.py` (5),
-  `test_nav_manager.py` (18, ROS), `test_slam_manager.py` (11, ROS lifecycle),
-  `test_frontier_explorer.py` (31, pure), `test_explore_manager_node.py` (30, ROS mock),
-  `test_map_validation.py` (4, manual/live only)
 
-## Test status
+## Tests
 
-**117 passed, 4 deselected** (manual) via
-`python3 -m pytest src/dome_nav/test/ -m "not manual"`.
+| File | Count | Type |
+|---|---|---|
+| `test_nav_manager_pure.py` | 22 | pure Python |
+| `test_utils_pure.py` | 5 | pure Python |
+| `test_frontier_explorer.py` | 31 | pure Python |
+| `test_frontier_algorithm.py` | 11 | pure Python |
+| `test_nav_manager.py` | 18 | ROS mock |
+| `test_slam_manager.py` | 11 | ROS lifecycle |
+| `test_explore_manager_node.py` | 30 | ROS mock |
+| `test_pluggable_explore_manager_node.py` | ~22 | ROS mock |
+| `test_map_validation.py` | 4 | manual/live only |
 
-## This session's work
+**42 pure-Python tests pass** (`test_frontier_algorithm.py` + `test_frontier_explorer.py`).
+ROS mock tests require ROS2 environment (run on robot).
 
-### F11 — RViz2 Exploration Markers (T01–T05 complete)
+## F12 summary (this session)
 
-1. **T01**: `package.xml` — added `<depend>visualization_msgs</depend>`
-2. **T02**: `explore_manager_node.py` — added `marker_pub`, `latest_clusters`,
-   `latest_map_info` state; imported `Point`, `Marker`, `MarkerArray`, `cell_to_world`
-3. **T03**: `find_and_send_frontier` — stores `self.latest_clusters` and
-   `self.latest_map_info` each tick
-4. **T04**: `publish_markers()` — three namespaces: `frontiers` (yellow POINTS),
-   `blacklist` (red POINTS), `goal` (cyan SPHERE). DELETE markers when not exploring.
-5. **T05**: `explore_tick()` — calls `publish_markers()` alongside `publish_status()`
-6. **T06**: Manual RViz2 smoke test — **verified live**. Yellow frontier starburst,
-   cyan goal sphere visible. Markers working correctly.
+All tasks done. Architecture is additive — original files untouched.
 
-### Live test observations (2026-06-26, test_run4 telemetry)
+- **T01** `explore_context.py` — `ExploreParams`, `ExplorationContext`, `ExplorationAlgorithm` Protocol
+- **T02** `frontier_algorithm.py` — `FrontierAlgorithm` wraps pure frontier functions
+- **T03** `pluggable_explore_manager_node.py` — pluggable ROS2 node (copy-and-modify)
+- **T04** `test_frontier_algorithm.py` — 11 pure Python tests (all passing)
+- **T05** `test_pluggable_explore_manager_node.py` — ROS mock tests (syntax verified)
+- **T06** Full suite regression — 42/42 pure tests pass
+- **T07** `tools/algo_demo.py` — interactive CLI demo with color, clusters, 5 maps
 
-Exploration IS working — robot moving and reaching goals:
-- Goals 2 and 4 reached in 2–3s with ~0.3m actual robot movement
-- Goals 1 and 3 timed out (25s) — Nav2 BT recovery loops, then blacklisted + skipped
-
-**Key finding — hop size issue:**
-All frontier picks land at exactly MIN_FRONTIER_DIST (0.8m) from robot. After
-GOAL_INSET_M=0.3m nudge, goal is always ~0.5m away. Robot makes tiny hops.
-
-From telemetry: frontier_xy distances from robot are all ~0.80m (1–4 goals).
-`pick_best_frontier` returns the nearest frontier cell → always at the threshold.
-
-**Two fixes under consideration:**
-1. Increase `MIN_FRONTIER_DIST` 0.8→1.5m — force larger hops, faster coverage
-2. Change `pick_best_frontier` to prefer large clusters over nearest cell —
-   avoids tiny wall-edge clusters close by, prefers open-area clusters further away
+**Future direction noted in `02-doc/notes.md`**: `CostmapFrontierAlgorithm` using
+`/global_costmap/costmap` instead of raw `/map` — fits pluggable design with no changes
+to existing code.
 
 ## Open issues (05-issues/open/)
 
-- I06: leading-underscore MUST violations (3 source + 3 test files) — partially
-  addressed in explore_manager_node; other files still pending
-- I07: localization score not clamped to 1.0 → already clamped in current code; verify
-  before closing
+- I06: leading-underscore MUST violations (3 source + 3 test files) — partially addressed
+- I07: localization score not clamped to 1.0 → already clamped; verify before closing
 - I08: test files missing header
 - I09: `should_save()` 1-line method — verify moot before closing
 
 ## Likely next steps
 
-1. **TF10 T06** — resolve hop-size issue: pick between MIN_FRONTIER_DIST increase
-   vs. cluster-size-preference strategy in `pick_best_frontier`
-2. **TF10 T07** — full live smoke test after tuning
-3. **TF11 T06** — already done (verified live this session)
-4. **TF09 T04** — live smoke test `nav go chair`
-5. **I06** — underscore rename sweep in remaining files
-6. **I07, I08, I09** — verify/close quick wins
+1. **I06** — underscore rename sweep in remaining files
+2. **I07, I08, I09** — verify/close quick wins
+3. **TF10 T06** — hop-size issue: increase `MIN_FRONTIER_DIST` 0.8→1.5m or add
+   cluster-size preference to `pick_best_frontier`
+4. **TF10 T07** — live smoke test after hop-size tuning
+5. **Live test** `pluggable_explore_manager_node` on hardware (swap in via launch file)
 
-## Intent contract
-
-All intents: `{"name": <intent>, "source": "cli", "slots": {...}}`
-
-| dome_control command | intent name | slots |
-|---|---|---|
-| `nav go <label>` | `navigation_go` | `{"label": "<label>"}` |
-| `nav cancel` | `navigation_cancel` | `{}` |
-| `nav explore` | `exploration_start` | `{}` |
-| `nav explore stop` | `exploration_stop` | `{}` |
-
-## Exploration params (explore_param_patch.yaml + explore_manager_node.py)
+## Exploration params (explore_param_patch.yaml)
 
 - `desired_linear_vel`: 0.12 m/s
-- `max_velocity`: [0.15, 0.0, 1.0]
-- `deadband_velocity`: [0.05, 0.0, 0.1]
 - `MIN_FRONTIER_SIZE`: 10 cells (noise threshold; good range 5–20)
 - `MIN_FRONTIER_DIST`: 0.8 m (must exceed GOAL_INSET_M + xy_goal_tolerance = 0.55 m)
-- `BLACKLIST_RADIUS`: 0.5 m (covers centroid drift across map updates)
+- `BLACKLIST_RADIUS`: 0.5 m
 - `GOAL_INSET_M`: 0.3 m (nudge goal off frontier boundary)
 - `GOAL_TIMEOUT_S`: 25.0 s (break Nav2 BT recovery loops)
 - `NO_FRONTIER_PATIENCE`: 8 ticks = 4 s at 2 Hz
-- `max_explore_radius`: 0.0 = unlimited (pass via `--max_explore_radius <m>`)
+- `max_explore_radius`: 0.0 = unlimited
 
 ## Launch commands
 
@@ -133,12 +113,12 @@ bl dome_nav robot_map.launch.py --map_name <name>
 # Mode B: navigation
 bl dome_nav robot_nav.launch.py --map_name <name>
 
-# Mode E: autonomous exploration
+# Mode E: autonomous exploration (original node)
 bl dome_nav robot_explore.launch.py --map_name <name>
 bl dome_nav robot_explore.launch.py --map_name <name> --max_explore_radius 8.0
 ```
 
-## Exploration manual commands (dome_control CLI broken)
+## Exploration manual commands
 
 ```bash
 # Start exploration
@@ -164,10 +144,7 @@ tail -f ~/.dome/telemetry/*.jsonl
  "goal_xy": [1.23, 4.56], "dist_m": 1.87, "elapsed_s": 4.2}
 ```
 
-Idle/done: `{"state": "idle", "reached": 0, "failed": 0}` or
-`{"state": "done", "reached": 5, "failed": 1}`
-
-`goal_xy`, `dist_m`, `elapsed_s` omitted when no active goal or TF unavailable.
+Idle/done: `{"state": "idle", "reached": 0, "failed": 0}`
 
 ## /explore/markers MarkerArray
 
@@ -177,7 +154,11 @@ Idle/done: `{"state": "idle", "reached": 0, "failed": 0}` or
 | `blacklist` (id=1) | POINTS | red | all blacklisted positions |
 | `goal` (id=2) | SPHERE | cyan | current nav goal; DELETE when none |
 
-## AMCL notes (unchanged)
+## Intent contract
 
-- Convergence: `covariance[0]` (x) and `covariance[7]` (y) both < 0.05 m² = converged
-- `set_initial_pose: true` at basement1 dock pose (x=-2.768, y=0.145, yaw=1.743)
+| dome_control command | intent name | slots |
+|---|---|---|
+| `nav go <label>` | `navigation_go` | `{"label": "<label>"}` |
+| `nav cancel` | `navigation_cancel` | `{}` |
+| `nav explore` | `exploration_start` | `{}` |
+| `nav explore stop` | `exploration_stop` | `{}` |
