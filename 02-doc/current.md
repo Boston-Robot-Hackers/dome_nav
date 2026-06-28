@@ -2,12 +2,12 @@
 
 ## Snapshot
 
-**Date:** 2026-06-27
+**Date:** 2026-06-28
 **Branch:** main
-**Status:** F12 complete + mid-navigation redirect implemented. 42 pure-Python tests pass.
-`tools/algo_demo.py` demo now uncovers cells along the robot's travel path (not just at
-destination). `pluggable_explore_manager_node.py` re-evaluates the frontier every tick
-during transit and cancels/redirects if the best goal has shifted >1.5 m.
+**Status:** F12 complete. 42 pure-Python tests pass. `tools/algo_demo.py` now has:
+- `compound` map (40×40, main room + gap + side corridor + two 4×4 obstacles)
+- Line-of-sight sensor reveal via Bresenham ray casting (walls block reveal)
+- Travel collision check: straight-line paths blocked by obstacles are blacklisted
 
 ## What exists
 
@@ -63,7 +63,7 @@ during transit and cancels/redirects if the best goal has shifted >1.5 m.
 **42 pure-Python tests pass** (`test_frontier_algorithm.py` + `test_frontier_explorer.py`).
 ROS mock tests require ROS2 environment (run on robot).
 
-## F12 summary (this session)
+## F12 summary
 
 All tasks done. Architecture is additive — original files untouched.
 
@@ -75,13 +75,22 @@ All tasks done. Architecture is additive — original files untouched.
 - **T06** Full suite regression — 42/42 pure tests pass
 - **T07** `tools/algo_demo.py` — interactive CLI demo with color, clusters, 5 maps
 
-**Post-F12 enhancements (same session):**
+**Post-F12 enhancements:**
 - `algo_demo.py`: `uncover_along_path()` — sweeps lidar reveal along travel path, not
   just at destination. Step size = sensor_radius/2 ensures full coverage.
 - `pluggable_explore_manager_node.py`: `check_goal_redirect()` — mid-navigation
   re-evaluation every tick. Cancels current goal (without blacklisting, via
   `is_redirecting` flag) if best frontier shifts >1.5 m (`REDIRECT_THRESHOLD`).
   Telemetry event: `"redirect"` with old/new goal xy and shift distance.
+
+**algo_demo.py additions (2026-06-28):**
+- `compound` map — 40×40, main room (cols 0–28) with vertical wall at col 29, 10-row
+  gap (rows 15–24) opening into a 10-col corridor, two 4×4 internal obstacles.
+- `bresenham_cells` + `has_line_of_sight` — Bresenham ray casting; walls and obstacles
+  block sensor reveal. Previously all unknown cells within radius were revealed.
+- Travel collision check in main loop — straight-line path blocked by obstacle causes
+  goal to be blacklisted rather than robot teleporting through the wall.
+- `01-literate/10-algo_demo.md` — new literate doc for algo_demo.py.
 
 **Future directions noted in `02-doc/notes.md`**:
 - `CostmapFrontierAlgorithm` using `/global_costmap/costmap` instead of raw `/map`
