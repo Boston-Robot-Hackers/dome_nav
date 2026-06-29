@@ -4,7 +4,7 @@
 
 **Date:** 2026-06-28
 **Branch:** main
-**Status:** F12 complete. 42 pure-Python tests pass. `tools/algo_demo.py` now has:
+**Status:** F12 complete; F13 (Gazebo simulation) feature + task files created. 74 pure-Python tests pass. `tools/algo_demo.py` now has:
 - `compound` map (40×40, main room + gap + side corridor + two 4×4 obstacles)
 - Line-of-sight sensor reveal via Bresenham ray casting (walls block reveal)
 - Travel collision check: straight-line paths blocked by obstacles are blacklisted
@@ -60,7 +60,7 @@
 | `test_pluggable_explore_manager_node.py` | ~22 | ROS mock |
 | `test_map_validation.py` | 4 | manual/live only |
 
-**42 pure-Python tests pass** (`test_frontier_algorithm.py` + `test_frontier_explorer.py`).
+**74 pure-Python tests pass** (`test_frontier_algorithm.py` + `test_frontier_explorer.py` + `test_nav_manager_pure.py` + `test_utils_pure.py`).
 ROS mock tests require ROS2 environment (run on robot).
 
 ## F12 summary
@@ -97,6 +97,16 @@ All tasks done. Architecture is additive — original files untouched.
 - Adaptive goal distance (prefer far frontiers when near ones are on the travel path)
 - Directional continuity bonus (discount frontiers already covered by path scanning)
 
+## F13 — Gazebo Simulation (new, not started)
+
+Feature file: `03-features/notdone/F13-gazebo-simulation.md`
+Task file: `04-tasks/notdone/TF13-gazebo-simulation.md`
+
+Goal: run full Mode E exploration stack (slam_toolbox + Nav2 + pluggable explore node)
+inside Gazebo Classic on a dev machine. Uses `linorobot2_gazebo` (already in workspace).
+New deliverables: `launch/sim_explore.launch.py`, `worlds/simple_room.world`. No new
+Python source. All 6 tasks are manual/launch-level.
+
 ## Open issues (05-issues/open/)
 
 - I06: leading-underscore MUST violations (3 source + 3 test files) — partially addressed
@@ -106,12 +116,13 @@ All tasks done. Architecture is additive — original files untouched.
 
 ## Likely next steps
 
-1. **I06** — underscore rename sweep in remaining files
-2. **I07, I08, I09** — verify/close quick wins
-3. **TF10 T06** — hop-size issue: increase `MIN_FRONTIER_DIST` 0.8→1.5m or add
+1. **F13 T01** — verify `linorobot2_gazebo gazebo.launch.py` runs on dev machine
+2. **F13 T02** — create `worlds/simple_room.world`
+3. **F13 T03** — create `launch/sim_explore.launch.py`
+4. **I06** — underscore rename sweep in remaining files
+5. **I07, I08, I09** — verify/close quick wins
+6. **TF10 T06** — hop-size issue: increase `MIN_FRONTIER_DIST` 0.8→1.5m or add
    cluster-size preference to `pick_best_frontier`
-4. **TF10 T07** — live smoke test after hop-size tuning
-5. **Live test** `pluggable_explore_manager_node` on hardware (swap in via launch file)
 
 ## Exploration params (explore_param_patch.yaml)
 

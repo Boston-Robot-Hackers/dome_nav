@@ -1,6 +1,6 @@
-To orient for this session:
+To orient for this session do every step listed here:
 
-1. Read and always obey and apply @.claude/style_guide.md
+1. Read and always obey and apply @.claude/style_guide.md and process.md 
 2. Read @02-doc/current.md
 3. Read @02-doc/notes.md
 4. List all files in 03-features/notdone/ and read each one
