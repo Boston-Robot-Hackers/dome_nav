@@ -43,13 +43,6 @@ velocity_smoother:
     max_accel: [1.5, 0.0, 3.2]
     max_decel: [-1.5, 0.0, -3.2]
 
-collision_monitor:
-  ros__parameters:
-    FootprintApproach:
-      points: "[[0.25, 0.25], [0.25, -0.25], [-0.25, -0.25], [-0.25, 0.25]]"
-      min_points: 1           # collision_monitor not actively used on dome
-
-
 docking_server:
   ros__parameters:
     dock_database: ""

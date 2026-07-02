@@ -1,10 +1,10 @@
 # F12 — Pluggable Exploration Algorithm
 
 **Priority**: High
-**Done:** no
-**Tasks File Created:** no
-**Tests Written:** no
-**Test Passing:** no
+**Done:** yes
+**Tasks File Created:** yes
+**Tests Written:** yes
+**Test Passing:** yes
 **Description**: Isolate the exploration decision logic behind a protocol so
 different algorithms (frontier, random-walk, local-scan, direct-motor) can be
 swapped without touching Nav2 or slam_toolbox plumbing. Algorithm is pure

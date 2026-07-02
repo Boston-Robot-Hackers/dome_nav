@@ -6,38 +6,41 @@
 **Tests Written:** no
 **Test Passing:** no
 **Description**: Add a simulation launch mode that runs the full dome_nav exploration
-stack (slam_toolbox + Nav2 + explore or pluggable explore node) inside Gazebo on a
-development machine, without physical hardware. Uses `linorobot2_gazebo` (already in
-the workspace) as the robot and sensor simulator.
+stack (slam_toolbox + Nav2 + explore or pluggable explore node) inside Gazebo Harmonic
+on a development machine, without physical hardware. Uses `ros_gz_sim` + `ros_gz_bridge`
+(already installed with ROS2 Jazzy) with a self-contained SDF robot model.
 
 ## Scope
 
 - `launch/sim_explore.launch.py` — single launch file that starts:
-  - Gazebo with a chosen world (`playground`, `gas_station`, or a new simple room world)
-  - linorobot2 robot spawn (URDF via `linorobot2_description`)
+  - Gazebo Harmonic (`ros_gz_sim`) with `worlds/simple_room.world`
+  - `ros_gz_bridge` for `/scan`, `/odom`, `/cmd_vel`, `/clock`, `/tf`
   - slam_toolbox online_async with `use_sim_time: true`
   - Nav2 stack with `use_sim_time: true`
-  - `pluggable_explore_manager_node` or `explore_manager_node`
+  - `pluggable_explore_manager_node` with `use_sim_time: true`
   - All `use_sim_time` flags propagated consistently — sim time is mandatory
-- A minimal Gazebo world (`worlds/simple_room.world`) sized for indoor exploration:
-  rooms, corridors, doorways that test frontier detection and navigation
-- Config: all existing `*_param_patch.yaml` files reused; `use_sim_time` override
+- `worlds/simple_room.world` — self-contained Gazebo Harmonic SDF: 8×8 m room,
+  interior dividing wall with 1 m doorway, diff-drive robot with 2D lidar.
+  Robot model defined in the world file; no external URDF or Fuel models required.
+- Config: existing `*_param_patch.yaml` files reused; `use_sim_time` override
   added where not already present
 - No new Python source files in `dome_nav/` — this feature is launch and config only
 
 ## Constraints
 
-- `use_sim_time: true` must be set for every node; a node that runs on wall clock
-  while others run on sim time will produce incorrect TF and costmap behavior
-- `linorobot2_gazebo` is already in the workspace — do not re-implement robot spawning
-- Gazebo Classic (gazebo_ros) is what linorobot2_gazebo uses; do not switch to gz-sim/Harmonic
+- `use_sim_time: true` must be set for every node; a node on wall clock while others
+  run on sim time will produce incorrect TF and costmap behavior
+- Gazebo Harmonic (`gz sim`) is what is installed on the dev machine; Gazebo Classic
+  (`gazebo_ros_pkgs`) is not available on ROS2 Jazzy and must not be used
+- `linorobot2_gazebo` cannot be used — it requires `gazebo_ros_pkgs` (Classic)
+- Robot model is self-contained in the SDF world file; no external model URIs
 - No changes to existing `robot_map.launch.py`, `robot_nav.launch.py`, or `robot_explore.launch.py`
 - `map_name` arg is required (same convention as other launch files)
 
 ## How to Demo
 
-**Setup**: ROS2 Jazzy environment sourced; workspace built; Gazebo Classic installed
-(`ros-jazzy-gazebo-ros-pkgs` or equivalent). No robot hardware required.
+**Setup**: ROS2 Jazzy environment sourced (`source /opt/ros/jazzy/setup.bash`).
+No robot hardware required. No extra packages to install.
 
 **Steps**:
 1. `bl dome_nav sim_explore.launch.py --map_name sim_test`

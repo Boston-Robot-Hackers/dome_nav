@@ -1,0 +1,295 @@
+<?xml version="1.0"?>
+<!--
+  dome3_sim.urdf — Simulation URDF for dome2 robot (Gazebo Harmonic)
+  Author: Pito Salas and Claude Code
+  Open Source Under MIT license
+
+  Extends dome2/config/dome3.urdf with:
+    - Inertia values on all dynamic links (required for Gazebo physics)
+    - Wheel friction surfaces
+    - Gazebo Harmonic plugins: DiffDrive (gz-sim 8 param names), gpu_lidar sensor, JointStatePublisher
+
+  Frame names and joint names match dome3.urdf exactly so TF trees are identical
+  between simulation and hardware.
+
+  Dimensions from dome3.urdf:
+    base_link cylinder: r=0.15 m, l=0.003 m
+    wheels:             r=0.03 m,  l=0.0175 m, separation=0.25 m
+    caster sphere:      r=0.015 m
+    laser at base_link: xyz="-0.15 0 0.1", rpy="0 0 -pi/2"
+
+  ros_gz_bridge topics (configured in sim_explore.launch.py):
+    /model/dome2/cmd_vel         <- /cmd_vel    (Twist)
+    /model/dome2/odometry        -> /odom        (Odometry)
+    /model/dome2/tf              -> /tf          (TFMessage)
+    /scan                        -> /scan        (LaserScan)
+    /model/dome2/joint_state     -> /joint_states (JointState)
+    /clock                       -> /clock       (Clock)
+-->
+<robot name="dome2">
+
+  <material name="gray">  <color rgba="0.5 0.5 0.5 1.0"/></material>
+  <material name="black"> <color rgba="0 0 0 1"/></material>
+  <material name="red">   <color rgba="1 0 0 1"/></material>
+  <material name="blue">  <color rgba="0.3 0.3 0.8 1"/></material>
+  <material name="green"> <color rgba="0 0.8 0 1"/></material>
+  <material name="yellow"><color rgba="1 1 0 1"/></material>
+  <material name="white"> <color rgba="1 1 1 1"/></material>
+  <material name="dark_red">  <color rgba="0.5 0 0 1"/></material>
+  <material name="dark_green"><color rgba="0 0.4 0 1"/></material>
+  <material name="light_blue"><color rgba="0.5 0.8 1.0 1.0"/></material>
+  <material name="clear_acrylic"><color rgba="0.8 0.8 1.0 0.6"/></material>
+
+  <!-- base_footprint: massless ground projection -->
+  <link name="base_footprint"/>
+
+  <!--
+    base_link: circular platform, r=0.15 m, l=0.003 m, mass=2.5 kg.
+    Ixx=Iyy = m/12*(3r²+h²) = 2.5/12*(3*0.0225+0.000009) = 0.01406
+    Izz      = m/2*r²        = 2.5/2*0.0225              = 0.02813
+  -->
+  <link name="base_link">
+    <inertial>
+      <mass value="2.5"/>
+      <inertia ixx="0.01406" ixy="0" ixz="0"
+               iyy="0.01406" iyz="0"
+               izz="0.02813"/>
+    </inertial>
+    <visual>
+      <geometry><cylinder radius="0.15" length="0.003"/></geometry>
+      <material name="gray"/>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="0.15" length="0.003"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="base_footprint_to_base_link" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0.05"/>
+  </joint>
+
+  <!--
+    Wheels: cylinder r=0.03 m, l=0.0175 m, mass=0.2 kg.
+    Spin axis is Y in link frame (visual rpy="pi/2 0 0" rotates cylinder Z→Y).
+    Ixx=Izz = m/12*(3r²+h²) = 0.2/12*(0.0027+0.000306) = 0.0000501
+    Iyy     = m/2*r²         = 0.2/2*0.0009             = 0.0000900
+  -->
+  <link name="left_wheel">
+    <inertial>
+      <mass value="0.2"/>
+      <inertia ixx="0.0000501" ixy="0" ixz="0"
+               iyy="0.0000900" iyz="0"
+               izz="0.0000501"/>
+    </inertial>
+    <visual>
+      <origin rpy="1.5707963267948966 0 0"/>
+      <geometry><cylinder radius="0.03" length="0.0175"/></geometry>
+      <material name="green"/>
+    </visual>
+    <collision>
+      <origin rpy="1.5707963267948966 0 0"/>
+      <geometry><cylinder radius="0.03" length="0.0175"/></geometry>
+    </collision>
+  </link>
+
+  <link name="right_wheel">
+    <inertial>
+      <mass value="0.2"/>
+      <inertia ixx="0.0000501" ixy="0" ixz="0"
+               iyy="0.0000900" iyz="0"
+               izz="0.0000501"/>
+    </inertial>
+    <visual>
+      <origin rpy="1.5707963267948966 0 0"/>
+      <geometry><cylinder radius="0.03" length="0.0175"/></geometry>
+      <material name="red"/>
+    </visual>
+    <collision>
+      <origin rpy="1.5707963267948966 0 0"/>
+      <geometry><cylinder radius="0.03" length="0.0175"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="base_link_to_left_wheel" type="continuous">
+    <parent link="base_link"/>
+    <child link="left_wheel"/>
+    <origin xyz="0.1 0.125 -0.03"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <joint name="base_link_to_right_wheel" type="continuous">
+    <parent link="base_link"/>
+    <child link="right_wheel"/>
+    <origin xyz="0.1 -0.125 -0.03"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <!--
+    Caster: sphere r=0.015 m, mass=0.05 kg (fixed joint, zero friction).
+    Ixx=Iyy=Izz = 2/5*m*r² = 0.4*0.05*0.000225 = 0.0000045
+  -->
+  <link name="caster">
+    <inertial>
+      <mass value="0.05"/>
+      <inertia ixx="0.0000045" ixy="0" ixz="0"
+               iyy="0.0000045" iyz="0"
+               izz="0.0000045"/>
+    </inertial>
+    <visual>
+      <geometry><sphere radius="0.015"/></geometry>
+      <material name="gray"/>
+    </visual>
+    <collision>
+      <geometry><sphere radius="0.015"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="base_link_to_caster" type="fixed">
+    <parent link="base_link"/>
+    <child link="caster"/>
+    <origin xyz="-0.12 0 -0.05"/>
+  </joint>
+
+  <!-- Laser post (visual only, fixed) -->
+  <link name="laser_post_link">
+    <visual>
+      <geometry><box size="0.01 0.01 0.09"/></geometry>
+      <material name="blue"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.01 0.01 0.09"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="base_link_to_laser_post_link" type="fixed">
+    <parent link="base_link"/>
+    <child link="laser_post_link"/>
+    <origin xyz="0 0 0.05"/>
+  </joint>
+
+  <!--
+    Laser: cylinder r=0.03 m, l=0.05 m, mass=0.1 kg. Axis along Z in link frame.
+    Ixx=Iyy = m/12*(3r²+h²) = 0.1/12*(0.0027+0.0025) = 0.0000433
+    Izz     = m/2*r²         = 0.1/2*0.0009           = 0.0000450
+    Frame matches hardware: xyz="-0.15 0 0.1" from base_link, rpy="0 0 -pi/2".
+    slam_toolbox uses this frame name ("laser") via its odom_frame config.
+  -->
+  <link name="laser">
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.0000433" ixy="0" ixz="0"
+               iyy="0.0000433" iyz="0"
+               izz="0.0000450"/>
+    </inertial>
+    <visual>
+      <geometry><cylinder radius="0.03" length="0.05"/></geometry>
+      <material name="light_blue"/>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="0.03" length="0.05"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="base_link_to_laser" type="fixed">
+    <parent link="base_link"/>
+    <child link="laser"/>
+    <origin xyz="-0.15 0 0.1" rpy="0 0 -1.5707963267948966"/>
+  </joint>
+
+  <!-- Remaining visual-only links from dome3.urdf (no inertia needed; fixed joints) -->
+  <link name="imu_link">
+    <visual><geometry><box size="0.03 0.02 0.01"/></geometry><material name="dark_red"/></visual>
+    <collision><geometry><box size="0.03 0.02 0.01"/></geometry></collision>
+  </link>
+  <joint name="base_link_to_imu_link" type="fixed">
+    <parent link="base_link"/><child link="imu_link"/>
+    <origin xyz="0.0 0 0.05" rpy="0 0 0"/>
+  </joint>
+
+  <link name="camera_link">
+    <visual><geometry><box size="0.09 0.02 0.03"/></geometry><material name="black"/></visual>
+    <collision><geometry><box size="0.09 0.02 0.03"/></geometry></collision>
+  </link>
+  <joint name="base_link_to_camera_link" type="fixed">
+    <parent link="base_link"/><child link="camera_link"/>
+    <origin xyz="0.13 0 0.08" rpy="-1.5357152088298105 -0.13962634015954636 -1.5707963267948966"/>
+  </joint>
+
+  <!-- ===== Gazebo Harmonic simulation extensions ===== -->
+
+  <!-- Wheel friction: mu=1.0 for traction, frictionless caster -->
+  <gazebo reference="left_wheel">
+    <collision><surface><friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction></surface></collision>
+  </gazebo>
+  <gazebo reference="right_wheel">
+    <collision><surface><friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction></surface></collision>
+  </gazebo>
+  <gazebo reference="caster">
+    <collision><surface><friction><ode><mu>0.0</mu><mu2>0.0</mu2></ode></friction></surface></collision>
+  </gazebo>
+
+  <!-- Differential drive plugin -->
+  <gazebo>
+    <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
+      <left_joint>base_link_to_left_wheel</left_joint>
+      <right_joint>base_link_to_right_wheel</right_joint>
+      <wheel_separation>0.25</wheel_separation>
+      <wheel_radius>0.03</wheel_radius>
+      <odom_publish_frequency>20</odom_publish_frequency>
+      <max_linear_velocity>0.3</max_linear_velocity>
+      <min_linear_velocity>-0.3</min_linear_velocity>
+      <max_angular_velocity>1.5</max_angular_velocity>
+      <min_angular_velocity>-1.5</min_angular_velocity>
+      <max_linear_acceleration>1.0</max_linear_acceleration>
+      <min_linear_acceleration>-1.0</min_linear_acceleration>
+      <max_angular_acceleration>2.0</max_angular_acceleration>
+      <min_angular_acceleration>-2.0</min_angular_acceleration>
+      <topic>/cmd_vel</topic>
+      <odom_topic>/odom</odom_topic>
+      <tf_topic>/tf</tf_topic>
+      <frame_id>odom</frame_id>
+      <child_frame_id>base_footprint</child_frame_id>
+    </plugin>
+  </gazebo>
+
+  <!-- Joint state publisher -->
+  <gazebo>
+    <plugin filename="gz-sim-joint-state-publisher-system"
+            name="gz::sim::systems::JointStatePublisher">
+      <topic>/model/dome2/joint_state</topic>
+    </plugin>
+  </gazebo>
+
+  <!-- 2D lidar on the laser link (360 deg, 10 Hz, 0.12-12 m) -->
+  <gazebo reference="laser">
+    <sensor name="lidar" type="gpu_lidar">
+      <topic>/scan</topic>
+      <always_on>true</always_on>
+      <update_rate>10</update_rate>
+      <lidar>
+        <scan>
+          <horizontal>
+            <samples>360</samples>
+            <resolution>1</resolution>
+            <min_angle>-3.14159265</min_angle>
+            <max_angle>3.14159265</max_angle>
+          </horizontal>
+        </scan>
+        <range>
+          <min>0.12</min>
+          <max>12.0</max>
+          <resolution>0.015</resolution>
+        </range>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.01</stddev>
+        </noise>
+      </lidar>
+      <visualize>true</visualize>
+    </sensor>
+  </gazebo>
+
+</robot>
