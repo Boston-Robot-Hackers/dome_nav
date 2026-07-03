@@ -45,10 +45,13 @@ class ExploreManagerNode(Node):
     BLACKLIST_RADIUS = 0.5
 
     # Robot must be at least this far from a frontier cell for it to be a valid goal.
-    # Prevents goals Nav2 deems already-reached (xy_goal_tolerance=0.25 m in patch).
-    # Must satisfy: MIN_FRONTIER_DIST > GOAL_INSET_M + xy_goal_tolerance.
-    # At current values: 0.8 > 0.3 + 0.25 = 0.55 ✓. Raising this skips nearby frontiers.
-    MIN_FRONTIER_DIST = 0.8
+    # This is checked on the raw frontier cell, before GOAL_INSET_M pulls the actual
+    # Nav2 goal closer to the robot — so the real floor on the sent goal's distance
+    # is MIN_FRONTIER_DIST - GOAL_INSET_M, not MIN_FRONTIER_DIST itself.
+    # Chosen so the actual Nav2 goal is never closer than 1.0 m from the robot:
+    # 1.3 - 0.3 = 1.0 m. Also satisfies the older invariant
+    # MIN_FRONTIER_DIST > GOAL_INSET_M + xy_goal_tolerance (1.3 > 0.3 + 0.25 = 0.55).
+    MIN_FRONTIER_DIST = 1.3
 
     # Nudge the frontier goal this far toward the robot before sending to Nav2.
     # Frontier cells sit at the known/unknown boundary — placing the goal exactly

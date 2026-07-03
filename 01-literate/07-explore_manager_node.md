@@ -1,6 +1,6 @@
 ---
-version: "1.3"
-generated: "2026-06-26"
+version: "1.4"
+generated: "2026-07-03"
 ---
 
 # ExploreManagerNode — Autonomous Frontier Exploration
@@ -108,9 +108,14 @@ robot via `nudge_toward_robot()` (pure function in `frontier_explorer.py`).
 Frontier cells sit at the edge of known space — placing the goal there lands
 it on or past the costmap boundary, causing a `worldToMap failed` planner error.
 
-`MIN_FRONTIER_DIST` (0.8 m) ensures the frontier cell is far enough that the
-nudged goal (`frontier_dist − 0.3 m`) still exceeds Nav2's `xy_goal_tolerance`
-(0.25 m). Minimum valid value: `GOAL_INSET_M + xy_goal_tolerance = 0.55 m`.
+`MIN_FRONTIER_DIST` (1.3 m, raised from 0.8 m on 2026-07-03) ensures the
+frontier cell is far enough that the nudged goal (`frontier_dist − 0.3 m`)
+never lands closer than 1.0 m from the robot — a deliberate policy choice
+("never ask Nav2 to go to a point closer than a full meter away"), stricter
+than the older minimum requirement of just exceeding Nav2's
+`xy_goal_tolerance` (0.25 m). That older invariant,
+`GOAL_INSET_M + xy_goal_tolerance = 0.55 m`, is still satisfied — 1.3 m is
+just well above it now rather than close to it.
 
 ## Blacklisting
 
@@ -215,3 +220,11 @@ recomputing the frontier scan.
 - Blacklist grows monotonically within a session. In a large space with many
   unreachable pockets the set could grow large, but the per-cell O(B) scan
   is fast in practice (B stays small relative to cluster size).
+- **`MIN_FRONTIER_DIST` was edited directly in this file on 2026-07-03**, a
+  deliberate exception to the F12-era convention that this node stays
+  untouched as the pluggable node's rollback-safe original (see
+  `09-pluggable_explore_manager_node.md`). The user explicitly requested the
+  1-meter-minimum-distance policy apply to both nodes, accepting that
+  tradeoff. Future changes to this file should stay this deliberate — treat
+  "untouched" as the default assumption, not an absolute rule that can never
+  be revisited with explicit sign-off.

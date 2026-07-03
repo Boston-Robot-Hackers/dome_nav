@@ -284,6 +284,16 @@ costmap inflation near the doorway**:
   `tf2_echo odom base_link` resolves; `sim_nav.launch.py` → `/map` publishes,
   `lifecycle_manager` log shows `Managed nodes are active` for all 10 servers (confirms the
   slam-before-nav2 fix). 155/155 pure tests pass after rebuild.
+- **`MIN_FRONTIER_DIST` raised 0.8→1.3 (2026-07-03)**, at explicit user request: "never ask
+  Nav2 to go to a point closer than a full meter away." The filter runs on the raw frontier
+  cell distance, before `GOAL_INSET_M` (0.3 m) pulls the actual sent goal closer — so the
+  real floor on the Nav2 goal is `min_frontier_dist - GOAL_INSET_M`, and 1.3 m gives exactly
+  the requested 1.0 m floor. Changed in both `ExploreParams` (`explore_context.py`, affects
+  the pluggable/sim node) and `explore_manager_node.py`'s `MIN_FRONTIER_DIST` constant (real
+  robot) — user explicitly chose to update both when asked, a deliberate one-off exception
+  to `explore_manager_node.py` normally staying untouched. 155/155 tests still pass (no
+  hardcoded 0.8 assumptions in the test suite). See `02-doc/current.md`'s Exploration params
+  section and `01-literate/07-explore_manager_node.md`'s Observations for the full rationale.
 
 ## T05 — End-to-end exploration smoke test
 **Status**: not done — blocked on T04's doorway costmap-inflation finding (robot cannot

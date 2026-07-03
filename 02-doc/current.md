@@ -373,14 +373,16 @@ in place.
 5. **F13 T06** — update feature/task file status, move to done, update this doc
 6. **I06** — underscore rename sweep in remaining files
 7. **I07, I08, I09** — verify/close quick wins
-8. **TF10 T06** — hop-size issue: increase `MIN_FRONTIER_DIST` 0.8→1.5m or add
-   cluster-size preference to `pick_best_frontier`
+8. **TF10 T06** — hop-size issue: `MIN_FRONTIER_DIST` was raised 0.8→1.3m on 2026-07-03
+   (see below) at the user's request for a 1.0m real-goal floor; still worth considering a
+   cluster-size preference in `pick_best_frontier` on top of this if hop-size issues persist.
 
 ## Exploration params (explore_param_patch.yaml + ExploreParams defaults)
 
 - `desired_linear_vel`: 0.12 m/s
 - `MIN_FRONTIER_SIZE`: 10 cells (noise threshold; good range 5–20)
-- `MIN_FRONTIER_DIST`: 0.8 m (must exceed GOAL_INSET_M + xy_goal_tolerance = 0.55 m)
+- `MIN_FRONTIER_DIST`: **1.3 m** (raised from 0.8 m on 2026-07-03, in both
+  `explore_manager_node.py` and `ExploreParams`' default — see note below)
 - `MAX_FRONTIER_DIST`: 0.0 (unlimited) at the `ExploreParams` dataclass level; the pluggable
   sim node (`pluggable_explore_manager_node` / `sim_explore.launch.py`) defaults its
   `max_frontier_dist` ROS parameter to 1.0 m, capping exploration hops in sim
@@ -389,6 +391,17 @@ in place.
 - `GOAL_TIMEOUT_S`: 25.0 s (break Nav2 BT recovery loops)
 - `NO_FRONTIER_PATIENCE`: 8 ticks = 4 s at 2 Hz
 - `max_explore_radius`: 0.0 = unlimited
+
+**`MIN_FRONTIER_DIST` 0.8→1.3 (2026-07-03)**: user request was "never ask Nav2 to go to a
+point closer than a full meter away." `min_frontier_dist`/`MIN_FRONTIER_DIST` filters the
+*raw frontier cell* distance, before `nudge_toward_robot()` pulls the actual Nav2 goal back
+toward the robot by `GOAL_INSET_M` (0.3 m) — so the real floor on the sent goal is
+`min_frontier_dist - GOAL_INSET_M`, not the raw value. `1.3 - 0.3 = 1.0` m gives the exact
+requested floor. Changed in **both** `ExploreParams` (pluggable/sim node) and
+`explore_manager_node.py`'s `MIN_FRONTIER_DIST` class constant (real robot) — the user
+explicitly chose "both nodes" when asked, which is a deliberate, one-off exception to the
+F12 rule that `explore_manager_node.py` stays untouched as the pluggable node's rollback-safe
+original. See `01-literate/07-explore_manager_node.md`'s Observations section.
 
 ## Launch commands
 

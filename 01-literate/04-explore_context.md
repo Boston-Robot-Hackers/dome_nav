@@ -1,5 +1,5 @@
 ---
-version: "1.1"
+version: "1.2"
 generated: "2026-07-03"
 ---
 
@@ -59,7 +59,7 @@ with descriptive names and typed defaults:
 class ExploreParams:
     min_frontier_size: int = 10
     blacklist_radius: float = 0.5
-    min_frontier_dist: float = 0.8
+    min_frontier_dist: float = 1.3
     max_frontier_dist: float = 0.0
     goal_inset_m: float = 0.3
     max_explore_radius: float = 0.0
@@ -71,10 +71,23 @@ What each field controls:
 |---|---|---|
 | `min_frontier_size` | cells | Clusters smaller than this are noise; skip them |
 | `blacklist_radius` | metres | Radius around a failed goal within which cells are excluded |
-| `min_frontier_dist` | metres | Ignore frontier cells closer than this to the robot |
+| `min_frontier_dist` | metres | Ignore frontier cells closer than this to the robot (checked pre-nudge — see below) |
 | `max_frontier_dist` | metres | Ignore frontier cells farther than this from the robot; 0.0 = unbounded |
 | `goal_inset_m` | metres | Pull the nav goal this far toward the robot (keeps it inside the costmap) |
 | `max_explore_radius` | metres | Bound exploration to a circle around `start_xy`; 0.0 = unbounded |
+
+**`min_frontier_dist` raised from 0.8 to 1.3 on 2026-07-03**, at the user's
+explicit request: "never ask Nav2 to go to a point closer than a full meter
+away." The subtlety is that this filter runs on the *raw frontier cell*
+distance, inside `pick_best_frontier()`, **before**
+`nudge_toward_robot()` pulls the actual coordinate handed to Nav2 back toward
+the robot by `goal_inset_m`. So the real floor on the sent goal's distance is
+`min_frontier_dist - goal_inset_m`, not `min_frontier_dist` itself — hence
+`1.3 - 0.3 = 1.0` m. The same offset was applied to
+`explore_manager_node.py`'s `MIN_FRONTIER_DIST` constant so both nodes enforce
+the same real-world floor (see `07-explore_manager_node.md`'s Observations for
+why that's a deliberate, explicitly-requested exception to that file
+otherwise staying untouched).
 
 The choice of `0.0` as the sentinel for "disabled" on `max_explore_radius` (and
 now `max_frontier_dist`) is worth noting. A negative value might feel more
