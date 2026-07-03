@@ -94,6 +94,7 @@ def pick_best_frontier(
     max_radius: float = 0.0,
     start_xy: tuple[float, float] | None = None,
     min_dist: float = 0.0,
+    max_dist: float = 0.0,
 ) -> tuple[float, float] | None:
     rx, ry = robot_xy
     bl = blacklist or set()
@@ -122,6 +123,8 @@ def pick_best_frontier(
             d = math.sqrt((wx - rx) ** 2 + (wy - ry) ** 2)
             if min_dist > 0.0 and d < min_dist:
                 continue
+            if max_dist > 0.0 and d > max_dist:
+                continue
             if d < goal_dist:
                 goal_dist = d
                 goal = (wx, wy)
@@ -140,25 +143,35 @@ def _frontier_diag(
     robot_xy: tuple[float, float],
     min_size: int,
     min_dist: float,
+    max_dist: float = 0.0,
 ) -> dict:
     # Returns filter-stage counts for telemetry. Cheap extra pass; only called
     # when pick_best_frontier returns None so normal-path performance is unaffected.
     rx, ry = robot_xy
     too_small = sum(1 for c in clusters if len(c) < min_size)
     large = [c for c in clusters if len(c) >= min_size]
-    all_too_close = 0
+    all_out_of_range = 0
     for cluster in large:
         if all(
-            math.sqrt((cell_to_world(i, info)[0] - rx) ** 2
-                      + (cell_to_world(i, info)[1] - ry) ** 2) < min_dist
+            _cell_out_of_range(cell_to_world(i, info), robot_xy, min_dist, max_dist)
             for i in cluster
         ):
-            all_too_close += 1
+            all_out_of_range += 1
     return {
         "too_small": too_small,
         "large_clusters": len(large),
-        "all_cells_too_close": all_too_close,
+        "all_cells_out_of_range": all_out_of_range,
     }
+
+
+def _cell_out_of_range(
+    cell_xy: tuple[float, float],
+    robot_xy: tuple[float, float],
+    min_dist: float,
+    max_dist: float,
+) -> bool:
+    d = math.sqrt((cell_xy[0] - robot_xy[0]) ** 2 + (cell_xy[1] - robot_xy[1]) ** 2)
+    return (min_dist > 0.0 and d < min_dist) or (max_dist > 0.0 and d > max_dist)
 
 
 def nudge_toward_robot(

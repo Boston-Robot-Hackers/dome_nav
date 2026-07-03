@@ -14,6 +14,7 @@ class ExploreParams:
     min_frontier_size: int = 10
     blacklist_radius: float = 0.5
     min_frontier_dist: float = 0.8
+    max_frontier_dist: float = 0.0
     goal_inset_m: float = 0.3
     max_explore_radius: float = 0.0
 

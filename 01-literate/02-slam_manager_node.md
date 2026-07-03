@@ -1,6 +1,6 @@
 ---
-version: "3.1"
-generated: "2026-06-18"
+version: "3.2"
+generated: "2026-07-03"
 ---
 
 # SlamManagerNode — Lifecycle Node for SLAM Persistence
@@ -58,15 +58,28 @@ emits while the node is active.
 
 ## Activate: start the save timer
 
-The 30-second timer only exists while the node is active. `on_activate` must
-call `super().on_activate(state)` so the lifecycle publisher actually starts
+The save timer only exists while the node is active. `on_activate` must call
+`super().on_activate(state)` so the lifecycle publisher actually starts
 emitting.
 
 ```python
     def on_activate(self, state):
-        self.save_timer = self.create_timer(self.SAVE_PERIOD_SEC, self.periodic_save)
+        self.save_timer = self.create_timer(self.save_period_sec, self.periodic_save)
         return super().on_activate(state)
 ```
+
+**Changed 2026-07-02**: the save period used to be a hardcoded class constant,
+`SAVE_PERIOD_SEC = 30.0`. It's now a declared ROS parameter, `save_period_sec`,
+read in `__init__` with `DEFAULT_SAVE_PERIOD_SEC = 30.0` as the default —
+unchanged behavior for the real robot, but `sim_explore.launch.py` sets it to
+`120.0` for Gazebo testing, since the 30-second default's repeated "Pose graph
+saved" logging was distracting during manual sim debugging where sessions run
+much longer than a typical mapping run. Note: the manual single-purpose debug
+launch files (`sim_robot.launch.py`, `sim_nav.launch.py`, see
+`11-sim_explore_launch.md`) don't start `slam_manager_node` at all — they only
+bring up `slam_toolbox` itself, not dome_nav's map-persistence wrapper around
+it — so this node currently only runs via `sim_explore.launch.py` or the real
+robot's `robot_map.launch.py`/`robot_explore.launch.py`.
 
 `on_deactivate` and `on_cleanup` tear these down through a shared
 `destroy_entities()` helper so there is one place that knows how to release the

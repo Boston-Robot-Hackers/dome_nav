@@ -17,13 +17,17 @@ def default_map_path() -> str:
 
 
 class SlamManagerNode(LifecycleNode):
-    SAVE_PERIOD_SEC = 30.0
+    DEFAULT_SAVE_PERIOD_SEC = 30.0
 
     def __init__(self):
         super().__init__("slam_manager_node")
         self.declare_parameter("map_persist_path", default_map_path())
         self.map_persist_path = (
             self.get_parameter("map_persist_path").get_parameter_value().string_value
+        )
+        self.declare_parameter("save_period_sec", self.DEFAULT_SAVE_PERIOD_SEC)
+        self.save_period_sec = (
+            self.get_parameter("save_period_sec").get_parameter_value().double_value
         )
         self.map_ready = False
         self.map_sub = None
@@ -43,7 +47,7 @@ class SlamManagerNode(LifecycleNode):
         return TransitionCallbackReturn.SUCCESS
 
     def on_activate(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.save_timer = self.create_timer(self.SAVE_PERIOD_SEC, self.periodic_save)
+        self.save_timer = self.create_timer(self.save_period_sec, self.periodic_save)
         return super().on_activate(state)
 
     def on_deactivate(self, state: LifecycleState) -> TransitionCallbackReturn:

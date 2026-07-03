@@ -104,14 +104,190 @@ updates visible in RViz synchronized with sim time.
   the full 12-node Nav2 stack (MPPI is itself compute-heavy) concurrently — likely CPU
   starvation causing MPPI to fall back to near-crawl velocities rather than a config issue.
 - Added a `headless` launch arg to `sim_explore.launch.py` (`--headless true` → `gz sim -r -s`,
-  server only, no GUI) — partly so RViz2 can be used instead, partly to test whether
-  removing GUI rendering load fixes the crawl-speed problem. Not yet retested.
-- Unresolved: frontier goals are consistently selected ~0.5 m from the robot even though
-  `MIN_FRONTIER_DIST` is configured at 0.8 m. Worth checking `pick_best_frontier` behavior
-  on this specific map before closing T04/T05.
+  server only, no GUI) so RViz2/Foxglove can be used instead of the Gazebo GUI.
+
+**Findings (2026-07-02) — package rebuild requirement discovered**: the workspace uses
+colcon copy-install, not symlink-install. Editing `.py`/world files under `src/` has no
+effect until `colcon build --packages-select dome_nav` runs — `bl`/`ros2 run` execute the
+copies under `install/`. Several confusing "the fix didn't work" moments this session were
+actually stale installs. Rebuild after every source edit before testing.
+
+**Findings (2026-07-02) — CPU load quantified and reduced, but not the whole story**:
+- `top`/`load average` confirmed real, severe CPU contention: load average 5.4–11 on this
+  2-core VM (healthy is ≤2.0), ~90% utilized even at baseline before exploration starts.
+- Used direct code instrumentation (`time.perf_counter()` around `explore_tick()`'s phases,
+  reverted after use — `ptrace`/`strace`/`py-spy` are all blocked in this sandbox, so live
+  profilers aren't available) to prove `pluggable_explore_manager_node`'s own tick logic is
+  cheap (0.1–6 ms/call), ruling out the node's own code as the CPU-usage source despite it
+  showing 25-27% CPU in `top`.
+- Root cause of *that* 25-27%: `/clock` was measured at 350-470 Hz in headless mode, driven
+  by `worlds/simple_room.world`'s `max_step_size: 0.001` (1ms physics steps, one `/clock`
+  message per step). Every `use_sim_time` node in the stack (12+ nodes) pays a message-
+  processing tax for that stream regardless of their own workload. Increased to
+  `max_step_size: 0.01` (10ms) — cut `/clock` to ~200 Hz and dropped overall system CPU from
+  ~90% utilized (9-11% idle) to ~50% utilized (50% idle). Real, measured, worth keeping.
+- **However, robot motion did not improve after the CPU fix** — a fresh test still timed out
+  a 0.5 m goal after 25.5 s with only 3.3 cm of movement. So CPU contention, while real, is
+  not the direct cause of the crawl/stall.
+- **Actual direct cause found**: `collision_monitor` is explicitly stopping the robot.
+  Log: `Failed to get "dome2/base_footprint/lidar"->"base_footprint" frame transform:
+  Lookup would require extrapolation into the past. Requested time 126.100000 but the
+  earliest data is at time 126.600000` immediately followed by `Robot to stop due to
+  invalid source.` This is designed safety behavior (stop if sensor data can't be verified
+  valid), not a crash. `/cmd_vel` was confirmed reading exactly `0,0,0` while this was
+  happening. This ties together the whole session's recurring "Detected jump back in time.
+  Clearing TF buffer." warnings — something is delaying processing of the lidar-frame TF
+  chain by ≥0.5s relative to its timestamp, and collision_monitor brakes every time that
+  gap causes a lookup failure. **Not yet root-caused** — candidates not yet ruled out:
+  TF buffer duration vs. actual processing latency, whether `gz_laser_frame_bridge` (the
+  static identity transform bridging the gz-renamed lidar frame) is itself contributing,
+  or `collision_monitor`'s `transform_tolerance`/`source_timeout` (currently Nav2 defaults,
+  0.2s / 1.0s) being too tight for this VM's latency under load.
+- Also fixed in passing: `check_goal_redirect()` was recomputing full frontier clustering
+  every 2Hz tick unconditionally, even though slam_toolbox's `map_update_interval: 5.0`
+  means `/map` only changes every ~5s — ~90% of those recomputes were wasted work on an
+  unchanged map. Added `frontier_goal_for_current_map()` in
+  `pluggable_explore_manager_node.py`, memoized by map `header.stamp`. Confirmed via the
+  same instrumentation: redirect cost dropped from ~4ms (fresh compute) to ~0.1ms (cache
+  hit) on all but the first tick after each new map. Kept — it's a correct, low-risk
+  efficiency win independent of the collision_monitor finding above.
+- Still unresolved: frontier goals are consistently selected ~0.5 m from the robot even
+  though `MIN_FRONTIER_DIST` is configured at 0.8 m. Worth checking `pick_best_frontier`
+  behavior on this specific map before closing T04/T05.
+- Also changed: `slam_manager_node.py`'s `SAVE_PERIOD_SEC` constant is now a declared ROS
+  parameter `save_period_sec` (default unchanged at 30.0), set to 120.0 in
+  `sim_explore.launch.py` — map-save logging was firing distractingly often during manual
+  testing.
+
+**Findings (2026-07-02, continued) — TF-extrapolation theory ruled out; real cause is
+costmap inflation near the doorway**:
+- Killed two orphaned `static_transform_publisher` processes left running from earlier
+  sessions (started 15:17/15:25, no matching Gazebo/bridge alive) before starting a clean
+  run — reconfirms the process-hygiene issue is not fully closed even after T03's cleanup-
+  pattern fix. Prefer an explicit `ps` audit + `kill -9` over trusting `pkill -f` alone.
+- Traced the TF chain for the failing lookup (`dome2/base_footprint/lidar`→`base_footprint`):
+  every edge in it (`gz_laser_frame_bridge`'s static transform, plus `robot_state_publisher`'s
+  fixed-joint transforms) is published on `/tf_static`, not `/tf`. The only dynamic edge in
+  the whole tree is `odom`→`base_footprint` from the DiffDrive plugin, which isn't even part
+  of this lookup. A purely time-latency explanation for the earlier "extrapolation into the
+  past" error doesn't hold up structurally — the mechanism only makes sense if something
+  (most plausibly a duplicate/conflicting `/clock` source from an orphaned process, matching
+  the pattern above) triggered tf2's "jump back in time" full-buffer clear, which also wipes
+  static entries that are not automatically redelivered to an already-connected listener.
+- With stale processes cleaned up, reran the full stack (`test3.bash`, then `test4.bash`) and
+  did **not** reproduce the TF-extrapolation error in ~40s of live `/rosout` monitoring across
+  multiple runs, despite the crawl/stall symptom (`/cmd_vel` ≈ 0 while `/cmd_vel_smoothed` was
+  non-zero) still being present. So TF lag is not the active cause in a clean run.
+- **Actual direct cause found**: `controller_server` log showed repeated `bt_navigator`
+  recovery sequences (Spin → Wait → BackUp) with `backup failed` / `Collision Ahead - Exiting
+  DriveOnHeading` while the robot sat at world position (0.10, 0.15) — inside the interior
+  doorway (gap spans x≈0, y −0.3…+0.3). `local_costmap`'s `inflation_radius: 0.2` combined
+  with `robot_radius: 0.15` leaves very little genuinely low-cost clearance in a 0.6 m-wide
+  doorway once the robot is positioned near either wall segment edge — the BackUp recovery
+  behavior's own collision check (also against the local costmap) correctly refuses to reverse
+  because inflated cost is immediately behind the robot in that tight space. This is a
+  geometry/tuning issue (doorway width vs. inflation_radius + robot_radius), not a TF/timing
+  bug. Confirmed independent of CPU load and independent of `/clock` behavior.
+- Also observed heavy goal-cancel thrashing from `check_goal_redirect()` (goals repeatedly
+  canceled after 0.0s and immediately replaced) compounding the appearance of a stall,
+  though the underlying blocker is the inflation issue above.
+- **Mitigation applied**: added a `max_frontier_dist` cap (`ExploreParams.max_frontier_dist`,
+  default 0.0 = unlimited at the pure-algorithm level; operational default 1.0 m via the
+  `pluggable_explore_manager_node` ROS parameter and `sim_explore.launch.py` launch arg) so
+  exploration only targets frontiers within ~1 m of the robot, on the theory that shorter
+  hops reduce exposure to any single bad costmap region and keep goals closer to what's
+  already been scanned. `pick_best_frontier()` in `frontier_explorer.py` gained a `max_dist`
+  parameter (mirrors the existing `min_dist`); wired through `frontier_algorithm.py`. Added
+  3 new pure-Python tests in `test_frontier_explorer.py` (max_dist filtering); 76/76 pure
+  tests pass. **Verified this does not fully resolve the stall**: rerunning with the 1 m cap
+  still produced a first goal at (0.284, 0.412) — right at the doorway's wall-segment
+  boundary (interior_wall_north starts at y=0.3) — which timed out after 25.2 s with only
+  0.08 m of robot movement. The distance cap avoids sending the robot far away, but the very
+  first frontier the robot must cross is the doorway itself, so it doesn't sidestep the
+  inflation problem. A real fix would need to reduce `local_costmap.inflation_layer.
+  inflation_radius` and/or widen the doorway in `worlds/simple_room.world`, or adjust
+  `cost_scaling_factor` — not yet attempted.
+- Removed the `headless` launch arg from `sim_explore.launch.py` entirely (GUI is now
+  needed for this kind of visual inflation/collision debugging, and the arg was newly added
+  last session specifically to avoid the GUI). Removed the now-broken `test3.bash` (headless
+  + foxglove) and replaced it with `test4.bash` (GUI + foxglove, same topic-presence checks).
+- Added `test5.bash` (GUI + bridge + rviz2, no slam/Nav2/explore, for isolating the
+  Gazebo/URDF/TF layer). First version passed the URDF inline as a `-p key:=value` CLI arg
+  to `robot_state_publisher`, which crashed on startup (`RCLInvalidROSArgsError` — rcl's
+  arg parser can't handle multi-line XML) — this is why the robot model never appeared in
+  RViz2. Fixed by writing the URDF into a temp YAML params file and using `--params-file`,
+  same mechanism `sim_explore.launch.py` uses via `better_launch`'s `params={...}` (which
+  does this automatically and invisibly). Verified: `/robot_description` publishes,
+  `tf2_echo odom base_link` resolves.
+- Added 6 single-job `better_launch` files so each piece of the bare sim/TF/RViz2 stack can
+  be started in its own terminal window without slam/Nav2/explore, for manual debugging:
+  `sim_gazebo.launch.py`, `sim_spawn.launch.py`, `sim_bridge.launch.py`,
+  `sim_robot_state_publisher.launch.py`, `sim_laser_tf.launch.py`, `sim_rviz.launch.py`.
+  Each just wraps one node/include from `sim_explore.launch.py` (or `test5.bash`) using the
+  same `better_launch` calls, so there's no duplicated logic to drift — they read the URDF
+  fresh from disk each run, same as `sim_explore.launch.py`.
+- Added `sim_nav2.launch.py` — 7th single-job file, starts the Nav2 stack with the same
+  config as `sim_explore.launch.py` (nav2_param_patch + explore_param_patch + sim-only speed
+  bump). Requires the other 5 gazebo/bridge/TF launch files already running for valid
+  TF/odom; without `sim_slam.launch.py` (not yet added) there's no `/map`, so
+  `global_costmap`'s static_layer just waits — Nav2 still activates cleanly. Verified via
+  smoke test: all lifecycle-managed servers activate, no crashes.
+- **Correction (2026-07-03)**: the above "Nav2 still activates cleanly" claim was wrong for
+  standalone `sim_nav2.launch.py` without a slam/localization node. Live-session debugging
+  found `planner_server`'s `global_costmap` blocks on activation waiting for a valid
+  `base_link → map` TF chain; without `slam_toolbox` (or AMCL) publishing `map → odom`, the
+  `map` frame never exists, `planner_server` times out after 60s, and `lifecycle_manager`
+  aborts the *entire* bringup on that one failure — leaving every other server stuck
+  `inactive` even though they configured fine individually. Also found and killed a stale
+  `opennav_docking` process orphaned from a prior day's session, which caused a duplicate
+  `/docking_server` node-name collision and a similar first-attempt activation failure
+  (`ros2 lifecycle get` calls can hang/misbehave against duplicate-named nodes — useful
+  diagnostic signal). Added `sim_slam.launch.py` (8th single-job file, `slam_toolbox`
+  online_async, same config as `sim_explore.launch.py`, requires `--map_name`) so the `map`
+  frame exists before Nav2 tries to activate.
+- Added `sim_explore_node.launch.py` (9th single-job file, `pluggable_explore_manager_node`,
+  requires `--map_name`, same `max_explore_radius`/`max_frontier_dist` defaults as
+  `sim_explore.launch.py`). Completes the manual single-job debug stack: gazebo, spawn,
+  bridge, RSP, laser TF, RViz2, Nav2, slam, explore node — same set of nodes as
+  `sim_explore.launch.py`, just split across 9 terminals for step-by-step debugging.
+- **Bug found + fixed (2026-07-03)**: first live exploration run on the 9-window stack
+  immediately reported "No frontiers found" and exhausted patience within 1 tick — telemetry
+  showed `large_clusters: 7` (frontiers of adequate size do exist) but
+  `all_cells_too_close: 0`, which looked contradictory. Root cause: `_frontier_diag()` in
+  `frontier_explorer.py` only ever checked `min_dist`, never `max_dist` — added when
+  `max_frontier_dist` was introduced earlier, but the diagnostic helper wasn't updated to
+  match, so it was blind to clusters filtered out for being too *far*. With the operational
+  default `max_frontier_dist=1.0` and `min_frontier_dist=0.8`, the valid target band is only
+  0.2 m wide; in this 4x4 m room a single lidar scan reveals most of the open area
+  immediately, so the nearest real frontier (room/doorway boundary) is very likely to land
+  outside that narrow band — the diag just couldn't say so. Fixed: `_frontier_diag()` now
+  takes `max_dist` too, renamed the counter `all_cells_too_close` → `all_cells_out_of_range`
+  (covers both filters), added `_cell_out_of_range()` helper, wired through
+  `frontier_algorithm.py`. `explore_manager_node.py` (original, untouched) still calls
+  `_frontier_diag()` with its old 5-arg signature — `max_dist` defaults to 0.0 there, so
+  nothing changes for it. Added a regression test in `test_frontier_explorer.py`. 155/155
+  pure tests pass. **Not yet fixed**: the underlying practical problem — `max_frontier_dist:
+  1.0` can be too restrictive for small rooms and may need to be raised (or explicitly
+  overridden via `--max_frontier_dist` on `sim_explore_node.launch.py`) to get exploration
+  moving at all in `simple_room.world`.
+- **Simplified (2026-07-03)**: consolidated the 9 single-job files down to 4, per user
+  request. `sim_robot.launch.py` = `sim_gazebo` + `sim_spawn` + `sim_bridge` +
+  `sim_robot_state_publisher` + `sim_laser_tf` (gazebo, spawn, bridge, RSP, laser TF — one
+  window for a visible, TF-correct robot). `sim_nav.launch.py` = `sim_slam` + `sim_nav2`,
+  in the dependency order live-debugging established (slam before Nav2, so `planner_server`
+  finds the `map` frame immediately instead of blocking 60s and aborting bringup). Deleted
+  the 7 superseded files: `sim_gazebo.launch.py`, `sim_spawn.launch.py`,
+  `sim_bridge.launch.py`, `sim_robot_state_publisher.launch.py`, `sim_laser_tf.launch.py`,
+  `sim_slam.launch.py`, `sim_nav2.launch.py`. Kept `sim_rviz.launch.py` and
+  `sim_explore_node.launch.py` separate (toggled independently of the rest). Smoke-tested
+  the new pair end-to-end: `sim_robot.launch.py` → `/robot_description` publishes,
+  `tf2_echo odom base_link` resolves; `sim_nav.launch.py` → `/map` publishes,
+  `lifecycle_manager` log shows `Managed nodes are active` for all 10 servers (confirms the
+  slam-before-nav2 fix). 155/155 pure tests pass after rebuild.
 
 ## T05 — End-to-end exploration smoke test
-**Status**: not done — blocked on T04's CPU-starvation/crawl-speed finding
+**Status**: not done — blocked on T04's doorway costmap-inflation finding (robot cannot
+reliably cross the interior doorway; recovery behaviors fail there too)
 **Description**: Full demo of the feature as described in F13 How to Demo:
 launch sim, publish `exploration_start`, observe robot driving and map filling,
 publish `exploration_stop` or wait for auto-stop, confirm map saved to

@@ -9,8 +9,12 @@
 <sdf version="1.8">
   <world name="simple_room">
 
-    <physics name="1ms" type="ignored">
-      <max_step_size>0.001</max_step_size>
+    <!-- 1ms steps meant ~1000 /clock messages/sec in theory (measured 350-470Hz under
+         load) that every use_sim_time node in the stack has to process, independent of
+         their own work — a real, measured CPU cost (see TF13 T04 notes). 10ms is still
+         fine-grained for a simple diff-drive robot and cuts that message rate ~10x. -->
+    <physics name="10ms" type="ignored">
+      <max_step_size>0.01</max_step_size>
       <real_time_factor>1.0</real_time_factor>
     </physics>
 

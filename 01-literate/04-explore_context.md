@@ -1,6 +1,6 @@
 ---
-version: "1.0"
-generated: "2026-06-27"
+version: "1.1"
+generated: "2026-07-03"
 ---
 
 # ExploreContext — Data Types and Protocol for Pluggable Exploration
@@ -60,6 +60,7 @@ class ExploreParams:
     min_frontier_size: int = 10
     blacklist_radius: float = 0.5
     min_frontier_dist: float = 0.8
+    max_frontier_dist: float = 0.0
     goal_inset_m: float = 0.3
     max_explore_radius: float = 0.0
 ```
@@ -71,13 +72,23 @@ What each field controls:
 | `min_frontier_size` | cells | Clusters smaller than this are noise; skip them |
 | `blacklist_radius` | metres | Radius around a failed goal within which cells are excluded |
 | `min_frontier_dist` | metres | Ignore frontier cells closer than this to the robot |
+| `max_frontier_dist` | metres | Ignore frontier cells farther than this from the robot; 0.0 = unbounded |
 | `goal_inset_m` | metres | Pull the nav goal this far toward the robot (keeps it inside the costmap) |
 | `max_explore_radius` | metres | Bound exploration to a circle around `start_xy`; 0.0 = unbounded |
 
-The choice of `0.0` as the sentinel for "disabled" on `max_explore_radius` is
-worth noting. A negative value might feel more self-documenting, but `0.0` was
-chosen because it maps cleanly to a simple `if max_radius > 0.0:` guard without
-requiring an `Optional[float]`.
+The choice of `0.0` as the sentinel for "disabled" on `max_explore_radius` (and
+now `max_frontier_dist`) is worth noting. A negative value might feel more
+self-documenting, but `0.0` was chosen because it maps cleanly to a simple
+`if max_radius > 0.0:` guard without requiring an `Optional[float]`.
+
+**`max_frontier_dist` added 2026-07-03** for the Gazebo sim work: caps how far a
+single exploration hop can be, on the theory that short hops reduce exposure to
+any one bad costmap region. The dataclass default stays `0.0` (unlimited) to
+keep this module's own tests and the real-robot algorithm unaffected;
+`pluggable_explore_manager_node` sets an operational default of `1.0` m via its
+own ROS parameter (see `09-pluggable_explore_manager_node.md`). Splitting the
+"safe algorithmic default" from the "operational sim default" this way avoids
+the two use cases fighting over one constant.
 
 Using a dataclass rather than a plain dict has two advantages. First, attribute
 access is type-checked by the type checker and autocompleted by the IDE —

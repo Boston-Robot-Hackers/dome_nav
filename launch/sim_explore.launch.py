@@ -15,7 +15,7 @@ from dome_nav.utils import dome_home, yaml_override, yaml_patch_dict
 def sim_explore_launch(
     map_name: str = "",
     max_explore_radius: float = 0.0,
-    headless: bool = False,
+    max_frontier_dist: float = 1.0,
 ):
     if not map_name:
         raise ValueError(
@@ -70,10 +70,9 @@ def sim_explore_launch(
         }},
     })
 
-    # Gazebo + robot spawn. -s runs the server only (no GUI) so RViz2 can be used
-    # instead, without contending for the same rendering resources.
-    gz_args = ["-r", "-s"] if headless else ["-r"]
-    gazebo.gazebo_launch("dome_nav", "simple_room.world", gz_args=gz_args)
+    # Gazebo + robot spawn (GUI always on — needed to visually inspect costmap
+    # inflation and robot behavior near obstacles during exploration debugging).
+    gazebo.gazebo_launch("dome_nav", "simple_room.world", gz_args=["-r"])
     gazebo.spawn_model(
         "dome2",
         urdf_path,
@@ -122,7 +121,11 @@ def sim_explore_launch(
         "dome_nav",
         "slam_manager_node",
         name="slam_manager",
-        params={"map_persist_path": slam_map_path, "use_sim_time": True},
+        params={
+            "map_persist_path": slam_map_path,
+            "use_sim_time": True,
+            "save_period_sec": 120.0,
+        },
         ros_waittime=30.0,
         lifecycle_waittime=None,
     )
@@ -134,6 +137,7 @@ def sim_explore_launch(
         name="explore_manager",
         params={
             "max_explore_radius": max_explore_radius,
+            "max_frontier_dist": max_frontier_dist,
             "map_name": map_name,
             "use_sim_time": True,
         },

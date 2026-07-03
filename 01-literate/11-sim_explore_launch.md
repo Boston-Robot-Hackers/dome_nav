@@ -1,6 +1,6 @@
 ---
-version: "1.0"
-generated: "2026-07-01"
+version: "1.1"
+generated: "2026-07-03"
 ---
 
 # sim_explore.launch.py — Autonomous Exploration in Gazebo
@@ -21,6 +21,11 @@ standard `ros2launch` ones) imperatively, in the order they're written, rather t
 building a declarative `LaunchDescription` tree. That imperative style is what makes this
 file readable: each stage is a paragraph of code that does one thing and then hands off to
 the next.
+
+For debugging the individual pieces of this stack in isolation (one Gazebo/TF/Nav2/slam
+piece per terminal, rather than the whole thing at once), see `X07-sim_debug_launch_files.md`
+— four companion launch files built by decomposing this one and later recombining into a
+more manageable set once the granular version had served its debugging purpose.
 
 ```mermaid
 flowchart TD
@@ -142,18 +147,20 @@ silently ignoring every scan.
 
 ---
 
-## Headless Mode
+## GUI Always On (headless mode removed 2026-07-02)
 
 ```python
-gz_args = ["-r", "-s"] if headless else ["-r"]
-gazebo.gazebo_launch("dome_nav", "simple_room.world", gz_args=gz_args)
+gazebo.gazebo_launch("dome_nav", "simple_room.world", gz_args=["-r"])
 ```
 
-`-r` starts the world unpaused; `-s` runs the Gazebo *server* only, skipping the GUI
-client. This exists for two reasons: it frees a development machine to run RViz2 against
-the same topics instead of (or alongside) Gazebo's own 3D view, and — on resource-limited
-machines — it removes the GUI's software-rendered scene from CPU contention with Nav2's
-own control loop, which competes for the same cores.
+`-r` starts the world unpaused. A `headless` launch arg (`-s`, server-only, no
+GUI) existed briefly — added to free a development machine to run RViz2
+against the same topics without GUI rendering competing for CPU — but was
+removed once the doorway costmap-inflation stall investigation made it clear
+the GUI is actually needed for this kind of work: watching the robot's actual
+behavior near obstacles, and the local costmap's inflated cost region, is hard
+to debug from topic echoes alone. See `02-doc/current.md`'s F13 T04 notes for
+the finding that motivated this reversal.
 
 ---
 
@@ -184,11 +191,11 @@ the launch has always succeeded so far.
   are easy to lose track of** since they live in two different files read in sequence.
   A comment at the top of `explore_param_patch.yaml` pointing at this override (and vice
   versa) would help a future reader avoid re-deriving this relationship from scratch.
-- **`headless` interacting with performance** is currently a hypothesis, not a verified
-  fact — it hasn't yet been confirmed whether removing GUI rendering actually resolves the
-  slow-motion behavior observed under load, or whether the bottleneck is elsewhere (MPPI's
-  own per-cycle cost, DDS traffic, or something else). Worth a real before/after
-  measurement once this is revisited.
+- **The slow-motion behavior under load was eventually root-caused** (2026-07-02) to
+  costmap inflation near the world's interior doorway, not GPU/CPU contention from GUI
+  rendering — the `headless` hypothesis mentioned in earlier versions of this document
+  turned out not to be the actual cause, which is part of why the option was removed
+  rather than kept as a workaround.
 - **The lidar frame bridge's identity transform** works, but its necessity is only
   documented in a comment; a short assertion or startup log line confirming the expected
   gz-renamed frame actually appears in `/tf` would turn a silent failure mode (scans

@@ -7,6 +7,7 @@ import math
 import pytest
 from dome_nav.frontier_explorer import (
     MapInfo,
+    _frontier_diag,
     cell_to_world,
     find_frontier_clusters,
     nudge_toward_robot,
@@ -314,3 +315,34 @@ def test_pick_ring_cluster_centroid_near_robot():
     # nearest cell in ring to robot: all at distance sqrt(2) ≈ 1.414, all > 0.5 min_dist
     dist = math.sqrt((result[0] - robot_xy[0]) ** 2 + (result[1] - robot_xy[1]) ** 2)
     assert dist >= 0.5
+
+
+def test_pick_all_cells_over_max_dist_skips_cluster():
+    # All cells farther than max_dist → cluster skipped entirely.
+    info = make_info(10, 1, resolution=1.0)
+    cluster = [8]  # world x=8.5, dist=8.5
+    result = pick_best_frontier([cluster], info, (0.0, 0.0), min_size=1, max_dist=1.0)
+    assert result is None
+
+
+def test_frontier_diag_reports_cells_filtered_by_max_dist():
+    # Regression: a cluster entirely beyond max_dist must be counted in
+    # all_cells_out_of_range, even though it passes the min_dist check (bug found
+    # 2026-07-03 — the diag helper only checked min_dist, so pick_best_frontier
+    # returning None due to max_dist filtering looked like an unexplained gap in
+    # telemetry: large_clusters > 0 but all_cells_out_of_range reported 0).
+    info = make_info(10, 1, resolution=1.0)
+    cluster = [8]  # world x=8.5, dist=8.5 from robot at (0,0)
+    diag = _frontier_diag([cluster], info, (0.0, 0.0), min_size=1, min_dist=0.0,
+                           max_dist=1.0)
+    assert diag["large_clusters"] == 1
+    assert diag["all_cells_out_of_range"] == 1
+
+
+def test_pick_returns_cell_within_max_dist():
+    # Nearest in-range cell is returned when max_dist excludes farther cells.
+    info = make_info(10, 1, resolution=1.0)
+    cluster = [0, 5]  # world x: 0.5 (dist 0.5), 5.5 (dist 5.5)
+    result = pick_best_frontier([cluster], info, (0.0, 0.0), min_size=1, max_dist=1.0)
+    assert result is not None
+    assert abs(result[0] - 0.5) < 1e-6

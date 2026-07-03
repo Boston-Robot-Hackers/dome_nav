@@ -1,0 +1,257 @@
+---
+version: "1.0"
+generated: "2026-07-03"
+---
+
+# sim_robot.launch.py, sim_nav.launch.py, sim_rviz.launch.py, sim_explore_node.launch.py — Piece-by-Piece Sim Debugging
+
+## What These Are and Why They Exist
+
+`sim_explore.launch.py` (see `11-sim_explore_launch.md`) brings up the entire
+Mode E sim stack in one process. That's the right shape for day-to-day use,
+but it's the wrong shape for debugging *which piece* of the stack is
+misbehaving — when something goes wrong, the only signal is a combined log
+stream from nine-plus nodes that all started within the same few seconds.
+
+These four files exist so the same stack can be brought up **one dependency
+layer at a time**, in separate terminals, with time to inspect each layer
+before starting the next. They were built and used live during two real
+investigations this way:
+
+1. Whether Nav2 could activate cleanly *without* anything else running (it
+   could not — see below).
+2. Why a fresh exploration session immediately reported "no frontiers found"
+   (a bug in telemetry diagnostics, not in the stack itself — see
+   `06-frontier_explorer.md`).
+
+Both bugs were only visible because the stack could be paused mid-assembly
+and inspected — something `sim_explore.launch.py`'s all-in-one launch doesn't
+allow.
+
+## From Nine Files Down to Four
+
+The first version of this idea was nine single-node files — one per
+node/include in `sim_explore.launch.py` (Gazebo, spawn, bridge,
+`robot_state_publisher`, the static laser-frame TF, RViz2, slam_toolbox, Nav2,
+and the explore node). That granularity was exactly right for finding the two
+bugs described below — each layer could be started and inspected in complete
+isolation. Once the debugging was done, nine terminal windows for routine use
+was needless overhead, so they were consolidated into four, grouped by what
+actually depends on what:
+
+```mermaid
+flowchart TD
+    R["sim_robot.launch.py\nGazebo, spawn, bridge, RSP, laser TF"]
+    N["sim_nav.launch.py\nslam_toolbox, then Nav2"]
+    V["sim_rviz.launch.py\nRViz2"]
+    E["sim_explore_node.launch.py\npluggable_explore_manager_node"]
+
+    R --> N
+    R --> V
+    N --> E
+
+    classDef req fill:#1a6b8a,stroke:#0d4f6e,color:#ffffff
+    class R,N req
+```
+
+`sim_rviz.launch.py` only needs *something* publishing topics to be useful —
+it doesn't have a hard dependency, though it's more useful once `sim_robot`
+is up. `sim_explore_node.launch.py` genuinely needs `sim_nav` (Nav2 to send
+goals to) and, transitively, `sim_robot` (valid TF/scan/odom).
+
+## sim_robot.launch.py — Everything Needed for a Visible, TF-Correct Robot
+
+This is `sim_explore.launch.py`'s first five stages, unchanged, extracted
+verbatim:
+
+```python
+gazebo.gazebo_launch("dome_nav", "simple_room.world", gz_args=["-r"])
+gazebo.spawn_model(
+    "dome2", urdf_path,
+    spawn_args=gazebo.get_gazebo_axes_args(x=-1.0, y=-1.0, z=0.05),
+)
+gazebo.spawn_topic_bridge(
+    GazeboBridge.clock_bridge(),
+    GazeboBridge("/scan", "sensor_msgs/msg/LaserScan", "gz2ros"),
+    GazeboBridge("/odom", "nav_msgs/msg/Odometry", "gz2ros"),
+    GazeboBridge("/tf", "tf2_msgs/msg/TFMessage", "gz2ros"),
+    GazeboBridge("/cmd_vel", "geometry_msgs/msg/Twist", "ros2gz"),
+    GazeboBridge("/model/dome2/joint_state", "sensor_msgs/msg/JointState", "gz2ros",
+                 remaps={"/model/dome2/joint_state": "/joint_states"}),
+)
+bl.node("robot_state_publisher", "robot_state_publisher",
+        params={"robot_description": robot_description, "use_sim_time": True})
+bl.node("tf2_ros", "static_transform_publisher", name="gz_laser_frame_bridge",
+        params={"use_sim_time": True},
+        cmd_args=["0", "0", "0", "0", "0", "0", "laser", "dome2/base_footprint/lidar"])
+```
+
+Nothing here needs a `map_name` argument, because none of these five pieces
+know or care about a saved map — the robot is fully visible and drivable
+(via `/cmd_vel`) with just this. Success is checkable directly:
+`/robot_description` should have a publisher, and `tf2_echo odom base_link`
+should resolve rather than reporting a missing frame.
+
+**A subtle `better_launch` gotcha found while writing the first, split-apart
+version of this file**: `gazebo.gazebo_launch()`, `gazebo.spawn_model()`, and
+`gazebo.spawn_topic_bridge()` all call `BetterLaunch.instance()` internally to
+find the current launch context. That singleton is only populated once
+`BetterLaunch()` has actually been *constructed* somewhere in the process —
+`sim_explore.launch.py` does this implicitly because it needs a `bl` reference
+for other calls anyway, but a file that only calls these `gazebo.*` helper
+functions and never itself calls `BetterLaunch()` gets
+`AttributeError: 'NoneType' object has no attribute 'find'`. The fix is one
+line — `bl = BetterLaunch()` at the top of the function, even if `bl` is
+otherwise unused in a particular file — but it's exactly the kind of implicit
+dependency that only surfaces once you try to extract a subset of an existing
+launch file's calls into a new one.
+
+## sim_nav.launch.py — slam_toolbox, Then Nav2, In That Order
+
+This is where the more interesting bug was found. The file itself is
+unsurprising — `slam_toolbox`'s `online_async_launch.py` include, followed by
+`nav2_bringup`'s `navigation_launch.py` include, both with the same config
+construction `sim_explore.launch.py` already uses:
+
+```python
+bl.include("slam_toolbox", "online_async_launch.py",
+    **{"slam_params_file": slam_config, "use_sim_time": "true"})
+
+bl.include("nav2_bringup", "navigation_launch.py",
+    **{"params_file": nav2_config, "use_sim_time": "true"})
+```
+
+What's *not* obvious from reading this code is that the order matters a
+great deal, and the failure mode when you get it wrong is confusing.
+
+### Why Nav2 Can't Activate Alone
+
+The first version of this debugging split had a standalone `sim_nav2.launch.py`
+— Nav2, with nothing providing localization. Bringing it up on top of a bare
+`sim_robot.launch.py` (no slam, no map) produced this from
+`lifecycle_manager`'s log:
+
+```
+Configuring docking_server
+Activating controller_server
+Server controller_server connected with bond.
+Activating smoother_server
+Server smoother_server connected with bond.
+Activating planner_server
+[60 second gap]
+Failed to change state for node: planner_server
+Failed to bring up all requested nodes. Aborting bringup.
+```
+
+`planner_server` owns the global costmap, and the global costmap's activation
+blocks on a valid `base_link → map` TF chain — which only exists once
+something (slam_toolbox or AMCL) is publishing `map → odom`. With neither
+running, that transform never appears, so `planner_server`'s `on_activate()`
+call hangs until Nav2's internal service-call timeout (60 s) expires and
+`lifecycle_manager` gives up.
+
+The costly part isn't the 60-second wait itself — it's that
+`lifecycle_manager`'s bringup is **all-or-nothing**. One server failing to
+activate aborts the *entire* sequence, so every other server (`controller_server`,
+`smoother_server`, `bt_navigator`, everything) is left stuck in `inactive`
+even though each one individually configured and would have activated fine on
+its own. A user watching this fail sees the exact symptom of a broken robot —
+`Invalid frame ID "map" ... frame does not exist` — with no obvious link back
+to "the launch order was wrong."
+
+```mermaid
+sequenceDiagram
+    participant LM as lifecycle_manager
+    participant CS as controller_server
+    participant PS as planner_server
+    participant TF as TF tree
+
+    LM->>CS: configure, activate
+    CS-->>LM: bonded (ok)
+    LM->>PS: configure, activate
+    PS->>TF: wait for base_link->map
+    Note over TF: no slam/AMCL running —<br/>map frame never appears
+    TF--xPS: timeout after 60s
+    PS--xLM: activation failed
+    LM->>LM: abort entire bringup
+    Note over CS: stays configured but<br/>never gets deactivated —<br/>stuck inactive
+```
+
+Combining slam and Nav2 into one file, in the right order, makes this a
+non-issue: `/map` exists (from slam_toolbox) before `planner_server` ever
+tries to activate, so the TF chain is already valid and activation completes
+in a couple of seconds instead of sixty. Confirmed via the same
+`lifecycle_manager` log showing `Managed nodes are active` for all ten
+servers on the very next attempt.
+
+### A Second, Unrelated Failure Mode Found the Same Day
+
+While debugging the above, a *different* activation failure appeared on a
+retry: `lifecycle_manager` again aborted, this time reporting `Failed to
+change state for node: docking_server` — even though `docking_server`'s own
+log showed it had configured successfully. `ros2 node list` explained why: two
+nodes were both registered as `/docking_server`. One was the current run; the
+other was an `opennav_docking` process still alive from **the previous day's**
+session (`ps` showed a start time of `Jul02`, not the current day).
+
+ROS2's node-name resolution doesn't disambiguate between two nodes claiming
+the same name — the service call `lifecycle_manager` made almost certainly
+landed on the stale node (already `active` from its old run), and an
+`active → configuring` transition is invalid, hence the failure. Killing the
+orphaned process and retrying fixed it immediately.
+
+This is the same family of bug documented in `02-doc/current.md`'s
+process-hygiene notes (`pkill -f` unreliably matching long command lines), but
+notable here for persisting across an entire day rather than just within one
+debugging session — a reminder that "did I clean up from last time" needs to
+be checked regardless of how much time has passed, not just right after a
+crash.
+
+## sim_rviz.launch.py and sim_explore_node.launch.py
+
+Both are thin, single-`bl.node()` wrappers with no surprises:
+
+```python
+bl.node("rviz2", "rviz2", params={"use_sim_time": True})
+```
+
+```python
+bl.node("dome_nav", "pluggable_explore_manager_node", name="explore_manager",
+        params={
+            "max_explore_radius": max_explore_radius,
+            "max_frontier_dist": max_frontier_dist,
+            "map_name": map_name,
+            "use_sim_time": True,
+        },
+        ros_waittime=30.0)
+```
+
+`sim_explore_node.launch.py` exposes `max_frontier_dist` as a launch argument
+(default `1.0`, matching the node's own ROS parameter default) specifically so
+it can be overridden from the command line while debugging — see
+`06-frontier_explorer.md` for why that default turned out to be too tight for
+`simple_room.world` and needed a `--max_frontier_dist 3.0`-style override to
+get exploration moving at all.
+
+## Observations
+
+- **`sim_robot.launch.py` and `sim_nav.launch.py` don't start `slam_manager_node`**
+  (dome_nav's own lifecycle wrapper that persists slam_toolbox's pose graph
+  periodically) — only `sim_explore.launch.py` and the real-robot launch files
+  do. This was true even of the original nine-file split (there was never a
+  `sim_slam_manager.launch.py`). It's not a bug — nothing in this debug stack
+  needs map persistence — but it does mean a map built via `sim_nav.launch.py`
+  alone won't get saved to disk unless `sim_explore.launch.py` is used instead.
+- **The all-or-nothing `lifecycle_manager` bringup behavior** that caused the
+  Nav2-without-slam failure is a Nav2 property, not something this codebase
+  controls. It's worth remembering as a general debugging heuristic beyond
+  this specific case: if *one* lifecycle node in a Nav2 stack looks like it
+  never activated, check whether some *other* node's activation failed and
+  aborted the whole sequence, rather than assuming the node you're looking at
+  is the one that's actually broken.
+- **These four files duplicate config-construction code** (the `yaml_override`/
+  `yaml_patch_dict` chains for slam and Nav2 params) that also exists in
+  `sim_explore.launch.py`. This is deliberate for now — extracting a shared
+  helper would couple the debug files to the all-in-one file's internals in a
+  way that would make it harder to run pieces in isolation with different
+  overrides. Worth revisiting if the two ever drift out of sync in practice.

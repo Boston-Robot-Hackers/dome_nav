@@ -1,6 +1,6 @@
 ---
-version: "1.0"
-generated: "2026-06-27"
+version: "1.1"
+generated: "2026-07-03"
 ---
 
 # FrontierAlgorithm — The ExplorationAlgorithm Protocol Adapter
@@ -119,8 +119,14 @@ target = pick_best_frontier(
     max_radius=ctx.params.max_explore_radius,
     start_xy=ctx.start_xy,
     min_dist=ctx.params.min_frontier_dist,
+    max_dist=ctx.params.max_frontier_dist,
 )
 ```
+
+`max_dist` was added for the Gazebo sim work (see `06-frontier_explorer.md`): it
+caps exploration hops to a maximum distance from the robot, in addition to the
+existing `min_dist` floor. Same forwarding pattern as every other filter —
+`FrontierAlgorithm` does not interpret the value, just passes it through.
 
 All filtering parameters are forwarded from `ctx.params` and `ctx.blacklist`
 rather than stored on the algorithm object. This keeps `FrontierAlgorithm`
@@ -142,6 +148,7 @@ if target is None:
         ctx.robot_xy,
         ctx.params.min_frontier_size,
         ctx.params.min_frontier_dist,
+        ctx.params.max_frontier_dist,
     )
     return None
 self.latest_diag = None

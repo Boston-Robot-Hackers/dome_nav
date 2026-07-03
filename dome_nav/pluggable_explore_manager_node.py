@@ -72,16 +72,23 @@ class PluggableExploreManagerNode(Node):
         self.create_timer(1.0 / self.EXPLORE_HZ, self.explore_tick)
 
         self.declare_parameter("max_explore_radius", 0.0)
+        self.declare_parameter("max_frontier_dist", 1.0)
         self.declare_parameter("map_name", "unknown")
         self.max_explore_radius: float = self.get_parameter("max_explore_radius").value
+        self.max_frontier_dist: float = self.get_parameter("max_frontier_dist").value
         self.map_name: str = self.get_parameter("map_name").value
         self.telemetry = TelemetryWriter(self.map_name, self.get_logger().info)
 
-        self.params = ExploreParams(max_explore_radius=self.max_explore_radius)
+        self.params = ExploreParams(
+            max_explore_radius=self.max_explore_radius,
+            max_frontier_dist=self.max_frontier_dist,
+        )
         self.algorithm = algorithm or FrontierAlgorithm()
 
         self.latest_map: OccupancyGrid | None = None
         self.latest_map_info: MapInfo | None = None
+        self.redirect_map_stamp: tuple[int, int] | None = None
+        self.redirect_cached_goal: XY | None = None
         self.reset_session()
         self.clear_active_goal()
         self.get_logger().info("PluggableExploreManagerNode ready.")
@@ -113,6 +120,7 @@ class PluggableExploreManagerNode(Node):
                 start_xy=list(self.start_xy) if self.start_xy else None,
                 params={
                     "min_frontier_dist": self.params.min_frontier_dist,
+                    "max_frontier_dist": self.params.max_frontier_dist,
                     "goal_inset": self.params.goal_inset_m,
                     "timeout_s": self.GOAL_TIMEOUT_S,
                     "max_radius": self.params.max_explore_radius,
@@ -155,16 +163,11 @@ class PluggableExploreManagerNode(Node):
             self.blacklist.add(self.current_goal_centroid)
         self.clear_active_goal()
 
-    def check_goal_redirect(self):
-        # Re-evaluate the frontier each tick while in transit. If the best goal
-        # has moved more than REDIRECT_THRESHOLD from the current goal (because
-        # the map updated as the robot scanned along its path), cancel and redirect.
-        if self.is_redirecting or self.latest_map is None or self.current_goal_xy is None:
-            return
-        robot_xy = self.robot_xy_in_map()
-        if robot_xy is None:
-            return
+    def frontier_goal_for_current_map(self, robot_xy: XY) -> XY | None:
         m = self.latest_map
+        stamp = (m.header.stamp.sec, m.header.stamp.nanosec)
+        if stamp == self.redirect_map_stamp:
+            return self.redirect_cached_goal
         info = MapInfo(
             width=m.info.width, height=m.info.height, resolution=m.info.resolution,
             origin_x=m.info.origin.position.x, origin_y=m.info.origin.position.y,
@@ -177,7 +180,29 @@ class PluggableExploreManagerNode(Node):
             start_xy=self.start_xy,
             params=self.params,
         )
-        new_goal = self.algorithm.next_goal(ctx)
+        self.redirect_map_stamp = stamp
+        self.redirect_cached_goal = self.algorithm.next_goal(ctx)
+        return self.redirect_cached_goal
+
+    def check_goal_redirect(self):
+        # Re-evaluate the frontier each tick while in transit. If the best goal
+        # has moved more than REDIRECT_THRESHOLD from the current goal (because
+        # the map updated as the robot scanned along its path), cancel and redirect.
+        #
+        # slam_toolbox only republishes /map on its own map_update_interval (5s by
+        # default), far slower than this 2Hz tick — recomputing frontier clustering
+        # against an unchanged map is wasted work, so the result is memoized by map
+        # stamp and reused until a genuinely new map arrives.
+        no_active_redirect_target = (
+            self.is_redirecting or self.latest_map is None
+            or self.current_goal_xy is None
+        )
+        if no_active_redirect_target:
+            return
+        robot_xy = self.robot_xy_in_map()
+        if robot_xy is None:
+            return
+        new_goal = self.frontier_goal_for_current_map(robot_xy)
         if new_goal is None:
             return
         dist = math.sqrt(

@@ -35,6 +35,7 @@ class FrontierAlgorithm:
             max_radius=ctx.params.max_explore_radius,
             start_xy=ctx.start_xy,
             min_dist=ctx.params.min_frontier_dist,
+            max_dist=ctx.params.max_frontier_dist,
         )
         if target is None:
             self.latest_diag = _frontier_diag(
@@ -43,6 +44,7 @@ class FrontierAlgorithm:
                 ctx.robot_xy,
                 ctx.params.min_frontier_size,
                 ctx.params.min_frontier_dist,
+                ctx.params.max_frontier_dist,
             )
             return None
         self.latest_diag = None

@@ -1,6 +1,6 @@
 ---
-version: "1.1"
-generated: "2026-06-27"
+version: "1.2"
+generated: "2026-07-03"
 ---
 
 # PluggableExploreManagerNode — Autonomous Exploration with Injected Algorithms
@@ -80,9 +80,18 @@ it falls back to the production default:
 ```python
 def __init__(self, algorithm: ExplorationAlgorithm | None = None):
     ...
-    self.params = ExploreParams(max_explore_radius=self.max_explore_radius)
+    self.params = ExploreParams(
+        max_explore_radius=self.max_explore_radius,
+        max_frontier_dist=self.max_frontier_dist,
+    )
     self.algorithm = algorithm or FrontierAlgorithm()
 ```
+
+`max_frontier_dist` (added 2026-07-03, for the Gazebo sim work) follows the same
+declared-ROS-parameter pattern as `max_explore_radius`, but with a non-zero
+operational default (`1.0` m) rather than "unlimited" — the `ExploreParams`
+dataclass default stays `0.0` (see `04-explore_context.md`), so this node is
+the one place that actually opts into capping exploration hop distance.
 
 The `or` idiom works here because `None` is the only falsy value that should ever be
 passed. An explicitly constructed algorithm object is always truthy. This is simpler than
@@ -300,16 +309,23 @@ floor of frontier centroid drift from minor map updates, and smaller than the ty
 gap between meaningfully distinct frontier clusters. At this threshold, redirects
 happen when the map has changed enough to matter, not on every minor scan update.
 
-### check_goal_redirect()
+### frontier_goal_for_current_map() — Memoized Frontier Recompute
+
+**Changed 2026-07-02.** The algorithm re-invocation used to happen inline inside
+`check_goal_redirect()` on every tick, unconditionally. Instrumentation during the
+Gazebo sim work showed this was mostly wasted: slam_toolbox only republishes
+`/map` on its own `map_update_interval` (5 s by default), far slower than this
+node's 2 Hz tick — so ~90% of those recomputes ran the full frontier-clustering
+pass against a map that hadn't changed since the last tick. The fix extracts the
+assembly-and-recompute logic into its own method, memoized by the map's own
+header timestamp:
 
 ```python
-def check_goal_redirect(self):
-    if self.is_redirecting or self.latest_map is None or self.current_goal_xy is None:
-        return
-    robot_xy = self.robot_xy_in_map()
-    if robot_xy is None:
-        return
+def frontier_goal_for_current_map(self, robot_xy: XY) -> XY | None:
     m = self.latest_map
+    stamp = (m.header.stamp.sec, m.header.stamp.nanosec)
+    if stamp == self.redirect_map_stamp:
+        return self.redirect_cached_goal
     info = MapInfo(
         width=m.info.width, height=m.info.height, resolution=m.info.resolution,
         origin_x=m.info.origin.position.x, origin_y=m.info.origin.position.y,
@@ -322,7 +338,33 @@ def check_goal_redirect(self):
         start_xy=self.start_xy,
         params=self.params,
     )
-    new_goal = self.algorithm.next_goal(ctx)
+    self.redirect_map_stamp = stamp
+    self.redirect_cached_goal = self.algorithm.next_goal(ctx)
+    return self.redirect_cached_goal
+```
+
+`redirect_map_stamp` and `redirect_cached_goal` are initialized to `None` in
+`__init__`. The cache key is the map's `(sec, nanosec)` header stamp, not a
+content hash — cheap to compare, and correct because slam_toolbox only bumps
+the stamp when it actually republishes a (possibly) updated map. Confirmed via
+the same `time.perf_counter()` instrumentation used elsewhere in this
+investigation: recompute cost dropped from ~4 ms (fresh clustering pass) to
+~0.1 ms (cache hit) on every tick but the first one after a genuinely new map.
+
+### check_goal_redirect()
+
+```python
+def check_goal_redirect(self):
+    no_active_redirect_target = (
+        self.is_redirecting or self.latest_map is None
+        or self.current_goal_xy is None
+    )
+    if no_active_redirect_target:
+        return
+    robot_xy = self.robot_xy_in_map()
+    if robot_xy is None:
+        return
+    new_goal = self.frontier_goal_for_current_map(robot_xy)
     if new_goal is None:
         return
     dist = math.sqrt(
@@ -347,20 +389,23 @@ def check_goal_redirect(self):
         self.goal_handle.cancel_goal_async()
 ```
 
-This method runs every tick while `has_active_goal` is `True`. It re-invokes the full
-algorithm against the current map — the same `ExplorationContext` assembly used in
-`find_and_send_frontier` — and computes the Euclidean distance between the new best goal
-and the goal currently being navigated to. If the shift exceeds `REDIRECT_THRESHOLD`, it
-sets `is_redirecting = True` and cancels the active goal asynchronously.
+This method runs every tick while `has_active_goal` is `True`. It calls
+`frontier_goal_for_current_map()` (cheap on a cache hit, a full recompute only
+when the map has genuinely changed) and computes the Euclidean distance between
+the new best goal and the goal currently being navigated to. If the shift
+exceeds `REDIRECT_THRESHOLD`, it sets `is_redirecting = True` and cancels the
+active goal asynchronously.
 
 Several design choices here are worth noting:
 
-- **Re-running the full algorithm per tick** is a deliberate repetition of the
-  `find_and_send_frontier` assembly logic. An alternative would be to factor out a shared
-  `build_context()` helper. The duplication was kept because the two call sites have
-  slightly different intent — one is for initial goal selection, the other for
-  mid-transit re-evaluation — and merging them would complicate the flow for marginal
-  gain. This is a known tradeoff, noted in Observations below.
+- **The memoized recompute partially resolves the duplication noted in earlier
+  versions of this document.** `find_and_send_frontier` and
+  `check_goal_redirect`/`frontier_goal_for_current_map` still assemble their own
+  `ExplorationContext` independently — that duplication remains, per the
+  original reasoning (initial selection vs. mid-transit re-evaluation have
+  different call sites and slightly different surrounding logic) — but the
+  *expensive* part (the actual clustering pass) is no longer needlessly
+  repeated across ticks.
 
 - **Early return if `is_redirecting`** prevents the method from triggering a second
   cancel while a cancel is already in flight. Once set, `is_redirecting` remains `True`
@@ -584,12 +629,15 @@ node does not affect a known-working deployment path.
 
 ## Observations
 
-**Context assembly duplication.** `find_and_send_frontier` and `check_goal_redirect` both
-build an `ExplorationContext` from `self.latest_map` using identical code. This is a
-known DRY violation. A shared `build_context(robot_xy)` helper method would eliminate
-the duplication without changing behaviour. The duplication was tolerated during initial
-implementation because the two call sites have different surrounding logic, but it should
-be extracted before this code grows further.
+**Context assembly duplication (narrowed, not eliminated, 2026-07-02).**
+`find_and_send_frontier` and `frontier_goal_for_current_map` (called from
+`check_goal_redirect`) both build an `ExplorationContext` from `self.latest_map`
+using near-identical code — still a DRY violation. The memoization added for
+performance (see above) means this duplicated assembly no longer runs on every
+tick, only on a cache miss, which reduces how often the duplication actually
+costs anything at runtime, but the source-level duplication itself is
+unchanged. A shared `build_context(robot_xy)` helper method would still
+eliminate it.
 
 **Redirect storms on noisy maps.** If `slam_toolbox` produces a rapidly oscillating best
 frontier — due to scan noise at the boundary of a large open space — `check_goal_redirect`

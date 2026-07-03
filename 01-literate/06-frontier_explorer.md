@@ -1,6 +1,6 @@
 ---
-version: "1.2"
-generated: "2026-06-25"
+version: "1.3"
+generated: "2026-07-03"
 ---
 
 # FrontierExplorer — Pure Python Frontier Detection
@@ -140,6 +140,14 @@ frontier boundary as cells get blacklisted one by one.
 result exceeds Nav2's `xy_goal_tolerance`, otherwise the goal is declared
 reached without movement.
 
+**max_dist** — the mirror-image filter, added for the Gazebo sim work: skips
+cells *farther* than `max_dist` from the robot. The `pluggable_explore_manager_node`
+uses this to cap each exploration hop to a short distance, on the theory that
+short hops are less likely to run through a costmap region the robot can't
+actually cross (see the doorway-inflation finding in `09-pluggable_explore_manager_node.md`).
+Disabled when `max_dist == 0.0`, matching the `min_dist`/`max_radius` convention
+of "0.0 means unlimited" used throughout this module.
+
 ## frontier_diag
 
 `_frontier_diag` is a diagnostic helper called only when `pick_best_frontier`
@@ -150,16 +158,28 @@ were rejected at each filter stage:
 |---|---|
 | `too_small` | clusters with `len < min_size` |
 | `large_clusters` | clusters that passed min_size |
-| `all_cells_too_close` | large clusters where every cell is within `min_dist` of the robot |
+| `all_cells_out_of_range` | large clusters where every cell is outside the `[min_dist, max_dist]` band |
 
 These counts are written into the `no_frontier` telemetry event. If
-`all_cells_too_close > 0` and `large_clusters == all_cells_too_close`, the
-frontier exists but `MIN_FRONTIER_DIST` is too large for the current map size
-— reduce it.
+`all_cells_out_of_range > 0` and `large_clusters == all_cells_out_of_range`,
+frontiers exist but none fall in the valid distance band — either
+`MIN_FRONTIER_DIST` is too large, or `MAX_FRONTIER_DIST` is too small, for the
+current map size.
 
-The function is named with a leading underscore because it is an internal
-diagnostic helper, not part of the public API — callers outside
-`explore_manager_node` should not depend on it.
+**Bug fixed 2026-07-03**: this field used to be named `all_cells_too_close` and
+only checked `min_dist`, a leftover from before `max_dist` existed. That made
+the diagnostic blind to the (very real, in a small room) case where clusters
+are rejected for being too *far* rather than too close — telemetry would show
+`large_clusters: 7` with the too-close counter at `0`, an apparent
+contradiction with no explanation, while `pick_best_frontier` correctly
+returned `None`. Renamed to `all_cells_out_of_range` and extracted the shared
+per-cell check into `_cell_out_of_range()` so both bounds are covered by one
+code path instead of two independently-maintained ones.
+
+Both helper functions are named with a leading underscore because they are
+internal diagnostic/support functions, not part of the public API — callers
+outside `explore_manager_node` and `frontier_algorithm` should not depend on
+them.
 
 ## nudge_toward_robot
 
