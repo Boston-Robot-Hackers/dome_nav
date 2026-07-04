@@ -1,6 +1,6 @@
 ---
-version: "1.3"
-generated: "2026-07-03"
+version: "1.4"
+generated: "2026-07-04"
 ---
 
 # FrontierExplorer — Pure Python Frontier Detection
@@ -148,6 +148,26 @@ actually cross (see the doorway-inflation finding in `09-pluggable_explore_manag
 Disabled when `max_dist == 0.0`, matching the `min_dist`/`max_radius` convention
 of "0.0 means unlimited" used throughout this module.
 
+**prefer_farthest** — added 2026-07-04. Flips the selection tie-break from
+"closest candidate wins" to "farthest candidate wins," both within a cluster
+and across clusters — every filter above (blacklist, `min_dist`/`max_dist`,
+`max_radius`) still applies first; only which *surviving* candidate gets
+chosen changes. The motivation: frontier cells are, almost by definition,
+close to whatever obstacle is still hiding unknown space behind it, so
+nearest-first is structurally biased toward wall-hugging cells — exactly
+where costmap inflation makes an approach hardest (see the doorway-inflation
+finding in `09-pluggable_explore_manager_node.md`). Since `blacklist_radius`
+only excludes a small bubble around each failed attempt, retrying
+nearest-first after a failure often just lands on the next cell over in the
+same unreachable neighborhood. Farthest-first tends to pick cells in open,
+still-unexplored areas instead, which are less likely to be pinned against a
+wall early in exploration. Implemented by making both `best_dist`/`goal_dist`
+initialize to `-1.0` instead of `+inf` when enabled, and flipping the `<`/`>`
+comparison — the same loop structure handles both modes to avoid duplicating
+the nested cluster/cell scan. Defaults to `False` (today's nearest-first
+behavior) everywhere; only the sim launch files default their ROS parameter
+to `True`.
+
 ## frontier_diag
 
 `_frontier_diag` is a diagnostic helper called only when `pick_best_frontier`
@@ -216,3 +236,8 @@ from overshooting past the robot.
   values), not nudged goal coordinates. This keeps the per-cell comparison in
   `pick_best_frontier` exact — the same centroid that was blacklisted is the
   same value compared on the next tick.
+- `prefer_farthest` is a blunt instrument: it doesn't know anything about
+  *why* a frontier is close (open floor vs. a wall), just distance. A
+  costmap-aware filter (reject cells sitting inside the inflation gradient,
+  reading `/global_costmap/costmap`) would target the actual problem more
+  directly — noted as a future direction in `02-doc/notes.md`, not yet built.

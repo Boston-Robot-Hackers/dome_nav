@@ -36,6 +36,7 @@ class FrontierAlgorithm:
             start_xy=ctx.start_xy,
             min_dist=ctx.params.min_frontier_dist,
             max_dist=ctx.params.max_frontier_dist,
+            prefer_farthest=ctx.params.prefer_farthest,
         )
         if target is None:
             self.latest_diag = _frontier_diag(

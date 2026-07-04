@@ -2,7 +2,7 @@
 
 ## Snapshot
 
-**Date:** 2026-07-03
+**Date:** 2026-07-04
 **Branch:** main
 **Status:** F12 complete. F13 (Gazebo simulation) in progress: T01-T03 done, full sim stack
 (Gazebo + slam_toolbox + Nav2 + explore) launches and drives the robot end-to-end. T04's
@@ -16,8 +16,10 @@ A `max_frontier_dist` cap was added to reduce goal-hop distance but does **not**
 this — see F13 T04 for full detail and next steps (reduce inflation_radius and/or widen the
 doorway). **New this session (2026-07-03)**: built a set of single-purpose `sim_*.launch.py`
 files so the sim stack can be brought up piece-by-piece in separate terminals for manual
-debugging (now consolidated to 4: `sim_robot.launch.py`, `sim_nav.launch.py`,
-`sim_rviz.launch.py`, `sim_explore_node.launch.py` — see F13 status below). This live,
+debugging (consolidated to 4, then `sim_nav.launch.py` split back into 2 on 2026-07-04 after
+a recurrence of the lifecycle-abort bug — see F13 status below for the current 5:
+`sim_robot.launch.py`, `sim_slam.launch.py`, `sim_nav2.launch.py`, `sim_rviz.launch.py`,
+`sim_explore_node.launch.py`). This live,
 piece-by-piece debugging found and fixed two real bugs: (1) Nav2 cannot activate without a
 `map` frame — `planner_server` blocks 60s waiting for `base_link → map` TF and
 `lifecycle_manager` aborts the *entire* bringup on that one failure, so slam must be launched
@@ -69,9 +71,11 @@ dome_nav` is required after every source edit before `bl`/`ros2 run` will see it
   `robot_explore.launch.py` (Mode E)
 - `launch/sim_explore.launch.py` — **(F13)** full sim stack in one file (Gazebo, bridge,
   RSP, laser TF, slam_toolbox, Nav2, `slam_manager_node`, `pluggable_explore_manager_node`)
-- `launch/sim_robot.launch.py`, `sim_nav.launch.py`, `sim_rviz.launch.py`,
-  `sim_explore_node.launch.py` — **(F13, 2026-07-03)** the same sim stack split into 4
-  single-purpose files for manual, one-window-per-piece debugging — see F13 status below
+- `launch/sim_robot.launch.py`, `sim_slam.launch.py`, `sim_nav2.launch.py`,
+  `sim_rviz.launch.py`, `sim_explore_node.launch.py` — **(F13)** the same sim stack split
+  into single-purpose files for manual, one-window-per-piece debugging — see F13 status below
+- `launch/sim_nav_full.launch.py` — **(F13, 2026-07-04)** single-command full stack,
+  composed from the split files above via `bl.include()` instead of duplicating their logic
 - `tools/nav_intent_check.py` — diagnostic: publishes target + intent, verifies nav pipeline
 
 ## Tests
@@ -80,16 +84,16 @@ dome_nav` is required after every source edit before `bl`/`ros2 run` will see it
 |---|---|---|
 | `test_nav_manager_pure.py` | 27 | pure Python |
 | `test_utils_pure.py` | 5 | pure Python |
-| `test_frontier_explorer.py` | 34 | pure Python |
-| `test_frontier_algorithm.py` | 11 | pure Python |
+| `test_frontier_explorer.py` | 38 | pure Python |
+| `test_frontier_algorithm.py` | 13 | pure Python |
 | `test_nav_manager.py` | 19 | ROS mock |
 | `test_slam_manager.py` | 11 | ROS lifecycle |
 | `test_explore_manager_node.py` | 24 | ROS mock |
-| `test_pluggable_explore_manager_node.py` | 24 | ROS mock |
+| `test_pluggable_explore_manager_node.py` | 25 | ROS mock |
 | `test_map_validation.py` | 4 | manual/live only |
 
-**77 pure-Python tests pass** (`test_frontier_algorithm.py` + `test_frontier_explorer.py` + `test_nav_manager_pure.py` + `test_utils_pure.py`).
-**155/159 total pass** via `pytest test/ -m "not manual"` (4 deselected are `test_map_validation.py`'s manual/live-only tests).
+**83 pure-Python tests pass** (`test_frontier_algorithm.py` + `test_frontier_explorer.py` + `test_nav_manager_pure.py` + `test_utils_pure.py`).
+**162/166 total pass** via `pytest test/ -m "not manual"` (4 deselected are `test_map_validation.py`'s manual/live-only tests).
 
 ## F12 summary
 
@@ -242,6 +246,60 @@ Gazebo Classic, not available on Jazzy). New deliverables: `launch/sim_explore.l
 - T05 (end-to-end exploration smoke test), T06 (docs/move to done) — blocked on resolving
   the doorway costmap-inflation stall above (5b).
 
+**Session 2026-07-04 (continued) — sim_nav_full.launch.py, 3 real bugs found and fixed via
+live testing, prefer_farthest algorithm change**:
+- **T04b**: Added `launch/sim_nav_full.launch.py` — single-command full sim stack, composed
+  from the existing split files (`sim_robot`, `sim_slam`, `sim_nav2`, `sim_explore_node`) via
+  `bl.include()` rather than duplicating their logic like `sim_explore.launch.py` does.
+  `better_launch`'s `bl.include()` execs a `better_launch`-style file in-process sharing the
+  `BetterLaunch` singleton, and auto-forwards the calling launch's own args to each included
+  function's signature (confirmed by reading `better_launch/wrapper.py`'s
+  `_launch_this_wrapper`). Smoke-tested end-to-end: all Nav2 servers activated, explore node
+  started, args (`map_name` etc.) correctly reached every included file.
+- **T04c**: Found and fixed a real TF bug via live user testing — RViz2 reported no transform
+  for `left_wheel`/`right_wheel` (the two `continuous` joints). Root cause:
+  `spawn_topic_bridge()` in the installed `better_launch` package always starts the Gazebo
+  bridge node with `raw=True`, which (per its own docstring) drops any `remaps` passed to it
+  — confirmed via `/proc/<pid>/cmdline` showing zero `-r` args on the running bridge process.
+  So `GazeboBridge("/model/dome2/joint_state", ..., remaps={...: "/joint_states"})` in
+  `sim_robot.launch.py`/`sim_explore.launch.py` never took effect; `/joint_states` had zero
+  publishers and `robot_state_publisher` never got joint data. Fixed by remapping the other
+  side instead — `robot_state_publisher`'s own `bl.node()` call now takes
+  `remaps={"/joint_states": "/model/dome2/joint_state"}` (a normal, non-`raw` node, where
+  `bl.node()`'s remaps do work). Removed the now-dead `remaps=` from the `GazeboBridge` entry
+  in both files.
+- **T04d**: Found and fixed an always-idle bug via live telemetry — every exploration session
+  ended immediately with `goals_sent: 0`. Root cause: `ExploreParams.min_frontier_dist`
+  defaults to 1.3 (raised from 0.8 on 2026-07-03 for the real-robot "never closer than 1m"
+  request) but the sim-side `max_frontier_dist` default stayed at 1.0 in
+  `pluggable_explore_manager_node.py` and all three sim launch files — an empty
+  `[min=1.3, max=1.0]` band that `pick_best_frontier()` can never satisfy, regardless of the
+  map. Fixed by raising the sim-side `max_frontier_dist` default to 3.0 everywhere. Added a
+  regression test asserting the default `max_frontier_dist` exceeds `ExploreParams.
+  min_frontier_dist` so this can't silently regress again.
+- **T04e**: User observed (after T04d's fix let exploration actually run) that goals kept
+  failing near the doorway and retrying nearby points in the same small area — telemetry
+  showed 6+ consecutive failed goals all within ~1-1.2m of each other. Root cause: nearest-
+  first frontier selection is structurally biased toward wall-hugging frontier cells (that's
+  usually *why* they're still frontiers), and `blacklist_radius` (0.5m) only clears a small
+  bubble around each failure, smaller than the zone where costmap inflation makes an approach
+  impossible — so "nearest remaining" after a failure was often still in the same
+  practically-unreachable band. Per explicit user decision: **sim and real-robot code must
+  stay identical, differing only by parameter values** — `explore_manager_node.py` is no
+  longer to be treated as a frozen/untouched rollback copy; future work should converge on
+  `pluggable_explore_manager_node.py` for both, with real-robot switch-over as a distinct,
+  explicitly-confirmed follow-up (not done yet). Implemented as a new opt-in parameter:
+  `prefer_farthest: bool = False` on `ExploreParams` and `pick_best_frontier()` — flips
+  nearest-first to farthest-first selection (all existing filters — blacklist, min/max dist,
+  max_radius — still apply first). Wired through `frontier_algorithm.py`, exposed as a ROS
+  parameter on `pluggable_explore_manager_node.py` (default `False`), and defaulted to `True`
+  in all three sim launch files. 6 new tests added (162/166 total). Not yet re-verified live
+  in Gazebo — and note this changes *which* frontier is tried next, not whether the robot can
+  reach it; the underlying doorway inflation stall (5b) is still unresolved.
+- Also discussed and explicitly declined this session: a `pick_best_frontier` cost-filter
+  variant reading `/global_costmap/costmap` to reject inflated cells (the "Future: costmap-
+  based frontier exploration" idea already in `02-doc/notes.md`) — user said no for now.
+
 **Manual single-window debug launch files (2026-07-03)**: built a set of `sim_*.launch.py`
 files so each piece of the sim stack can be started in its own terminal, for step-by-step
 debugging independent of `sim_explore.launch.py`'s all-in-one behavior. Started at 9 files
@@ -337,6 +395,10 @@ mechanism `bl.node(params={...})` uses automatically under the hood in the `sim_
 files (confirmed by inspecting why *those* worked fine with the same multi-line value).
 Verified: `/robot_description` publishes, `tf2_echo odom base_link` resolves.
 
+**`test1.bash`/`test2.bash`/`test4.bash`/`test5.bash` deleted (2026-07-04)**, at user
+request, now that `sim_*.launch.py` manual debug files cover the same ground. `test3.bash`
+was already deleted in a prior session.
+
 **Process-hygiene lesson learned this session**: across many manual test iterations, `pkill
 -f` repeatedly, unpredictably failed to match processes that were verifiably running
 (confirmed via explicit PID kills succeeding immediately after). Root cause not identified
@@ -361,19 +423,24 @@ in place.
 1. **F13 T04** — fix the doorway costmap-inflation stall (see T04 finding #5b above): reduce
    `local_costmap.inflation_layer.inflation_radius` (currently 0.2 m) and/or widen the
    doorway in `worlds/simple_room.world` (currently 0.6 m) so the robot has genuine low-cost
-   clearance to cross it; the `max_frontier_dist` cap alone did not resolve this.
-2. **F13** — reconsider whether `max_frontier_dist`'s operational default of 1.0 m is right
-   for `simple_room.world` given the "no frontiers found" issue found 2026-07-03 — a single
-   scan reveals most of the 4x4 m room immediately, likely pushing the nearest real frontier
-   outside the 0.8–1.0 m band. Try a larger default (e.g. 2–3 m) or make it adaptive.
+   clearance to cross it; neither `max_frontier_dist` nor `prefer_farthest` resolve this
+   directly — they change which frontier is targeted, not whether it's reachable.
+2. **F13** — live-verify `prefer_farthest` (T04e) actually reduces the retry-nearby pattern
+   in Gazebo now that `max_frontier_dist` (T04d) lets exploration run at all — check
+   telemetry's `goal_sent` entries are spread across the map instead of clustered.
 3. **F13** — the TF-extrapolation/collision_monitor stop is currently believed to be a
    process-hygiene side effect (stale/duplicate `/clock` source), not a structural bug — keep
    an eye out if it recurs in a verified-clean run.
 4. **F13 T05** — end-to-end exploration smoke test in sim (blocked until the doorway stall is resolved)
 5. **F13 T06** — update feature/task file status, move to done, update this doc
-6. **I06** — underscore rename sweep in remaining files
-7. **I07, I08, I09** — verify/close quick wins
-8. **TF10 T06** — hop-size issue: `MIN_FRONTIER_DIST` was raised 0.8→1.3m on 2026-07-03
+6. **Architecture decision (2026-07-04, not yet actioned)** — user wants sim and real-robot
+   code to converge on `pluggable_explore_manager_node.py` for both, differing only by
+   parameter values; `robot_explore.launch.py` still uses the original `explore_manager_node`
+   and has not been switched over. Do this as a distinct, explicitly-confirmed step, not
+   silently alongside other changes.
+7. **I06** — underscore rename sweep in remaining files
+8. **I07, I08, I09** — verify/close quick wins
+9. **TF10 T06** — hop-size issue: `MIN_FRONTIER_DIST` was raised 0.8→1.3m on 2026-07-03
    (see below) at the user's request for a 1.0m real-goal floor; still worth considering a
    cluster-size preference in `pick_best_frontier` on top of this if hop-size issues persist.
 
@@ -384,8 +451,14 @@ in place.
 - `MIN_FRONTIER_DIST`: **1.3 m** (raised from 0.8 m on 2026-07-03, in both
   `explore_manager_node.py` and `ExploreParams`' default — see note below)
 - `MAX_FRONTIER_DIST`: 0.0 (unlimited) at the `ExploreParams` dataclass level; the pluggable
-  sim node (`pluggable_explore_manager_node` / `sim_explore.launch.py`) defaults its
-  `max_frontier_dist` ROS parameter to 1.0 m, capping exploration hops in sim
+  sim node (`pluggable_explore_manager_node` / sim launch files) defaults its
+  `max_frontier_dist` ROS parameter to 3.0 m (raised from 1.0 on 2026-07-04 — 1.0 was below
+  `MIN_FRONTIER_DIST`, an empty/impossible band that always failed to find frontiers; see F13
+  T04d), capping exploration hops in sim
+- `prefer_farthest`: `False` at the `ExploreParams` dataclass level and on
+  `pluggable_explore_manager_node`'s ROS parameter default; sim launch files default it to
+  `True` (added 2026-07-04, F13 T04e) — selects the farthest qualifying frontier instead of
+  nearest, to avoid repeatedly retrying wall-hugging frontiers near a failed obstacle
 - `BLACKLIST_RADIUS`: 0.5 m
 - `GOAL_INSET_M`: 0.3 m (nudge goal off frontier boundary)
 - `GOAL_TIMEOUT_S`: 25.0 s (break Nav2 BT recovery loops)

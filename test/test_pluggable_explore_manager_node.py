@@ -11,6 +11,7 @@ import pytest
 import rclpy
 from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import String
+from dome_nav.explore_context import ExploreParams
 
 
 class MockAlgorithm:
@@ -319,3 +320,9 @@ def test_publish_status_dist_correct(node):
     node.status_pub.publish = lambda m: published.append(json.loads(m.data))
     node.publish_status("exploring")
     assert published[0]["dist_m"] == 3.0
+
+
+# --- default parameters must not form an empty [min, max] frontier-distance band ---
+
+def test_default_max_frontier_dist_exceeds_min_frontier_dist(node):
+    assert node.max_frontier_dist > ExploreParams().min_frontier_dist

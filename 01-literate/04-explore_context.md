@@ -1,6 +1,6 @@
 ---
-version: "1.2"
-generated: "2026-07-03"
+version: "1.3"
+generated: "2026-07-04"
 ---
 
 # ExploreContext — Data Types and Protocol for Pluggable Exploration
@@ -63,6 +63,7 @@ class ExploreParams:
     max_frontier_dist: float = 0.0
     goal_inset_m: float = 0.3
     max_explore_radius: float = 0.0
+    prefer_farthest: bool = False
 ```
 
 What each field controls:
@@ -75,6 +76,7 @@ What each field controls:
 | `max_frontier_dist` | metres | Ignore frontier cells farther than this from the robot; 0.0 = unbounded |
 | `goal_inset_m` | metres | Pull the nav goal this far toward the robot (keeps it inside the costmap) |
 | `max_explore_radius` | metres | Bound exploration to a circle around `start_xy`; 0.0 = unbounded |
+| `prefer_farthest` | bool | Among cells that pass every filter above, pick the farthest from the robot instead of the nearest |
 
 **`min_frontier_dist` raised from 0.8 to 1.3 on 2026-07-03**, at the user's
 explicit request: "never ask Nav2 to go to a point closer than a full meter
@@ -98,10 +100,31 @@ self-documenting, but `0.0` was chosen because it maps cleanly to a simple
 single exploration hop can be, on the theory that short hops reduce exposure to
 any one bad costmap region. The dataclass default stays `0.0` (unlimited) to
 keep this module's own tests and the real-robot algorithm unaffected;
-`pluggable_explore_manager_node` sets an operational default of `1.0` m via its
-own ROS parameter (see `09-pluggable_explore_manager_node.md`). Splitting the
+`pluggable_explore_manager_node` sets an operational default via its own ROS
+parameter (see `09-pluggable_explore_manager_node.md`). Splitting the
 "safe algorithmic default" from the "operational sim default" this way avoids
 the two use cases fighting over one constant.
+
+**Real incident, 2026-07-04**: the operational default started at `1.0` m,
+which is *below* `min_frontier_dist`'s default of `1.3` m — an empty
+`[1.3, 1.0]` band that `pick_best_frontier()` can never satisfy, so every
+exploration session ended immediately with zero goals sent, for every map,
+regardless of content. This is precisely the "silent misbehaviour" the
+Observations section below already warned about before it happened. Fixed by
+raising the sim-side operational default to `3.0`, and added a regression
+test asserting the sim node's default exceeds `ExploreParams().min_frontier_dist`
+so the two constants can't silently drift back into an empty range.
+
+**`prefer_farthest` added 2026-07-04**: frontier cells are, almost by
+definition, close to whatever obstacle is still hiding unknown space behind
+it — so always picking the *nearest* qualifying cell is structurally biased
+toward wall-hugging cells, which is exactly where costmap inflation makes
+approach hardest. When `True`, `pick_best_frontier()` picks the farthest
+qualifying cell instead, after every other filter (blacklist, min/max dist,
+max_radius) has already been applied. Defaults to `False` here to keep the
+real-robot algorithm's behavior unchanged; the sim launch files default their
+ROS parameter to `True`. See `06-frontier_explorer.md` for the selection-loop
+mechanics.
 
 Using a dataclass rather than a plain dict has two advantages. First, attribute
 access is type-checked by the type checker and autocompleted by the IDE —
@@ -251,9 +274,15 @@ same dialect.
   This is a subtle but real benefit of the immutable-dataclass style.
 
 - **No validation on `ExploreParams`.** There is nothing preventing
-  `min_frontier_dist = -1.0` or `blacklist_radius = 0.0`, both of which
-  would produce silent misbehaviour. Adding a `__post_init__` that asserts
-  positivity of the distance fields would catch configuration errors early.
+  `min_frontier_dist = -1.0`, `blacklist_radius = 0.0`, or
+  `min_frontier_dist > max_frontier_dist` (an empty, impossible distance
+  band), all of which produce silent misbehaviour. The last case is not
+  hypothetical — it happened on 2026-07-04 (see above) and manifested only as
+  "exploration never finds anything," with no error anywhere in the stack.
+  Adding a `__post_init__` that asserts positivity and `min_frontier_dist <=
+  max_frontier_dist` (when `max_frontier_dist > 0`) would catch this class of
+  configuration error at construction time instead of relying on a
+  regression test to catch one specific instance of it.
 
 - **The module has no `__all__`.** Defining `__all__ = ["ExploreParams",
   "ExplorationContext", "ExplorationAlgorithm"]` would make the public API

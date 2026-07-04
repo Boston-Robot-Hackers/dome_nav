@@ -70,6 +70,37 @@ def test_next_goal_returns_xy_on_frontier_map():
     assert len(result) == 2
 
 
+# --- prefer_farthest plumbed through from ExploreParams ---
+
+def test_next_goal_prefer_farthest_picks_far_cluster():
+    algo = FrontierAlgorithm()
+    info = make_info(10, 1)
+    # free cells 2, 4, 8 each border an unknown neighbor -> 3 separate frontier
+    # clusters at world x=2.5, 4.5, 8.5. Robot at x=0 -> nearest is x=2.5,
+    # farthest is x=8.5.
+    data = [0, 0, 0, -1, 0, 0, 0, 0, 0, -1]
+    params = ExploreParams(
+        min_frontier_size=1, min_frontier_dist=0.0, prefer_farthest=True
+    )
+    ctx = make_ctx(data, info, params=params)
+    result = algo.next_goal(ctx)
+    assert result is not None
+    # nudge_toward_robot pulls the raw x=8.5 cell back toward the robot by
+    # goal_inset_m (0.3 default) -> result should still be clearly the far cluster.
+    assert result[0] > 7.0
+
+
+def test_next_goal_default_picks_near_cluster():
+    algo = FrontierAlgorithm()
+    info = make_info(10, 1)
+    data = [0, 0, 0, -1, 0, 0, 0, 0, 0, -1]
+    params = ExploreParams(min_frontier_size=1, min_frontier_dist=0.0)
+    ctx = make_ctx(data, info, params=params)
+    result = algo.next_goal(ctx)
+    assert result is not None
+    assert result[0] < 3.0
+
+
 # --- latest_clusters populated after each call ---
 
 def test_latest_clusters_populated_after_call():

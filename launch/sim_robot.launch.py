@@ -37,14 +37,18 @@ def sim_robot_launch():
         GazeboBridge("/odom", "nav_msgs/msg/Odometry", "gz2ros"),
         GazeboBridge("/tf", "tf2_msgs/msg/TFMessage", "gz2ros"),
         GazeboBridge("/cmd_vel", "geometry_msgs/msg/Twist", "ros2gz"),
-        GazeboBridge("/model/dome2/joint_state", "sensor_msgs/msg/JointState", "gz2ros",
-                     remaps={"/model/dome2/joint_state": "/joint_states"}),
+        GazeboBridge("/model/dome2/joint_state", "sensor_msgs/msg/JointState", "gz2ros"),
     )
 
+    # spawn_topic_bridge() always starts the bridge with raw=True, which drops any
+    # remaps passed to it, so the bridge publishes under its literal topic name.
+    # Remap robot_state_publisher's subscription instead, since bl.node() honors
+    # remaps for non-raw nodes.
     bl.node(
         "robot_state_publisher",
         "robot_state_publisher",
         params={"robot_description": robot_description, "use_sim_time": True},
+        remaps={"/joint_states": "/model/dome2/joint_state"},
     )
 
     bl.node(

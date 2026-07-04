@@ -284,7 +284,24 @@ costmap inflation near the doorway**:
   `tf2_echo odom base_link` resolves; `sim_nav.launch.py` → `/map` publishes,
   `lifecycle_manager` log shows `Managed nodes are active` for all 10 servers (confirms the
   slam-before-nav2 fix). 155/155 pure tests pass after rebuild.
-- **`MIN_FRONTIER_DIST` raised 0.8→1.3 (2026-07-03)**, at explicit user request: "never ask
+- **Nav2 lifecycle-abort bug recurred, split back into two files (2026-07-04)**: live
+debugging found `sim_nav.launch.py`'s two `bl.include()` calls (slam then Nav2) only
+guarantee launch *order*, not readiness — `bl.include()` returns as soon as it registers
+the nested launch, it does not block until the included stack is actually up. Confirmed via
+a live run: Nav2 processes ran for 110s, `/map` and `map→odom` TF were present, but
+`bt_navigator`/`controller_server`/`planner_server`/`behavior_server` were all permanently
+`inactive` — `planner_server` had already hit its ~60s activation timeout waiting for the
+`map` frame (which didn't exist yet when Nav2 started) before slam finished initializing,
+and `lifecycle_manager` aborted the whole bringup, matching T04 finding #1 exactly. This is
+the same bug as before, just re-triggered because "start slam first" doesn't wait for slam
+to be *ready* first. Split `sim_nav.launch.py` back into `sim_slam.launch.py` (slam_toolbox
+only) and `sim_nav2.launch.py` (Nav2 only, no `map_name` arg needed) so they can be started
+as two separate manual steps with a human-verified pause between them (confirm `/map` is
+publishing before starting `sim_nav2.launch.py`), instead of one script racing both. Not yet
+verified end-to-end with the split files. The permanent fix (blocking on `/map` inside a
+single script before including Nav2) is still open — see Likely next steps.
+
+**`MIN_FRONTIER_DIST` raised 0.8→1.3 (2026-07-03)**, at explicit user request: "never ask
   Nav2 to go to a point closer than a full meter away." The filter runs on the raw frontier
   cell distance, before `GOAL_INSET_M` (0.3 m) pulls the actual sent goal closer — so the
   real floor on the Nav2 goal is `min_frontier_dist - GOAL_INSET_M`, and 1.3 m gives exactly
@@ -294,6 +311,142 @@ costmap inflation near the doorway**:
   to `explore_manager_node.py` normally staying untouched. 155/155 tests still pass (no
   hardcoded 0.8 assumptions in the test suite). See `02-doc/current.md`'s Exploration params
   section and `01-literate/07-explore_manager_node.md`'s Observations for the full rationale.
+
+## T04a — Fix stray empty map-name directory in ~/.dome/slam_maps
+**Status**: done
+**Description**: `sim_slam.launch.py` and `sim_explore.launch.py` both ran
+`os.makedirs(slam_map_path, exist_ok=True)` where `slam_map_path` is
+`~/.dome/slam_maps/<map_name>` — the same string then passed to slam_toolbox as
+`map_file_name`. slam_toolbox treats that as a file prefix and writes sibling
+`<map_file_name>.posegraph`/`.data` files, never writing into the directory itself,
+so every sim run left behind a permanently empty `~/.dome/slam_maps/<map_name>/`
+directory. The real-robot launch files (`robot_map.launch.py`,
+`robot_explore.launch.py`) don't have this bug — they only
+`os.makedirs(home, exist_ok=True)` (the parent `slam_maps/` dir). Fixed both sim
+launch files to match that pattern, and removed the existing stray empty
+directories from `~/.dome/slam_maps/`.
+**Test**: Manual — after fix, run `sim_slam.launch.py --map_name t04afix`, confirm
+`~/.dome/slam_maps/t04afix.posegraph`/`.data` are written and no
+`~/.dome/slam_maps/t04afix/` directory is created.
+
+## T04b — Create sim_nav_full.launch.py (single-command full stack, composed)
+**Status**: done
+**Description**: New `launch/sim_nav_full.launch.py` gives back a one-command way
+to start the full sim stack, without reintroducing the duplicated logic that
+`sim_explore.launch.py` still carries. Built by calling `bl.include("dome_nav",
+"sim_robot.launch.py")`, then `sim_slam.launch.py`, `sim_nav2.launch.py`,
+`sim_explore_node.launch.py` in that order — `bl.include()` on a `better_launch`
+file execs it in the same process sharing the `BetterLaunch` singleton, and
+auto-forwards the calling launch's own args to the included function filtered by
+its signature (confirmed by reading `better_launch/wrapper.py`'s
+`_launch_this_wrapper`: "Pass only those arguments that actually match the
+function's signature"), so `map_name` reaches `sim_slam`/`sim_explore_node`
+without needing to be re-specified per include. Requires `map_name`; `--headless`
+not supported (dropped previously, GUI needed for costmap debugging).
+`sim_rviz.launch.py` intentionally left out — kept as a separate optional window,
+same as with the split files.
+**Test**: `bl dome_nav sim_nav_full.launch.py --map_name t04bcheck` launches
+Gazebo, `ros_gz_bridge`, `robot_state_publisher`, laser TF, slam_toolbox, Nav2,
+and `pluggable_explore_manager_node` from one command; confirmed `/map`, `/scan`,
+`/odom` publish and `lifecycle_manager` reports all Nav2 servers active.
+
+## T04c — Fix missing left_wheel/right_wheel TF (joint_states remap dead)
+**Status**: done
+**Description**: RViz2's RobotModel display reported no transform available for
+`left_wheel`/`right_wheel` (the two `continuous` joints in `dome3_sim.urdf`,
+whose TF depends on live joint angles rather than a fixed offset).
+Root-caused: `sim_robot.launch.py` (and the duplicated block in
+`sim_explore.launch.py`) bridges Gazebo's `JointStatePublisher` plugin output
+via `GazeboBridge("/model/dome2/joint_state", ..., remaps={"/model/dome2/
+joint_state": "/joint_states"})`, intending the bridge to publish under
+`/joint_states` so `robot_state_publisher` picks it up. Traced
+`spawn_topic_bridge()` in the installed `better_launch` package
+(`better_launch/gazebo.py`): it always starts the bridge node via
+`bl.node(..., raw=True)`, and `raw=True`'s own docstring says it "avoid[s]
+passing it any command line arguments except those specified" — so the
+`remaps` dict it builds is computed but never reaches the process. Confirmed
+via `/proc/<pid>/cmdline` on the running bridge: no `-r` remap args present at
+all. Result: Gazebo's joint data was real and correct (captured a message with
+`base_link_to_left_wheel`/`base_link_to_right_wheel` positions) but published
+only under `/model/dome2/joint_state`, which nothing subscribed to —
+`/joint_states` had zero publishers, so `robot_state_publisher` never computed
+those two transforms. Fixed by remapping the other side instead:
+`robot_state_publisher`'s own `bl.node()` call now takes `remaps={"/joint_states":
+"/model/dome2/joint_state"}` (a normal, non-`raw` node, where `bl.node()`'s
+remaps do work) in both `sim_robot.launch.py` and `sim_explore.launch.py`.
+Removed the now-dead `remaps=` kwarg from the `GazeboBridge` joint_state entry
+in both files, since it had no effect and would mislead future readers.
+**Test**: Manual — after fix, `ros2 topic info /joint_states -v` shows a
+publisher (previously zero); `ros2 run tf2_ros tf2_echo base_link left_wheel`
+resolves (previously "frame does not exist"); RViz2 RobotModel shows no
+missing-transform warning for `left_wheel`/`right_wheel`.
+
+## T04d — Fix empty [min_frontier_dist, max_frontier_dist] band (always-idle bug)
+**Status**: done
+**Description**: Telemetry (`~/.dome/telemetry/explore-zoo1-20260704.jsonl`)
+showed every exploration session ending immediately: `{"reason": "idle",
+"goals_sent": 0, "reached": 0, "failed": 0}`. Root cause: `ExploreParams.
+min_frontier_dist` defaults to 1.3 (`explore_context.py:20`, raised from 0.8 on
+2026-07-03 for the real-robot "never send a goal closer than 1m" request — see
+`02-doc/current.md`'s Exploration params section), but `max_frontier_dist`'s
+sim-side default stayed at 1.0 — both `pluggable_explore_manager_node.py`'s
+ROS parameter (`declare_parameter("max_frontier_dist", 1.0)`) and every sim
+launch file's `max_frontier_dist: float = 1.0` argument default
+(`sim_nav_full.launch.py`, `sim_explore.launch.py`, `sim_explore_node.launch.py`).
+`pick_best_frontier()`'s filter (`frontier_explorer.py:124-126`) skips any cell
+with `d < min_dist` (too close) OR `d > max_dist` (too far) — with
+min(1.3) > max(1.0), no distance satisfies both, so it always returns `None`
+regardless of the map. This is an empty-range bug, not a map/tuning issue; the
+2026-07-03 min-dist raise was never propagated to the sim-side max-dist
+default. Fixed by raising the sim-side `max_frontier_dist` default to 3.0 (room
+is 8x8 m; a single scan reveals most of one side, so the nearest real frontier
+after crossing the doorway is likely well past 1.3 m) in
+`pluggable_explore_manager_node.py` and all three sim launch files.
+**Test**: Regression test added in `test_pluggable_explore_manager_node.py`
+asserting the default `max_frontier_dist` parameter is greater than
+`ExploreParams.min_frontier_dist`, so this can't silently regress again.
+Manual: rerun `sim_nav_full.launch.py`, publish `exploration_start`, confirm
+telemetry shows `goals_sent > 0` instead of immediate idle.
+
+## T04e — Add prefer_farthest frontier-selection mode
+**Status**: done
+**Description**: Live telemetry (`~/.dome/telemetry/explore-zoo2-*.jsonl`) showed
+exploration cycling through 6+ failed goals, all clustered within ~1-1.2m of
+the robot's start near the interior doorway — each timeout blacklists only a
+0.5m radius (`blacklist_radius`) around the failed point, so the next
+nearest-unblacklisted cell is often still in the same local obstacle cluster.
+Root cause of the *retry-nearby* behavior (distinct from the already-documented
+inflation/BackUp stall itself, F13 T04 finding #5b): `pick_best_frontier()`
+always selected the single closest candidate cell to the robot
+(`frontier_explorer.py`), so repeated failures near one obstacle kept
+re-targeting that same neighborhood instead of trying a genuinely different
+part of the map. Per explicit user decision this session: sim and real-robot
+code must stay identical, differing only by parameter values — so this is
+implemented as a new opt-in parameter, not a separate code path.
+Added `prefer_farthest: bool = False` to `ExploreParams`
+(`explore_context.py`) and `pick_best_frontier()` (`frontier_explorer.py`) —
+when `True`, both the per-cluster and cross-cluster selection track the
+*farthest* qualifying cell instead of nearest (flips the comparison operator;
+all existing filters — blacklist, `min_dist`/`max_dist`, `max_radius` — still
+apply first). Wired through `frontier_algorithm.py` and exposed as a ROS
+parameter `prefer_farthest` on `pluggable_explore_manager_node.py` (default
+`False`, matching `ExploreParams`, so `explore_manager_node.py`'s call sites
+and any other caller are unaffected). All three sim launch files
+(`sim_nav_full.launch.py`, `sim_explore.launch.py`,
+`sim_explore_node.launch.py`) default their `prefer_farthest` launch arg to
+`True`, since that's where the retry-nearby problem was observed; real-robot
+launch files are untouched and keep the `False` default.
+**Test**: 4 new pure tests in `test_frontier_explorer.py` (farthest across
+clusters, farthest within one cluster, blacklist still respected, `max_dist`
+still respected) + 2 integration tests in `test_frontier_algorithm.py`
+confirming `ExploreParams.prefer_farthest` is correctly plumbed through
+`FrontierAlgorithm.next_goal()`. 162/162 pure tests pass (up from 156).
+**Not yet done**: live re-verification in Gazebo that this actually reduces
+the retry-nearby pattern — the underlying costmap-inflation stall (F13 T04
+finding #5b) is unfixed and will still cause any individual farther goal to
+potentially fail the same way if its path also crosses the doorway; this
+task only changes which frontier gets tried next, not whether the robot can
+reach it.
 
 ## T05 — End-to-end exploration smoke test
 **Status**: not done — blocked on T04's doorway costmap-inflation finding (robot cannot

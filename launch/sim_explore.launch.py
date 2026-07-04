@@ -15,7 +15,8 @@ from dome_nav.utils import dome_home, yaml_override, yaml_patch_dict
 def sim_explore_launch(
     map_name: str = "",
     max_explore_radius: float = 0.0,
-    max_frontier_dist: float = 1.0,
+    max_frontier_dist: float = 3.0,
+    prefer_farthest: bool = True,
 ):
     if not map_name:
         raise ValueError(
@@ -26,7 +27,7 @@ def sim_explore_launch(
 
     home = dome_home()
     slam_map_path = os.path.join(home, "slam_maps", map_name)
-    os.makedirs(slam_map_path, exist_ok=True)
+    os.makedirs(os.path.join(home, "slam_maps"), exist_ok=True)
 
     pkg = get_package_share_directory("dome_nav")
     urdf_path = os.path.join(pkg, "config", "dome3_sim.urdf")
@@ -86,15 +87,19 @@ def sim_explore_launch(
         GazeboBridge("/odom", "nav_msgs/msg/Odometry", "gz2ros"),
         GazeboBridge("/tf", "tf2_msgs/msg/TFMessage", "gz2ros"),
         GazeboBridge("/cmd_vel", "geometry_msgs/msg/Twist", "ros2gz"),
-        GazeboBridge("/model/dome2/joint_state", "sensor_msgs/msg/JointState", "gz2ros",
-                     remaps={"/model/dome2/joint_state": "/joint_states"}),
+        GazeboBridge("/model/dome2/joint_state", "sensor_msgs/msg/JointState", "gz2ros"),
     )
 
     # robot_state_publisher — fixed-joint TF (base_footprint→base_link→laser etc.)
+    # spawn_topic_bridge() always starts the bridge with raw=True, which drops any
+    # remaps passed to it, so the bridge publishes under its literal topic name.
+    # Remap robot_state_publisher's subscription instead, since bl.node() honors
+    # remaps for non-raw nodes.
     bl.node(
         "robot_state_publisher",
         "robot_state_publisher",
         params={"robot_description": robot_description, "use_sim_time": True},
+        remaps={"/joint_states": "/model/dome2/joint_state"},
     )
 
     # gz-sim renames the lidar sensor to "dome2/base_footprint/lidar" after fixed-joint
@@ -138,6 +143,7 @@ def sim_explore_launch(
         params={
             "max_explore_radius": max_explore_radius,
             "max_frontier_dist": max_frontier_dist,
+            "prefer_farthest": prefer_farthest,
             "map_name": map_name,
             "use_sim_time": True,
         },

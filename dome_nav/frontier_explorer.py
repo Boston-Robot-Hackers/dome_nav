@@ -95,11 +95,12 @@ def pick_best_frontier(
     start_xy: tuple[float, float] | None = None,
     min_dist: float = 0.0,
     max_dist: float = 0.0,
+    prefer_farthest: bool = False,
 ) -> tuple[float, float] | None:
     rx, ry = robot_xy
     bl = blacklist or set()
     best: tuple[float, float] | None = None
-    best_dist = float("inf")
+    best_dist = -1.0 if prefer_farthest else float("inf")
 
     for cluster in clusters:
         if len(cluster) < min_size:
@@ -111,7 +112,7 @@ def pick_best_frontier(
             if math.sqrt((cx - sx) ** 2 + (cy - sy) ** 2) > max_radius:
                 continue
         goal: tuple[float, float] | None = None
-        goal_dist = float("inf")
+        goal_dist = -1.0 if prefer_farthest else float("inf")
         for cell_idx in cluster:
             wx, wy = cell_to_world(cell_idx, info)
             too_close = any(
@@ -125,12 +126,14 @@ def pick_best_frontier(
                 continue
             if max_dist > 0.0 and d > max_dist:
                 continue
-            if d < goal_dist:
+            is_better = d > goal_dist if prefer_farthest else d < goal_dist
+            if is_better:
                 goal_dist = d
                 goal = (wx, wy)
         if goal is None:
             continue
-        if goal_dist < best_dist:
+        is_better = goal_dist > best_dist if prefer_farthest else goal_dist < best_dist
+        if is_better:
             best_dist = goal_dist
             best = goal
 

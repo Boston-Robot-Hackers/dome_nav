@@ -1,6 +1,6 @@
 ---
-version: "1.1"
-generated: "2026-07-03"
+version: "1.2"
+generated: "2026-07-04"
 ---
 
 # FrontierAlgorithm — The ExplorationAlgorithm Protocol Adapter
@@ -120,13 +120,17 @@ target = pick_best_frontier(
     start_xy=ctx.start_xy,
     min_dist=ctx.params.min_frontier_dist,
     max_dist=ctx.params.max_frontier_dist,
+    prefer_farthest=ctx.params.prefer_farthest,
 )
 ```
 
 `max_dist` was added for the Gazebo sim work (see `06-frontier_explorer.md`): it
 caps exploration hops to a maximum distance from the robot, in addition to the
-existing `min_dist` floor. Same forwarding pattern as every other filter —
-`FrontierAlgorithm` does not interpret the value, just passes it through.
+existing `min_dist` floor. `prefer_farthest` (added 2026-07-04) is a further
+refinement of the same idea: once a cell passes every filter, it decides
+whether the *nearest* or *farthest* surviving candidate wins. Both are the
+same forwarding pattern as every other filter — `FrontierAlgorithm` does not
+interpret the value, just passes it through.
 
 All filtering parameters are forwarded from `ctx.params` and `ctx.blacklist`
 rather than stored on the algorithm object. This keeps `FrontierAlgorithm`
@@ -135,8 +139,8 @@ algorithm just applies them. A caller that wants to experiment with a smaller
 `min_frontier_size` can change the param without touching this class.
 
 `pick_best_frontier` returns the world coordinates of the nearest
-non-blacklisted frontier cell that passes all filters, or `None` if no such
-cell exists.
+non-blacklisted frontier cell that passes all filters (or the farthest, if
+`prefer_farthest` is set), or `None` if no such cell exists.
 
 ### Step 3 — Diag or Nudge
 
@@ -258,7 +262,8 @@ case.
   no-frontier situations, a short ring buffer would give the operator more
   context about whether the condition is stable or oscillating.
 
-- The class is currently untested in isolation. Because it has no ROS imports
-  and accepts a plain `ExplorationContext` dataclass, a unit test could inject a
-  synthetic context with a small map array and verify that `latest_clusters` and
-  `latest_diag` are set correctly — without a running ROS graph.
+- The class is tested in isolation in `test_frontier_algorithm.py` (13 tests as
+  of 2026-07-04) — because it has no ROS imports and accepts a plain
+  `ExplorationContext` dataclass, tests inject a synthetic context with a small
+  map array and verify `latest_clusters`, `latest_diag`, and the returned goal
+  (including the `prefer_farthest` plumbing) without a running ROS graph.

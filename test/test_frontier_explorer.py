@@ -133,6 +133,51 @@ def test_pick_returns_nearest_centroid():
     assert abs(result[0] - 1.5) < 1e-6
 
 
+# --- prefer_farthest ---
+
+def test_pick_prefer_farthest_returns_farthest_across_clusters():
+    info = make_info(10, 1, resolution=1.0)
+    near = [1]   # world x=1.5
+    far = [8]    # world x=8.5
+    result = pick_best_frontier(
+        [near, far], info, (0.0, 0.0), min_size=1, prefer_farthest=True
+    )
+    assert result is not None
+    assert abs(result[0] - 8.5) < 1e-6
+
+
+def test_pick_prefer_farthest_within_single_cluster():
+    info = make_info(10, 1, resolution=1.0)
+    cluster = [1, 5, 8]  # world x=1.5, 5.5, 8.5
+    result = pick_best_frontier(
+        [cluster], info, (0.0, 0.0), min_size=1, prefer_farthest=True
+    )
+    assert result is not None
+    assert abs(result[0] - 8.5) < 1e-6
+
+
+def test_pick_prefer_farthest_respects_blacklist():
+    info = make_info(10, 1, resolution=1.0)
+    cluster = [1, 5, 8]  # world x=1.5, 5.5, 8.5
+    blacklist = {(8.5, 0.5)}
+    result = pick_best_frontier(
+        [cluster], info, (0.0, 0.0),
+        min_size=1, blacklist=blacklist, blacklist_radius=0.5, prefer_farthest=True,
+    )
+    assert result is not None
+    assert abs(result[0] - 5.5) < 1e-6
+
+
+def test_pick_prefer_farthest_respects_max_dist():
+    info = make_info(10, 1, resolution=1.0)
+    cluster = [1, 5, 8]  # world x=1.5, 5.5, 8.5 — distances 1.5, 5.5, 8.5
+    result = pick_best_frontier(
+        [cluster], info, (0.0, 0.0), min_size=1, max_dist=6.0, prefer_farthest=True,
+    )
+    assert result is not None
+    assert abs(result[0] - 5.5) < 1e-6
+
+
 def test_pick_skips_blacklisted_centroid():
     info = make_info(10, 1, resolution=1.0)
     near = [1]   # centroid x=1.5

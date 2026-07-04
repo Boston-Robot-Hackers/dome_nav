@@ -1,6 +1,6 @@
 ---
-version: "1.2"
-generated: "2026-07-03"
+version: "1.3"
+generated: "2026-07-04"
 ---
 
 # PluggableExploreManagerNode — Autonomous Exploration with Injected Algorithms
@@ -83,15 +83,37 @@ def __init__(self, algorithm: ExplorationAlgorithm | None = None):
     self.params = ExploreParams(
         max_explore_radius=self.max_explore_radius,
         max_frontier_dist=self.max_frontier_dist,
+        prefer_farthest=self.prefer_farthest,
     )
     self.algorithm = algorithm or FrontierAlgorithm()
 ```
 
 `max_frontier_dist` (added 2026-07-03, for the Gazebo sim work) follows the same
 declared-ROS-parameter pattern as `max_explore_radius`, but with a non-zero
-operational default (`1.0` m) rather than "unlimited" — the `ExploreParams`
-dataclass default stays `0.0` (see `04-explore_context.md`), so this node is
-the one place that actually opts into capping exploration hop distance.
+operational default (`3.0` m, raised from `1.0` on 2026-07-04 — see below)
+rather than "unlimited" — the `ExploreParams` dataclass default stays `0.0`
+(see `04-explore_context.md`), so this node is the one place that actually
+opts into capping exploration hop distance.
+
+**Empty-range bug, 2026-07-04**: the operational default started at `1.0` m,
+which is *below* `ExploreParams.min_frontier_dist`'s default of `1.3` m. Since
+`pick_best_frontier()` rejects any cell closer than `min_frontier_dist` *and*
+any cell farther than `max_frontier_dist`, a `[1.3, 1.0]` band admits no
+distance at all — every exploration session ended immediately with zero goals
+sent, for any map, with no error anywhere in the stack to point at the cause.
+Found via live telemetry showing `session_end` events with `goals_sent: 0`
+seconds after `session_start`. Fixed by raising the operational default to
+`3.0`; a regression test now asserts this node's default exceeds
+`ExploreParams().min_frontier_dist` directly, rather than relying on someone
+noticing the numbers by eye during a future change.
+
+`prefer_farthest` (added 2026-07-04) follows the same pattern again: a ROS
+parameter with its own operational default, separate from the `ExploreParams`
+dataclass default. Here the dataclass default (`False`) and this node's own
+declared-parameter default are actually the same value — it's the *launch
+files* that override it to `True` for sim use, not this node's constructor.
+See `06-frontier_explorer.md` for what the flag does and why nearest-first
+selection turned out to be self-defeating near the doorway.
 
 The `or` idiom works here because `None` is the only falsy value that should ever be
 passed. An explicitly constructed algorithm object is always truthy. This is simpler than
@@ -624,6 +646,15 @@ calling `clear_active_goal`, which avoids a double-cancel.
 
 The original node was deliberately left untouched so that a regression in the pluggable
 node does not affect a known-working deployment path.
+
+**Direction changed 2026-07-04**: per explicit user decision, this arrangement is no
+longer intended to be permanent. `explore_manager_node.py` was kept as a rollback-safe
+original in case the pluggable approach failed — it didn't, and the stated goal now is
+for sim and real-robot code to converge on this file for both, differing only by
+parameter values (e.g. `prefer_farthest`, speed caps) rather than by which node runs.
+`robot_explore.launch.py` (the real-robot entry point) has not yet been switched over —
+that is a distinct, explicitly-confirmed follow-up, not something to fold in silently
+alongside unrelated changes. See `02-doc/current.md`'s Likely Next Steps.
 
 ---
 

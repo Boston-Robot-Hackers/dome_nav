@@ -72,16 +72,19 @@ class PluggableExploreManagerNode(Node):
         self.create_timer(1.0 / self.EXPLORE_HZ, self.explore_tick)
 
         self.declare_parameter("max_explore_radius", 0.0)
-        self.declare_parameter("max_frontier_dist", 1.0)
+        self.declare_parameter("max_frontier_dist", 3.0)
+        self.declare_parameter("prefer_farthest", False)
         self.declare_parameter("map_name", "unknown")
         self.max_explore_radius: float = self.get_parameter("max_explore_radius").value
         self.max_frontier_dist: float = self.get_parameter("max_frontier_dist").value
+        self.prefer_farthest: bool = self.get_parameter("prefer_farthest").value
         self.map_name: str = self.get_parameter("map_name").value
         self.telemetry = TelemetryWriter(self.map_name, self.get_logger().info)
 
         self.params = ExploreParams(
             max_explore_radius=self.max_explore_radius,
             max_frontier_dist=self.max_frontier_dist,
+            prefer_farthest=self.prefer_farthest,
         )
         self.algorithm = algorithm or FrontierAlgorithm()
 
@@ -124,6 +127,7 @@ class PluggableExploreManagerNode(Node):
                     "goal_inset": self.params.goal_inset_m,
                     "timeout_s": self.GOAL_TIMEOUT_S,
                     "max_radius": self.params.max_explore_radius,
+                    "prefer_farthest": self.params.prefer_farthest,
                 },
             )
         elif name == "exploration_stop":

@@ -1,6 +1,6 @@
 ---
-version: "1.1"
-generated: "2026-07-03"
+version: "1.2"
+generated: "2026-07-04"
 ---
 
 # sim_explore.launch.py — Autonomous Exploration in Gazebo
@@ -24,8 +24,11 @@ the next.
 
 For debugging the individual pieces of this stack in isolation (one Gazebo/TF/Nav2/slam
 piece per terminal, rather than the whole thing at once), see `X07-sim_debug_launch_files.md`
-— four companion launch files built by decomposing this one and later recombining into a
-more manageable set once the granular version had served its debugging purpose.
+— five companion launch files built by decomposing this one and later recombining into a
+more manageable set once the granular version had served its debugging purpose. A sixth
+file, `sim_nav_full.launch.py`, composes those five back into a single command via
+`bl.include()` (rather than duplicating their logic like this file does) — see
+`X07-sim_debug_launch_files.md`'s closing Observations for the tradeoff.
 
 ```mermaid
 flowchart TD
@@ -110,14 +113,24 @@ gazebo.spawn_topic_bridge(
     GazeboBridge("/odom", "nav_msgs/msg/Odometry", "gz2ros"),
     GazeboBridge("/tf", "tf2_msgs/msg/TFMessage", "gz2ros"),
     GazeboBridge("/cmd_vel", "geometry_msgs/msg/Twist", "ros2gz"),
-    GazeboBridge("/model/dome2/joint_state", "sensor_msgs/msg/JointState", "gz2ros",
-                 remaps={"/model/dome2/joint_state": "/joint_states"}),
+    GazeboBridge("/model/dome2/joint_state", "sensor_msgs/msg/JointState", "gz2ros"),
 )
 ```
 
 The direction matters: everything the robot *senses* flows `gz2ros` (Gazebo → ROS2);
 `/cmd_vel` is the one exception, flowing `ros2gz`, because that's the only signal ROS2
 sends *to* the simulated robot.
+
+**Bug found + fixed 2026-07-04**: this bridge entry originally carried
+`remaps={"/model/dome2/joint_state": "/joint_states"}`, intending to make the
+bridge publish under the name `robot_state_publisher` expects. It had no
+effect — `spawn_topic_bridge()` always starts its bridge process with
+`raw=True` internally, which drops any `remaps` passed to it (confirmed via
+`/proc/<pid>/cmdline` showing no `-r` arguments on the running process).
+`/joint_states` had zero publishers as a result, and RViz2's RobotModel
+display showed no transform for `left_wheel`/`right_wheel`. Fixed by
+remapping `robot_state_publisher`'s own subscription instead — see
+`X07-sim_debug_launch_files.md` for the full trace.
 
 ### The lidar frame naming quirk
 

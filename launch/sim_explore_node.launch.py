@@ -15,7 +15,8 @@ from better_launch import BetterLaunch, launch_this
 def sim_explore_node_launch(
     map_name: str = "",
     max_explore_radius: float = 0.0,
-    max_frontier_dist: float = 1.0,
+    max_frontier_dist: float = 3.0,
+    prefer_farthest: bool = True,
 ):
     if not map_name:
         raise ValueError(
@@ -32,6 +33,7 @@ def sim_explore_node_launch(
         params={
             "max_explore_radius": max_explore_radius,
             "max_frontier_dist": max_frontier_dist,
+            "prefer_farthest": prefer_farthest,
             "map_name": map_name,
             "use_sim_time": True,
         },

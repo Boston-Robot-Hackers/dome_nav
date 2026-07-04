@@ -21,6 +21,7 @@ class ExploreParams:
     max_frontier_dist: float = 0.0
     goal_inset_m: float = 0.3
     max_explore_radius: float = 0.0
+    prefer_farthest: bool = False
 
 
 @dataclass
