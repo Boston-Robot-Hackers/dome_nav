@@ -474,6 +474,33 @@ that demonstrated the failure.
 and `test_redirect_suppressed_when_prefer_farthest` (new guard). 164/168 pure
 tests pass (up from 162). Not yet re-verified live in Gazebo.
 
+## T04g — Expose min_frontier_size as a ROS parameter, try 1 in sim
+**Status**: done
+**Description**: User observed (looking at RViz2's Map display, confirmed to
+exactly match a direct `/map` topic dump) that visibly farther frontier cells
+existed but weren't being picked despite `prefer_farthest`. Investigated by
+running `find_frontier_clusters` directly against the live map: 32 clusters
+total, but only 2 exceeded `min_frontier_size` (10) — a 363-cell cluster
+(cells 0.41-1.51m away) and a 77-cell cluster (0.60-1.24m away, and entirely
+excluded anyway since its farthest cell is below `min_frontier_dist`'s 1.3m
+floor). The other 30 clusters were 1-4 cells each, reaching up to 2.05m away
+— likely real frontier slivers along walls/corners, not necessarily noise —
+all discarded by the size filter regardless of distance. This explained why
+`prefer_farthest` topped out around 1.5m: every farther candidate was being
+filtered out before farthest-selection ever saw it. To test the hypothesis,
+exposed `min_frontier_size` as a ROS parameter on
+`pluggable_explore_manager_node.py` (default 10, matching `ExploreParams`,
+so real-robot behavior is unaffected) and set the sim launch files
+(`sim_nav_full.launch.py`, `sim_explore.launch.py`, `sim_explore_node.launch.py`)
+to default it to 1, effectively disabling the size filter for this
+experiment.
+**Test**: 2 new tests in `test_pluggable_explore_manager_node.py` confirming
+the ROS parameter default matches `ExploreParams` and is correctly plumbed
+into `self.params`. 166/170 pure tests pass (up from 164). Not yet observed
+live whether `min_frontier_size=1` actually lets farthest-first reach the
+2m-class clusters, or whether those turn out to be scan noise that make
+exploration worse (chasing single-cell targets). Follow up after a live run.
+
 ## T05 — End-to-end exploration smoke test
 **Status**: not done — blocked on T04's doorway costmap-inflation finding (robot cannot
 reliably cross the interior doorway; recovery behaviors fail there too)

@@ -17,6 +17,7 @@ def sim_explore_node_launch(
     max_explore_radius: float = 0.0,
     max_frontier_dist: float = 3.0,
     prefer_farthest: bool = True,
+    min_frontier_size: int = 1,
 ):
     if not map_name:
         raise ValueError(
@@ -34,6 +35,7 @@ def sim_explore_node_launch(
             "max_explore_radius": max_explore_radius,
             "max_frontier_dist": max_frontier_dist,
             "prefer_farthest": prefer_farthest,
+            "min_frontier_size": min_frontier_size,
             "map_name": map_name,
             "use_sim_time": True,
         },

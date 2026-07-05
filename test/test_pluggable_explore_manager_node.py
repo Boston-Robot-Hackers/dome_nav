@@ -354,3 +354,13 @@ def test_publish_status_dist_correct(node):
 
 def test_default_max_frontier_dist_exceeds_min_frontier_dist(node):
     assert node.max_frontier_dist > ExploreParams().min_frontier_dist
+
+
+# --- min_frontier_size ROS parameter wiring ---
+
+def test_min_frontier_size_default_matches_explore_params(node):
+    assert node.min_frontier_size == ExploreParams().min_frontier_size
+
+
+def test_min_frontier_size_plumbed_into_params(node):
+    assert node.params.min_frontier_size == node.min_frontier_size
