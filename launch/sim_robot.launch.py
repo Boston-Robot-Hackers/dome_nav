@@ -13,22 +13,28 @@ from ament_index_python.packages import get_package_share_directory
 from better_launch import BetterLaunch, launch_this
 from better_launch import gazebo
 from better_launch.gazebo import GazeboBridge
+from dome_nav.utils import require_world_name, world_spawn_xy
 
 
 @launch_this(ui=True)
-def sim_robot_launch():
+def sim_robot_launch(world_name: str = ""):
     bl = BetterLaunch()
 
     pkg = get_package_share_directory("dome_nav")
+    require_world_name(
+        world_name, os.path.join(pkg, "worlds"),
+        "bl dome_nav sim_robot.launch.py --world_name <name>",
+    )
     urdf_path = os.path.join(pkg, "config", "dome3_sim.urdf")
     with open(urdf_path) as f:
         robot_description = f.read()
 
-    gazebo.gazebo_launch("dome_nav", "simple_room.world", gz_args=["-r"])
+    spawn_x, spawn_y = world_spawn_xy(world_name)
+    gazebo.gazebo_launch("dome_nav", f"{world_name}.world", gz_args=["-r"])
     gazebo.spawn_model(
         "dome2",
         urdf_path,
-        spawn_args=gazebo.get_gazebo_axes_args(x=-1.0, y=-1.0, z=0.05),
+        spawn_args=gazebo.get_gazebo_axes_args(x=spawn_x, y=spawn_y, z=0.05),
     )
 
     gazebo.spawn_topic_bridge(

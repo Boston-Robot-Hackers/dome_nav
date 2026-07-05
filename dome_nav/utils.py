@@ -13,6 +13,43 @@ def dome_home() -> str:
     return os.path.expanduser(os.environ.get("DOME_HOME", "~/.dome"))
 
 
+def available_worlds(worlds_dir: str) -> list[str]:
+    """List installed Gazebo world names (without the .world extension)."""
+    return sorted(
+        f[: -len(".world")] for f in os.listdir(worlds_dir) if f.endswith(".world")
+    )
+
+
+def require_world_name(world_name: str, worlds_dir: str, usage: str) -> str:
+    """Validate world_name against the worlds actually installed in worlds_dir.
+
+    Raises ValueError naming the available choices when missing or unknown,
+    rather than letting Gazebo fail later with an opaque "file not found".
+    """
+    choices = available_worlds(worlds_dir)
+    if world_name not in choices:
+        raise ValueError(
+            f"world_name is required and must be one of {choices}"
+            f" (got {world_name!r}): {usage}"
+        )
+    return world_name
+
+
+# Each world was designed with a specific robot starting position in mind
+# (e.g. multi_room.world uses a corner origin, simple_room.world a centered
+# one) -- selecting a world should not also require remembering its spawn
+# point by hand.
+WORLD_SPAWN_XY: dict[str, tuple[float, float]] = {
+    "simple_room": (-1.0, -1.0),
+    "multi_room": (1.0, 1.0),
+}
+
+
+def world_spawn_xy(world_name: str) -> tuple[float, float]:
+    """Return the designed robot spawn (x, y) for a known world name."""
+    return WORLD_SPAWN_XY.get(world_name, (0.0, 0.0))
+
+
 def yaml_override(base_file: str, override_file: str) -> str:
     """Merge two YAML files, override_file taking precedence. Returns temp file path."""
     with open(base_file) as f:

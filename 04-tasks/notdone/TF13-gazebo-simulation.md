@@ -562,6 +562,34 @@ checking `gz model --list`: all 12 expected models loaded (ground_plane +
 4 outer walls + 3 room walls + 2 divider segments + baffle + vertical wall),
 no errors in the server log.
 
+## T04j — Add world_name launch argument
+**Status**: done
+**Description**: With two world files now installed (`simple_room.world`,
+`multi_room.world`), added a required `world_name` argument so a launch can
+pick which one to use, rather than the Gazebo filename staying hardcoded.
+Added `available_worlds()`, `require_world_name()`, and `world_spawn_xy()`
+as pure functions in `dome_nav/utils.py` — `require_world_name()` raises a
+`ValueError` naming every world actually found in the installed
+`share/dome_nav/worlds/` directory (not a hardcoded list, so it can't drift
+out of sync) plus a launch-specific usage hint, when `world_name` is missing
+or unrecognized. Each world was designed around a specific robot starting
+position (`multi_room.world` uses a corner origin and spawns at (1,1);
+`simple_room.world` is centered and spawns at (-1,-1)), so
+`world_spawn_xy()` maps a world name to its designed spawn point — picking a
+world doesn't also require remembering its spawn point by hand. Wired into
+`sim_robot.launch.py` (primary Gazebo+spawn logic), `sim_explore.launch.py`
+(duplicates the same logic directly), and `sim_nav_full.launch.py` (forwards
+`world_name` to its `sim_robot.launch.py` include).
+**Test**: 8 new pure tests in `test_utils_pure.py` covering `available_worlds`,
+`require_world_name` (accepts known choice, rejects empty, lists choices in
+the error, includes the usage hint), and `world_spawn_xy` (known/unknown
+world). 174/178 pure tests pass (up from 166). Manually verified: `bl dome_nav
+sim_robot.launch.py` (no `--world_name`) raises `ValueError: world_name is
+required and must be one of ['multi_room', 'simple_room'] ...`; `bl dome_nav
+sim_robot.launch.py --world_name multi_room` spawns the robot at `(1.0, 1.0)`
+(confirmed via the actual `ros_gz_sim create -x 1.0 -y 1.0` command line) with
+no errors and no leftover processes after shutdown.
+
 ## T05 — End-to-end exploration smoke test
 **Status**: not done — blocked on T04's doorway costmap-inflation finding (robot cannot
 reliably cross the interior doorway; recovery behaviors fail there too)

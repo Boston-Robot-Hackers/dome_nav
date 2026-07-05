@@ -13,13 +13,15 @@
 # Open Source Under MIT license
 
 import os
+from ament_index_python.packages import get_package_share_directory
 from better_launch import BetterLaunch, launch_this
-from dome_nav.utils import dome_home
+from dome_nav.utils import dome_home, require_world_name
 
 
 @launch_this(ui=True)
 def sim_nav_full_launch(
     map_name: str = "",
+    world_name: str = "",
     max_explore_radius: float = 0.0,
     max_frontier_dist: float = 3.0,
     prefer_farthest: bool = True,
@@ -29,6 +31,10 @@ def sim_nav_full_launch(
         raise ValueError(
             "map_name is required: bl dome_nav sim_nav_full.launch.py --map_name <name>"
         )
+    require_world_name(
+        world_name, os.path.join(get_package_share_directory("dome_nav"), "worlds"),
+        "bl dome_nav sim_nav_full.launch.py --world_name <name>",
+    )
 
     bl = BetterLaunch()
 
