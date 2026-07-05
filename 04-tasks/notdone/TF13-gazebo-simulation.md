@@ -590,6 +590,20 @@ sim_robot.launch.py --world_name multi_room` spawns the robot at `(1.0, 1.0)`
 (confirmed via the actual `ros_gz_sim create -x 1.0 -y 1.0` command line) with
 no errors and no leftover processes after shutdown.
 
+## T04k — Raise sim cruise speed 50%
+**Status**: done
+**Description**: At user request, raised the sim-only speed override in both
+`sim_nav2.launch.py` and `sim_explore.launch.py`: `controller_server.
+FollowPath.desired_linear_vel` 0.3 -> 0.45 m/s (50% faster), and
+`velocity_smoother.max_velocity`/`min_velocity` linear component 0.4 -> 0.6
+m/s so the smoother's cap doesn't clip the new higher desired speed.
+`max_accel`/`max_decel` left unchanged (1.5 m/s² already reaches 0.45 m/s in
+0.3s, no bottleneck). Config-only change in both duplicated sim-speed-bump
+blocks; does not touch the shared real-robot `explore_param_patch.yaml`
+(0.12 m/s cap for slam_toolbox scan-matching protection, untouched).
+**Test**: No test asserts specific speed values (checked; none do). Rebuilt,
+174/178 pure tests pass (unaffected, config-only change).
+
 ## T05 — End-to-end exploration smoke test
 **Status**: not done — blocked on T04's doorway costmap-inflation finding (robot cannot
 reliably cross the interior doorway; recovery behaviors fail there too)

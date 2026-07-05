@@ -67,13 +67,15 @@ def sim_explore_launch(
     # speed low to protect slam_toolbox scan-matching on real hardware. That
     # constraint doesn't apply to development/testing in Gazebo, so raise the
     # cap here rather than touching the shared real-robot config files.
+    # Linear cruise speed raised 50% (0.3 -> 0.45) at user request; velocity_smoother's
+    # linear cap raised to match (0.4 -> 0.6) so it doesn't clip the new desired speed.
     nav2_config = yaml_patch_dict(nav2_config, {
         "controller_server": {"ros__parameters": {
-            "FollowPath": {"desired_linear_vel": 0.3},
+            "FollowPath": {"desired_linear_vel": 0.45},
         }},
         "velocity_smoother": {"ros__parameters": {
-            "max_velocity": [0.4, 0.0, 1.9],
-            "min_velocity": [-0.4, 0.0, -1.9],
+            "max_velocity": [0.6, 0.0, 1.9],
+            "min_velocity": [-0.6, 0.0, -1.9],
             "max_accel": [1.5, 0.0, 3.2],
             "max_decel": [-1.5, 0.0, -3.2],
         }},
