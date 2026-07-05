@@ -448,6 +448,32 @@ potentially fail the same way if its path also crosses the doorway; this
 task only changes which frontier gets tried next, not whether the robot can
 reach it.
 
+## T04f — Disable mid-navigation redirect under prefer_farthest
+**Status**: done
+**Description**: Live testing (2026-07-05) of T04e's `prefer_farthest` showed
+the robot ping-ponging between two points ~1.7m apart instead of exploring —
+confirmed via telemetry (`~/.dome/telemetry/explore-boo1-20260705.jsonl`): 17
+`goal_sent`/`redirect` pairs alternating between the same two coordinates
+every ~10s, zero goals reached. Root cause: `check_goal_redirect()` re-picks
+"the best frontier" every tick from the robot's *current* position and
+cancels/redirects if it shifted more than `REDIRECT_THRESHOLD` (1.5m) from the
+active goal — a mechanism designed to catch genuine map updates revealed by
+the lidar during transit. Under `prefer_farthest`, "best" means "farthest from
+the robot's current position," which flips to the opposite side as soon as the
+robot makes any progress toward its goal — an artifact of the robot's own
+motion, not new map information. This is structurally different from
+nearest-first, where moving toward the nearest frontier keeps it nearest (or
+the map reveals it and a new nearby one takes over), so redirect is stable
+there. Fixed by returning early from `check_goal_redirect()` when
+`self.prefer_farthest` is `True` — once a farthest-first goal is sent, the
+robot commits to it rather than re-evaluating mid-flight. Reasoning documented
+inline in the method's comment block, including the specific telemetry file
+that demonstrated the failure.
+**Test**: 2 new tests in `test_pluggable_explore_manager_node.py` —
+`test_redirect_fires_when_not_prefer_farthest` (existing behavior unchanged)
+and `test_redirect_suppressed_when_prefer_farthest` (new guard). 164/168 pure
+tests pass (up from 162). Not yet re-verified live in Gazebo.
+
 ## T05 — End-to-end exploration smoke test
 **Status**: not done — blocked on T04's doorway costmap-inflation finding (robot cannot
 reliably cross the interior doorway; recovery behaviors fail there too)

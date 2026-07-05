@@ -187,6 +187,34 @@ def test_find_frontier_sends_algorithm_goal(node):
     assert sent_xy == (1.0, 2.0)
 
 
+# --- check_goal_redirect disabled under prefer_farthest ---
+
+def test_redirect_fires_when_not_prefer_farthest(node):
+    node.prefer_farthest = False
+    node.is_redirecting = False
+    node.latest_map = MagicMock()
+    node.current_goal_xy = (0.0, 0.0)
+    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
+    node.frontier_goal_for_current_map = MagicMock(return_value=(5.0, 0.0))
+    node.goal_handle = MagicMock()
+    node.check_goal_redirect()
+    node.goal_handle.cancel_goal_async.assert_called_once()
+    assert node.is_redirecting is True
+
+
+def test_redirect_suppressed_when_prefer_farthest(node):
+    node.prefer_farthest = True
+    node.is_redirecting = False
+    node.latest_map = MagicMock()
+    node.current_goal_xy = (0.0, 0.0)
+    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
+    node.frontier_goal_for_current_map = MagicMock(return_value=(5.0, 0.0))
+    node.goal_handle = MagicMock()
+    node.check_goal_redirect()
+    node.goal_handle.cancel_goal_async.assert_not_called()
+    assert node.is_redirecting is False
+
+
 # --- check_goal_timeout ---
 
 def test_timeout_not_expired_does_nothing(node):

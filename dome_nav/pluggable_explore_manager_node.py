@@ -192,11 +192,28 @@ class PluggableExploreManagerNode(Node):
         # Re-evaluate the frontier each tick while in transit. If the best goal
         # has moved more than REDIRECT_THRESHOLD from the current goal (because
         # the map updated as the robot scanned along its path), cancel and redirect.
+        # The intent is to opportunistically capture map updates that happen
+        # mid-flight: the lidar keeps scanning during travel, so by the time the
+        # robot would have arrived at a goal picked minutes ago, that frontier may
+        # already be stale — a nearer, newly-revealed one is often better.
         #
         # slam_toolbox only republishes /map on its own map_update_interval (5s by
         # default), far slower than this 2Hz tick — recomputing frontier clustering
         # against an unchanged map is wasted work, so the result is memoized by map
         # stamp and reused until a genuinely new map arrives.
+        #
+        # Disabled under prefer_farthest: "best" there means "farthest from the
+        # robot's current position," which flips sides as soon as the robot moves
+        # at all toward either side — not because the map changed, but purely as
+        # an artifact of the robot's own motion. Confirmed via telemetry
+        # (~/.dome/telemetry/explore-boo1-20260705.jsonl) on 2026-07-05: the robot
+        # ping-ponged between two points ~1.7m apart, redirected every ~10s,
+        # 17 goals sent and zero reached in one session. Under nearest-first this
+        # redirect is stable (moving toward the nearest frontier keeps it nearest,
+        # or the map reveals it and a new nearby one takes over) — the instability
+        # is specific to farthest-first's dependence on the robot's own position.
+        if self.prefer_farthest:
+            return
         no_active_redirect_target = (
             self.is_redirecting or self.latest_map is None
             or self.current_goal_xy is None
