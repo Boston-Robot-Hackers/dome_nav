@@ -358,10 +358,31 @@ live testing, prefer_farthest algorithm change**:
   `worldToMap failed: mx,my: 207,98, size_x,size_y: 202,202` error seen in the same
   investigation (202 cells ≈ this world's ~10m extent; the error fires for points near the
   map's edge). Fixed by raising `min_frontier_size` back to 5 in all three sim launch
-  files. **Not yet re-verified live** — next session should confirm goals stop hitting the
-  "legal potential" planner failure. The `worldToMap` boundary error itself is a separate,
-  still-open item — may need its own investigation if it recurs after the `min_frontier_size`
-  fix (e.g. it could be specific to edge-of-map goals rather than edge-of-known-space ones).
+  files. **Re-verified live same session (T04m) and found NOT fully fixed**: reviewed
+  telemetry (`explore-toy4-20260705.jsonl`, the first run after this fix) plus the matching
+  Nav2 logs. Result: 0 of 29 goals reached — same as every other run logged today (toy1-3,
+  zoo3, zoo5 all show `reached: 0`). `planner_server`'s log shows the identical "Failed to
+  create a plan from potential when a legal potential was found" error recurring for 10
+  distinct goal targets in that one run, including a goal 1.55 m from the nearest wall (open
+  space, not a ragged-edge or inflation-zone goal). So `min_frontier_size` 1→5 reduced how
+  often a pathological goal triggers this NavFn bug, but did not fix the underlying planner
+  defect — it still fires on ordinary goals. Because the explore node's own 25s
+  `GOAL_TIMEOUT_S` elapses before Nav2's internal retry loop surfaces a hard failure, these
+  show up in telemetry as `"timeout"` rather than the loud planner error, which is why the
+  original live check (looking only for absence of a crash) appeared to confirm the fix.
+  Also quantified: the `worldToMap failed: mx,my: ..., size_x,size_y: 202,202` boundary
+  error occurred 4,460 times in this single run — far more than an occasional edge case,
+  still unresolved. Separately, cross-checked the "are we always picking frontiers inside an
+  obstacle's inflation zone?" hypothesis against `multi_room.world`'s wall geometry: 13 of
+  29 goals (45%) landed within `robot_radius + inflation_radius` (0.35 m) of a wall, which
+  explains most (8/10) of the fast `aborted`-status failures, but not the `timeout` failures
+  (which include clear-space goals) — so inflation-zone placement is a real contributing
+  factor but not the dominant cause. `behavior_server`'s log shows every individual
+  Spin/Wait/BackUp recovery step completing successfully in this run, confirming this is
+  **not** a repeat of the `simple_room.world` doorway BackUp-collision mechanism (T04 5b) —
+  it's purely the planner failing to produce a path, recovering, and failing again in a loop
+  until timeout. See TF13 T04m for full detail. F13 T05 remains blocked, now on this planner
+  defect rather than on goal-placement/doorway geometry.
 
 **Manual single-window debug launch files (2026-07-03)**: built a set of `sim_*.launch.py`
 files so each piece of the sim stack can be started in its own terminal, for step-by-step
@@ -483,12 +504,22 @@ in place.
 
 ## Likely next steps
 
-1. **F13 T04l** — live-verify the `min_frontier_size` 1→5 fix in `multi_room.world`: confirm
-   goals stop hitting the NavFn "legal potential" planner failure and start actually
-   reaching. Not yet re-tested after the fix.
-2. **F13** — investigate the `worldToMap failed: mx,my: 207,98, size_x,size_y: 202,202`
-   error separately if it recurs after the `min_frontier_size` fix — may be a distinct
-   edge-of-map-extent issue (not edge-of-known-space) specific to the larger `multi_room.world`.
+1. **F13 T04o** — live re-verify the `max_frontier_dist` 3.0→15.0 fix (2026-07-05, found
+   via live user observation in RViz): `no_frontier` telemetry showed 10 genuinely-sized
+   frontier clusters all rejected by the distance band, not absent — `max_frontier_dist:
+   3.0` was carried over from the smaller `simple_room.world` and silently capped
+   `prefer_farthest` in the bigger `multi_room.world`. Fixed by raising the default to
+   15.0 in all three sim launch files + the node's ROS parameter default. Not yet
+   re-verified live.
+2. **F13 T04m** — root-cause the NavFn "legal potential" planner bug itself (confirmed
+   2026-07-05: it still fires on ordinary open-space goals, not just ragged-edge ones;
+   `min_frontier_size` 1→5 only reduced its frequency). Candidates: switch the global
+   planner plugin (e.g. Smac2D/SmacHybrid instead of NavFn/GridBased), or pad goal
+   placement further from ragged known/unknown edges. Every logged sim run on 2026-07-05
+   reached 0 of its goals — this is now the primary blocker for F13 T05.
+2. **F13** — investigate the `worldToMap failed: mx,my: ..., size_x,size_y: 202,202` error —
+   confirmed still occurring (4,460 times in one run, 2026-07-05) and unresolved; may be a
+   distinct edge-of-map-extent issue (not edge-of-known-space) specific to `multi_room.world`.
 3. **F13** — `simple_room.world`'s 0.6m doorway is still too tight for this robot at any
    safe `inflation_radius` (see the inflation-geometry math worked out 2026-07-05) — either
    avoid that world for doorway-dependent testing (use `multi_room.world`'s 2m/1.5m openings
@@ -528,9 +559,11 @@ in place.
   `explore_manager_node.py` and `ExploreParams`' default — see note below)
 - `MAX_FRONTIER_DIST`: 0.0 (unlimited) at the `ExploreParams` dataclass level; the pluggable
   sim node (`pluggable_explore_manager_node` / sim launch files) defaults its
-  `max_frontier_dist` ROS parameter to 3.0 m (raised from 1.0 on 2026-07-04 — 1.0 was below
-  `MIN_FRONTIER_DIST`, an empty/impossible band that always failed to find frontiers; see F13
-  T04d), capping exploration hops in sim
+  `max_frontier_dist` ROS parameter to **15.0 m** (raised from 3.0 on 2026-07-05, F13 T04o —
+  3.0 was tuned for the smaller `simple_room.world` and silently capped `prefer_farthest`
+  in the bigger `multi_room.world`, discarding genuinely reachable far frontiers; before
+  that, raised from 1.0 on 2026-07-04 since 1.0 was below `MIN_FRONTIER_DIST`, an empty/
+  impossible band that always failed to find frontiers — see F13 T04d)
 - `prefer_farthest`: `False` at the `ExploreParams` dataclass level and on
   `pluggable_explore_manager_node`'s ROS parameter default; sim launch files default it to
   `True` (added 2026-07-04, F13 T04e) — selects the farthest qualifying frontier instead of

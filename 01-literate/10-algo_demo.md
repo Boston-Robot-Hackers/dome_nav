@@ -1,6 +1,6 @@
 ---
-version: "1.0"
-generated: "2026-06-28"
+version: "1.1"
+generated: "2026-07-05"
 ---
 
 # algo_demo — Interactive Frontier Exploration Simulator
@@ -224,6 +224,97 @@ path is clear, it reaches those frontier cells via a different goal.
 
 ---
 
+## Goal Nudging: Toward Robot vs. Away From Unknown
+
+A frontier cell is, by definition, a free cell adjacent to unknown space — the sensor's
+current edge of visibility. Sending Nav2 a goal sitting exactly on that boundary invites
+trouble: `worldToMap` lookups can fail near an unmapped region, and (as live Gazebo
+telemetry later confirmed — see `04-tasks/notdone/TF13-gazebo-simulation.md` T04m/T04n) the
+NavFn global planner can fail with "legal potential found, no path" precisely when the goal
+sits on the ragged known/unknown edge. Some inset off that edge, back into confirmed free
+space, is needed before the goal is usable.
+
+The original approach, `nudge_toward_robot`, pulls the raw frontier cell a fixed distance
+(`goal_inset_m`) toward the robot's current position:
+
+```python
+def nudge_toward_robot(xy, robot_xy, inset_m):
+    dx = robot_xy[0] - xy[0]
+    dy = robot_xy[1] - xy[1]
+    dist = math.sqrt(dx * dx + dy * dy)
+    if dist < inset_m:
+        return xy
+    scale = inset_m / dist
+    return (xy[0] + dx * scale, xy[1] + dy * scale)
+```
+
+This is a reasonable proxy — the robot is usually on the known side of the frontier — but it
+is only a proxy. The direction "toward the robot" and the direction "away from the unknown
+boundary" are the same only when the robot happens to sit on the boundary's normal. Approach
+the same frontier cell from an oblique angle and the two directions diverge; a synthetic
+concave-corner test (an L-shaped known region, frontier tip exposed to unknown on two sides)
+showed `nudge_toward_robot`'s effective clearance from the unknown boundary dropping from a
+full 3-cell inset to just 1 cell, depending solely on where the robot happened to be standing.
+
+`nudge_away_from_unknown` targets the boundary directly instead of using the robot as a
+proxy. For every unknown cell within a small window around the target, it accumulates a unit
+vector pointing from that unknown cell back toward the target; the sum of those vectors is
+the escape direction, robust to the robot's position:
+
+```python
+def nudge_away_from_unknown(target_xy, data, info, inset_m, search_cells=2):
+    tc = int((target_xy[0] - info.origin_x) / info.resolution)
+    tr = int((target_xy[1] - info.origin_y) / info.resolution)
+    vx, vy = 0.0, 0.0
+    for dr in range(-search_cells, search_cells + 1):
+        for dc in range(-search_cells, search_cells + 1):
+            if dr == 0 and dc == 0:
+                continue
+            nr, nc = tr + dr, tc + dc
+            if not (0 <= nr < info.height and 0 <= nc < info.width):
+                continue
+            if data[nr * info.width + nc] != CELL_UNK:
+                continue
+            dist = math.sqrt(dr * dr + dc * dc)
+            vx += -dc / dist
+            vy += -dr / dist
+    mag = math.sqrt(vx * vx + vy * vy)
+    if mag == 0.0:
+        return target_xy
+    dir_x, dir_y = vx / mag, vy / mag
+
+    for scale in (1.0, 0.66, 0.33):
+        step = inset_m * scale
+        cand_xy = (target_xy[0] + dir_x * step, target_xy[1] + dir_y * step)
+        cc = int((cand_xy[0] - info.origin_x) / info.resolution)
+        cr = int((cand_xy[1] - info.origin_y) / info.resolution)
+        if 0 <= cr < info.height and 0 <= cc < info.width:
+            if data[cr * info.width + cc] == CELL_FREE:
+                return cand_xy
+    return target_xy
+```
+
+Three details matter here:
+
+- **Vectors are weighted by inverse distance, not counted equally.** A cell diagonally two
+  steps away contributes less than an adjacent one, so the escape direction favors moving
+  away from the *closest* unknown cells first — the ones most responsible for the boundary
+  instability.
+- **Step size backs off in thirds (`1.0, 0.66, 0.33`) rather than failing outright.** If the
+  full inset would land on an occupied or unknown cell (a tight corner where "away from
+  unknown" leads toward a wall instead), a shorter step is tried before giving up and
+  returning the raw target unchanged.
+- **`mag == 0.0` falls back to the raw target**, not to `nudge_toward_robot`. This can only
+  happen if the search window found no unknown neighbor at all — which shouldn't occur for a
+  genuine frontier cell, but the function stays defensive rather than assuming.
+
+Both strategies are wired into the demo behind `--nudge-mode {robot,unknown}` so they can be
+compared side-by-side on the same map and frontier selection, without touching the
+production `frontier_algorithm.py` path. This is deliberately a throwaway comparison
+harness, not a refactor of the real nudge logic — see Observations below.
+
+---
+
 ## Rendering
 
 The renderer produces one character per cell, colour-coded with ANSI 256-colour escapes.
@@ -259,28 +350,43 @@ larger maps. The cluster legend below the map shows each label with its cell cou
 ```mermaid
 sequenceDiagram
     participant Loop
-    participant Algo as FrontierAlgorithm
+    participant Clusters as find_frontier_clusters
+    participant Pick as pick_best_frontier
+    participant Nudge as nudge_toward_robot / nudge_away_from_unknown
     participant Map as map data
 
-    Loop->>Algo: next_goal(ctx)
-    Algo-->>Loop: goal_xy or None
+    Loop->>Clusters: find_frontier_clusters(data, info)
+    Clusters-->>Loop: clusters
+    Loop->>Pick: pick_best_frontier(clusters, ...)
+    Pick-->>Loop: target_xy or None
 
-    alt goal is None
-        Loop->>Loop: increment no_frontier_count
+    alt target is None
+        Loop->>Loop: run _frontier_diag, increment no_frontier_count
         Loop->>Loop: break if >= PATIENCE
-    else path blocked by obstacle
-        Loop->>Loop: blacklist goal_xy, stay put
-    else clear path
-        Loop->>Map: uncover_along_path(robot→goal)
-        Loop->>Loop: robot_xy = goal_xy
-        Loop->>Loop: blacklist goal_xy
+    else target found
+        Loop->>Nudge: nudge(target_xy, ..., inset_m)
+        Nudge-->>Loop: goal_xy
+        alt path blocked by obstacle
+            Loop->>Loop: blacklist goal_xy, stay put
+        else clear path
+            Loop->>Map: uncover_along_path(robot→goal)
+            Loop->>Loop: robot_xy = goal_xy
+            Loop->>Loop: blacklist goal_xy
+        end
     end
     Loop->>Loop: render + print step info
 ```
 
+The main loop calls `find_frontier_clusters` and `pick_best_frontier` directly rather than
+going through `FrontierAlgorithm.next_goal()`, so it can select which nudge function runs on
+the result (`--nudge-mode`) — `next_goal()` always applies `nudge_toward_robot` internally
+and has no hook for swapping it out. This is the one place the demo diverges from calling
+the production algorithm as a black box, and it exists solely to compare the two nudge
+strategies (see previous section); it is not how the real pluggable node computes a goal.
+
 `PATIENCE = 6` consecutive no-frontier ticks triggers termination. Each tick where a path
-is blocked does not count against patience — only ticks where the algorithm itself returns
-`None`.
+is blocked does not count against patience — only ticks where `pick_best_frontier` itself
+returns `None`.
 
 ---
 
@@ -310,4 +416,10 @@ useful as a benchmarking harness.
 **Map data embedded in source.** The compound map alone adds 40 string literals to the
 file, pushing it well past the 300-line guideline. Loading maps from external YAML or text
 files would separate content from logic and allow user-defined maps without editing source.
-Human: add any maps at the top of this file that you want in that format and pass the directory with --maps-dir.
+
+**`--nudge-mode` bypasses `FrontierAlgorithm.next_goal()`.** The comparison harness calls
+`find_frontier_clusters`/`pick_best_frontier` directly so it can swap in
+`nudge_away_from_unknown`, which duplicates a few lines of `next_goal()`'s body. This is
+fine for a throwaway comparison tool, but if `nudge_away_from_unknown` (or a `nudge_mode`
+parameter) is ported into `frontier_algorithm.py` for real use, this demo should go back to
+calling `next_goal()` as a black box rather than reimplementing its internals.

@@ -72,7 +72,7 @@ class PluggableExploreManagerNode(Node):
         self.create_timer(1.0 / self.EXPLORE_HZ, self.explore_tick)
 
         self.declare_parameter("max_explore_radius", 0.0)
-        self.declare_parameter("max_frontier_dist", 3.0)
+        self.declare_parameter("max_frontier_dist", 15.0)
         self.declare_parameter("prefer_farthest", False)
         self.declare_parameter("min_frontier_size", 10)
         self.declare_parameter("map_name", "unknown")

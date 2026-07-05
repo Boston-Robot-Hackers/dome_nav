@@ -640,9 +640,134 @@ the "legal potential" planner failure and start actually reaching (still
 separately, the `worldToMap` boundary bug near the world's outer edge is
 unresolved and may need its own investigation if it persists).
 
+## T04m — Correction: T04l did not fix the NavFn planner bug, only reduced its frequency
+**Status**: done (investigation) — root cause still open
+**Description**: Reviewed telemetry (`~/.dome/telemetry/explore-toy4-20260705.jsonl`,
+the first live run after T04l's `min_frontier_size` 1→5 fix) plus the matching Nav2
+logs (`~/.ros/log/{planner,behavior,bt_navigator,controller}_server_2683*`). Result:
+**0 of 29 goals reached**, same as every other run recorded today (toy1-3, zoo3, zoo5
+— every single logged session on 2026-07-05 has `reached: 0`).
+Cross-checked the user's hypothesis ("are we always picking frontiers inside an
+obstacle's inflation zone?") against `multi_room.world`'s wall geometry: 13 of 29
+goals (45%) land within `robot_radius + inflation_radius` (0.35 m) of a wall, 5 of
+those inside the robot's own footprint radius (0.15 m). This explains most of the
+fast `aborted` failures (8 of 10 aborted goals were in the inflation/lethal band,
+robot moved only 0.3-1.0 m in ~19s before Nav2 gave up) — the hypothesis is correct
+for that subset.
+But `planner_server`'s log shows the **same NavFn bug T04l was supposed to have
+fixed** — `Failed to create a plan from potential when a legal potential was found.
+This shouldn't happen.` — recurring for 10 distinct goal targets in this one run,
+including goal 4's target `(1.55, 2.17)`, which is 1.55 m from the nearest wall
+(open space, not an inflation-zone goal). So `min_frontier_size` 1→5 reduced how
+often a pathological ragged-edge goal gets selected, but did not fix the underlying
+planner defect, which still fires on ordinary open-space goals. Because our own
+node's `GOAL_TIMEOUT_S` (25s) elapses before Nav2's internal retry loop surfaces a
+hard failure, these show up in telemetry as `"timeout"`, not as the loud planner
+error — which is why T04l's original live check (looking only for the absence of
+a crash) appeared to confirm the fix.
+Also newly quantified: `worldToMap failed: mx,my: ..., size_x,size_y: 202,202`-style
+errors occurred **4,460 times** in this single run — far more than an occasional
+edge case, and still unresolved (previously flagged in T04l as a "separate, still-
+open item").
+Additionally: `behavior_server` log shows every Spin/Wait/BackUp recovery step
+completing successfully in this run — confirms this run's stall is **not** a
+repeat of the `simple_room.world` doorway BackUp-collision mechanism (T04 5b); it
+is purely the planner failing to produce a path, recovering, and failing again in
+a loop until timeout.
+**Test**: N/A — telemetry + log analysis only, no code changed. Numbers above are
+reproducible via `~/.dome/telemetry/explore-toy4-20260705.jsonl` and the matching
+`~/.ros/log/*_26832-26840_1783282008*.log` files.
+**Not yet done**: root-cause the NavFn "legal potential" bug itself (likely fixable
+by switching global planner plugins, e.g. Smac2D/SmacHybrid instead of NavFn/GridBased,
+or by padding goal placement further from ragged known/unknown edges) and the
+`worldToMap` boundary error. Until one of these is fixed, F13 T05 remains blocked —
+the robot cannot be expected to reach frontier goals reliably in `multi_room.world`.
+
+## T04n — Prototype "nudge away from unknown" goal placement in algo_demo.py
+**Status**: in progress
+**Description**: T04m found the common trait across all 11 "legal potential" NavFn
+planner failures in the 2026-07-05 telemetry: every failing goal was a frontier
+cell sitting directly on the known/unknown boundary (that's the definition of a
+frontier cell) — wall proximity was a frequent coincidence, not the cause.
+`nudge_toward_robot()` pulls the goal toward the robot's position, which does not
+reliably move it off the unknown-adjacent boundary since that direction isn't
+necessarily perpendicular to the boundary. Prototyping an alternative in
+`tools/algo_demo.py` (pure Python, no ROS/costmap dependency, same approach as
+prior `algo_demo.py` experiments): a `nudge_away_from_unknown()` function that
+computes the direction away from nearby unknown cells (summing unit vectors from
+each unknown neighbor within a small cell window to the target cell) and steps
+the goal that direction by `goal_inset_m`, validating the result lands on a free
+cell. Exposed as `--nudge-mode {robot,unknown}` CLI flag so both strategies can be
+visually compared on the existing built-in maps before deciding whether to port
+either into `frontier_explorer.py`/`frontier_algorithm.py` for real use.
+**Test**: Manual, visual — compare goal placement (the `G` marker) between
+`--nudge-mode robot` (existing behavior) and `--nudge-mode unknown` (new) across
+several of `algo_demo.py`'s built-in maps, particularly ones with frontier cells at
+concave corners/doorways where the two strategies should visibly diverge.
+**Findings**: built a synthetic concave-corner fixture (20x20 grid, 0.1 m
+resolution, an L-shaped known region with a frontier tip at its outer corner,
+i.e. two exposed unknown edges) to force the two strategies to diverge — the
+built-in demo maps didn't show a difference because their frontier cells mostly
+border unknown on only one side, where "away from robot" and "away from unknown"
+happen to coincide. With the robot placed off-axis from the corner's bisector at
+four different positions, `nudge_away_from_unknown()` consistently landed 3 cells
+(0.3 m) clear of the nearest unknown cell every time, while `nudge_toward_robot()`
+varied with robot position and dropped as low as 1 cell (0.1 m) of clearance for
+one robot position — i.e. barely off the boundary at all. This is the concrete
+mechanism behind T04m's finding: robot-relative nudging is only accidentally
+effective, and degrades exactly when the robot approaches a frontier from an
+oblique angle (a normal, not unusual, approach direction).
+**Not yet done**: no live/Gazebo verification — this is a pure-Python
+visualization prototype only, to validate the idea cheaply before touching the
+real ROS2 node. If this direction is confirmed worth pursuing, next step is a
+new task to port `nudge_away_from_unknown()` (or an equivalent) into
+`frontier_explorer.py`/`frontier_algorithm.py` for real use, with pure tests
+covering the concave-corner case.
+
+## T04o — Raise max_frontier_dist: 3.0 was silently capping prefer_farthest in multi_room.world
+**Status**: done — not yet re-verified live
+**Description**: Live user observation while watching RViz during an active
+`multi_room.world` session: exploration reported "no frontier found" while
+frontiers were visibly still present on the map, and `prefer_farthest` appeared
+to keep picking a nearby frontier while ignoring much farther ones. Confirmed
+from the live session's own telemetry (`explore-toy6-20260705.jsonl`,
+`no_frontier` event): `large_clusters: 10, all_cells_out_of_range: 10` — all 10
+properly-sized frontier clusters existed on the map; every one of them was
+filtered out by the `[min_frontier_dist, max_frontier_dist]` distance band, not
+because none existed. Root cause: `max_frontier_dist` defaults to 3.0 m in all
+three sim launch files and the `pluggable_explore_manager_node.py` ROS
+parameter — a value carried over from `simple_room.world` (8x8 m) and never
+revisited for `multi_room.world` (10x10 m, ~14.1 m diagonal). Once the
+blacklist grows past a few dozen points (confirmed `blacklisted: 29` in the
+same session), remaining genuinely reachable frontiers are pushed past the 3 m
+cap, so `prefer_farthest` — whose entire purpose is to reach distant frontiers
+rather than retry a locally-stuck area — was silently restricted to picking
+the farthest cell within an arbitrary 3 m box, which looks "near" next to the
+true far frontiers sitting just outside that cap, and can exhaust patience
+entirely once even that narrow box empties out.
+Fixed by raising the default to 15.0 m (larger than this world's diagonal, so
+effectively unbounded for `multi_room.world`) in `sim_explore.launch.py`,
+`sim_explore_node.launch.py`, `sim_nav_full.launch.py`, and
+`pluggable_explore_manager_node.py`'s `declare_parameter` default. Chose a
+concrete large number rather than the `0.0` "unlimited" sentinel so the
+existing T04d regression test (`max_frontier_dist > min_frontier_dist`) stays
+meaningful without needing a special case for the sentinel value.
+`pluggable_explore_manager_node.py` is only referenced by the two sim launch
+files above (confirmed via grep across `launch/`), so this change has no
+effect on real-hardware launches.
+**Test**: 174/174 pure + mock tests pass after rebuild (unaffected — config/
+default-value change only; existing `test_default_max_frontier_dist_exceeds_min_frontier_dist`
+still holds at 15.0 > 1.3).
+**Not yet done**: live re-verification in Gazebo — confirm a fresh
+`multi_room.world` session actually reaches genuinely distant frontiers under
+`prefer_farthest` instead of exhausting patience early, and that `/explore/status`
+stops reporting done/no-frontier while map coverage is still incomplete.
+
 ## T05 — End-to-end exploration smoke test
-**Status**: not done — blocked on T04's doorway costmap-inflation finding (robot cannot
-reliably cross the interior doorway; recovery behaviors fail there too)
+**Status**: not done — blocked. Originally blocked on T04's doorway costmap-inflation
+finding (`simple_room.world`); now confirmed (T04m, `multi_room.world`) blocked on an
+unfixed NavFn "legal potential" planner bug that fires even on open-space goals —
+every logged run on 2026-07-05 reached 0 of its goals.
 **Description**: Full demo of the feature as described in F13 How to Demo:
 launch sim, publish `exploration_start`, observe robot driving and map filling,
 publish `exploration_stop` or wait for auto-stop, confirm map saved to

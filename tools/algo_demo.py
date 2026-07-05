@@ -6,6 +6,7 @@
 # Usage:
 #   python3 tools/algo_demo.py [--map room|corridor|ring|maze|compound] [--inset 0.3]
 #                              [--min-size 1] [--min-dist 0.0] [--auto]
+#                              [--nudge-mode robot|unknown]
 #
 # Map legend:
 #   .  free      #  occupied    ?  unknown
@@ -21,7 +22,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from dome_nav.explore_context import ExplorationContext, ExploreParams
 from dome_nav.frontier_algorithm import FrontierAlgorithm
-from dome_nav.frontier_explorer import MapInfo, cell_to_world, pick_best_frontier
+from dome_nav.frontier_explorer import (
+    MapInfo,
+    cell_to_world,
+    find_frontier_clusters,
+    nudge_toward_robot,
+    pick_best_frontier,
+    _frontier_diag,
+)
 
 # ---------------------------------------------------------------------------
 # ANSI color helpers
@@ -356,6 +364,48 @@ def uncover_around_robot(
     return data
 
 
+def nudge_away_from_unknown(
+    target_xy: tuple[float, float],
+    data: list[int],
+    info: MapInfo,
+    inset_m: float,
+    search_cells: int = 2,
+) -> tuple[float, float]:
+    # Alternative to nudge_toward_robot(): step the goal away from nearby unknown
+    # cells instead of toward the robot. A frontier cell is, by definition, on the
+    # known/unknown boundary — pulling toward the robot doesn't reliably move off
+    # that boundary since the robot isn't necessarily on the boundary's normal.
+    tc = int((target_xy[0] - info.origin_x) / info.resolution)
+    tr = int((target_xy[1] - info.origin_y) / info.resolution)
+    vx, vy = 0.0, 0.0
+    for dr in range(-search_cells, search_cells + 1):
+        for dc in range(-search_cells, search_cells + 1):
+            if dr == 0 and dc == 0:
+                continue
+            nr, nc = tr + dr, tc + dc
+            if not (0 <= nr < info.height and 0 <= nc < info.width):
+                continue
+            if data[nr * info.width + nc] != CELL_UNK:
+                continue
+            dist = math.sqrt(dr * dr + dc * dc)
+            vx += -dc / dist
+            vy += -dr / dist
+    mag = math.sqrt(vx * vx + vy * vy)
+    if mag == 0.0:
+        return target_xy
+    dir_x, dir_y = vx / mag, vy / mag
+
+    for scale in (1.0, 0.66, 0.33):
+        step = inset_m * scale
+        cand_xy = (target_xy[0] + dir_x * step, target_xy[1] + dir_y * step)
+        cc = int((cand_xy[0] - info.origin_x) / info.resolution)
+        cr = int((cand_xy[1] - info.origin_y) / info.resolution)
+        if 0 <= cr < info.height and 0 <= cc < info.width:
+            if data[cr * info.width + cc] == CELL_FREE:
+                return cand_xy
+    return target_xy
+
+
 def uncover_along_path(
     data: list[int],
     info: MapInfo,
@@ -390,6 +440,9 @@ def main():
                         help="Lidar reveal radius in cells (default: 2.5)")
     parser.add_argument("--auto", action="store_true",
                         help="Run without pausing between steps")
+    parser.add_argument("--nudge-mode", choices=["robot", "unknown"], default="robot",
+                        help="goal nudge strategy: toward robot (current) or "
+                             "away from unknown cells (prototype, T04n)")
     args = parser.parse_args()
 
     rows = MAPS[args.map]
@@ -407,10 +460,12 @@ def main():
     no_frontier_count = 0
     step = 0
 
+    nudge_desc = ("toward R" if args.nudge_mode == "robot"
+                  else "away from unknown")
     compact_legend = (
         f"{colored('R', C_ROBOT)}=robot "
         f"{colored('T', C_TARGET)}=target(nearest frontier cell) "
-        f"{colored('G', C_GOAL)}=goal(T nudged {args.inset}m toward R) "
+        f"{colored('G', C_GOAL)}=goal(T nudged {args.inset}m {nudge_desc}) "
         f"{colored('A', BOLD + CLUSTER_COLORS[0])}=cluster "
         f"{colored('B', C_BLACKLIST)}=blacklisted "
         f"{colored('.', C_FREE)}=free "
@@ -420,7 +475,8 @@ def main():
 
     print(f"\nMap: {args.map}  size: {info.width}x{info.height}  "
           f"min_size={params.min_frontier_size}  "
-          f"min_dist={params.min_frontier_dist}  inset={params.goal_inset_m}\n")
+          f"min_dist={params.min_frontier_dist}  inset={params.goal_inset_m}  "
+          f"nudge_mode={args.nudge_mode}\n")
 
     while True:
         ctx = ExplorationContext(
@@ -431,14 +487,29 @@ def main():
             start_xy=None,
             params=params,
         )
-        goal_xy = algo.next_goal(ctx)
+        algo.latest_clusters = find_frontier_clusters(data, info)
         target_xy = pick_best_frontier(
             algo.latest_clusters, info, robot_xy,
             min_size=params.min_frontier_size,
             blacklist=blacklist,
             blacklist_radius=params.blacklist_radius,
             min_dist=params.min_frontier_dist,
-        ) if goal_xy is not None else None
+            max_dist=params.max_frontier_dist,
+            prefer_farthest=params.prefer_farthest,
+        )
+        if target_xy is None:
+            algo.latest_diag = _frontier_diag(
+                algo.latest_clusters, info, robot_xy,
+                params.min_frontier_size, params.min_frontier_dist,
+                params.max_frontier_dist,
+            )
+            goal_xy = None
+        else:
+            algo.latest_diag = None
+            if args.nudge_mode == "unknown":
+                goal_xy = nudge_away_from_unknown(target_xy, data, info, args.inset)
+            else:
+                goal_xy = nudge_toward_robot(target_xy, robot_xy, args.inset)
 
         print(compact_legend)
         print(render(data, info, robot_xy, goal_xy, target_xy, blacklist,

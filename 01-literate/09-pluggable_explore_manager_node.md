@@ -1,5 +1,5 @@
 ---
-version: "1.4"
+version: "1.5"
 generated: "2026-07-05"
 ---
 
@@ -90,10 +90,10 @@ def __init__(self, algorithm: ExplorationAlgorithm | None = None):
 
 `max_frontier_dist` (added 2026-07-03, for the Gazebo sim work) follows the same
 declared-ROS-parameter pattern as `max_explore_radius`, but with a non-zero
-operational default (`3.0` m, raised from `1.0` on 2026-07-04 — see below)
-rather than "unlimited" — the `ExploreParams` dataclass default stays `0.0`
-(see `04-explore_context.md`), so this node is the one place that actually
-opts into capping exploration hop distance.
+operational default (`15.0` m as of 2026-07-05 — see below) rather than
+"unlimited" — the `ExploreParams` dataclass default stays `0.0` (see
+`04-explore_context.md`), so this node is the one place that actually opts
+into capping exploration hop distance.
 
 **Empty-range bug, 2026-07-04**: the operational default started at `1.0` m,
 which is *below* `ExploreParams.min_frontier_dist`'s default of `1.3` m. Since
@@ -106,6 +106,21 @@ seconds after `session_start`. Fixed by raising the operational default to
 `3.0`; a regression test now asserts this node's default exceeds
 `ExploreParams().min_frontier_dist` directly, rather than relying on someone
 noticing the numbers by eye during a future change.
+
+**Silent cap on `prefer_farthest`, 2026-07-05**: `3.0` m was tuned for the
+original, smaller `simple_room.world` (8×8 m) and never revisited once
+`multi_room.world` (10×10 m, ~14.1 m diagonal) came into use. Live telemetry
+(`explore-toy6-20260705.jsonl`) showed a `no_frontier` event with
+`large_clusters: 10, all_cells_out_of_range: 10` — ten properly-sized frontier
+clusters existed on the map, and every one of them was rejected by the
+distance band, not because none existed. `prefer_farthest`'s entire purpose is
+to reach distant frontiers instead of retrying a locally-stuck area, so a `3.0`
+m cap was directly undermining it once the blacklist grew large enough to push
+every reachable frontier past that radius. Raised to `15.0` (larger than
+`multi_room.world`'s diagonal, so effectively unbounded there) rather than to
+`ExploreParams`' `0.0` "unlimited" sentinel, so the existing regression test
+(`default exceeds min_frontier_dist`) stays meaningful without a special case
+for the sentinel value.
 
 `prefer_farthest` (added 2026-07-04) follows the same pattern again: a ROS
 parameter with its own operational default, separate from the `ExploreParams`

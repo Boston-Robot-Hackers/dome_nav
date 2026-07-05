@@ -23,7 +23,7 @@ def sim_nav_full_launch(
     map_name: str = "",
     world_name: str = "",
     max_explore_radius: float = 0.0,
-    max_frontier_dist: float = 3.0,
+    max_frontier_dist: float = 15.0,
     prefer_farthest: bool = True,
     min_frontier_size: int = 5,
 ):
