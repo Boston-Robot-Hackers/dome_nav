@@ -536,6 +536,32 @@ justified `0.15` no longer applies once the doorway isn't the bottleneck.
 `cost_scaling_factor` stays at `20.0` — a general improvement independent of
 any specific doorway. 166/170 pure tests pass after revert.
 
+## T04i — Create multi_room.world (new floorplan for doorway-passability testing)
+**Status**: done
+**Description**: Worked out a new floorplan interactively with the user via
+text-diagram iteration (ASCII grid, 0.5m/char) before writing any SDF, to
+agree on exact geometry first: 10x10m box, origin (0,0) at the bottom-left
+corner (matches the diagram directly, unlike `simple_room.world`'s
+centered-origin convention). Layout: a 4x4m room in the bottom-left corner
+(x:0-4, y:0-4) with a 2m doorway in its east wall (y:1-3), robot spawning at
+(1,1) inside it; a wall dividing the whole box into top/bottom areas at
+y=5.5 with a 2m opening (x:7-9); a 2m baffle attached to the west wall at
+y=8.5 (x:0-2); a 2.5m vertical wall hanging from the north wall at x=7 down
+to y=7.5. Created `worlds/multi_room.world`, following `simple_room.world`'s
+conventions (0.1m wall thickness, 0.4m height, static box models, same
+physics/plugin block). No launch files reference it yet — `sim_robot.launch.py`
+still hardcodes `simple_room.world` and a spawn position (-1,-1) tuned for
+the old centered-origin room; wiring in a world-selection arg and updating
+the spawn position to (1,1) for this world is a follow-up, not done yet.
+**Test**: `gz sim -s worlds/multi_room.world --iterations 50` hangs rather
+than exiting — confirmed this is a pre-existing environment quirk, not a
+regression: `simple_room.world` (already shipped, previously verified)
+exhibits the identical hang under the same command in this sandbox. Verified
+instead by running `gz sim -s -r worlds/multi_room.world` briefly and
+checking `gz model --list`: all 12 expected models loaded (ground_plane +
+4 outer walls + 3 room walls + 2 divider segments + baffle + vertical wall),
+no errors in the server log.
+
 ## T05 — End-to-end exploration smoke test
 **Status**: not done — blocked on T04's doorway costmap-inflation finding (robot cannot
 reliably cross the interior doorway; recovery behaviors fail there too)

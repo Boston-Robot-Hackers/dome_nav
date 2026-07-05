@@ -1,0 +1,211 @@
+<?xml version="1.0" ?>
+<!--
+  multi_room.world — Gazebo Harmonic SDF
+  10x10 m box, origin (0,0) at the bottom-left corner (matches the ASCII
+  floorplan worked out interactively with the user; robot spawns at (1,1)).
+
+  Layout:
+    - 4x4 m room in the bottom-left corner (x:0-4, y:0-4), with a 2 m doorway
+      in its east wall (y:1-3).
+    - A wall divides the whole box into top/bottom areas at y=5.5, with a
+      2 m opening (x:7-9).
+    - A 2 m baffle wall attached to the west (left) outer wall at y=8.5,
+      extending into the top area (x:0-2).
+    - A 2.5 m vertical wall hanging from the top (north) outer wall at x=7,
+      down to y=7.5.
+
+  Robot is spawned separately via ros_gz_sim + dome3_sim.urdf.
+  No external model URIs required.
+-->
+<sdf version="1.8">
+  <world name="multi_room">
+
+    <!-- See simple_room.world for the max_step_size / /clock rate rationale. -->
+    <physics name="10ms" type="ignored">
+      <max_step_size>0.01</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <plugin filename="gz-sim-physics-system"          name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-sensors-system"           name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-user-commands-system"     name="gz::sim::systems::UserCommands"/>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>5 5 5 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation>
+        <range>100</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <pose>5 5 0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>11 11</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>11 11</size></plane></geometry>
+          <material>
+            <ambient>0.4 0.6 0.3 1</ambient>
+            <diffuse>0.4 0.6 0.3 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Outer boundary: 10x10 m, interior spans x:[0,10] y:[0,10].
+         North/south walls get a 0.2 m overlap to close the corners. -->
+    <model name="outer_south_wall">
+      <static>true</static>
+      <pose>5 -0.05 0.2 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>10.2 0.1 0.4</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>10.2 0.1 0.4</size></box></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="outer_north_wall">
+      <static>true</static>
+      <pose>5 10.05 0.2 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>10.2 0.1 0.4</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>10.2 0.1 0.4</size></box></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="outer_west_wall">
+      <static>true</static>
+      <pose>-0.05 5 0.2 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.1 10.0 0.4</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>0.1 10.0 0.4</size></box></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="outer_east_wall">
+      <static>true</static>
+      <pose>10.05 5 0.2 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.1 10.0 0.4</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>0.1 10.0 0.4</size></box></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Room: 4x4 m, bottom-left corner (x:0-4, y:0-4). South/west sides are
+         the outer boundary. North wall is solid; east wall has a 2 m doorway
+         (y:1-3). Robot spawns at (1,1), well clear of all walls. -->
+    <model name="room_north_wall">
+      <static>true</static>
+      <pose>2.0 4.05 0.2 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>4.2 0.1 0.4</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>4.2 0.1 0.4</size></box></geometry>
+          <material><ambient>0.6 0.6 0.8 1</ambient><diffuse>0.6 0.6 0.8 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="room_east_wall_south">
+      <static>true</static>
+      <pose>4.05 0.45 0.2 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.1 1.1 0.4</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>0.1 1.1 0.4</size></box></geometry>
+          <material><ambient>0.6 0.6 0.8 1</ambient><diffuse>0.6 0.6 0.8 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="room_east_wall_north">
+      <static>true</static>
+      <pose>4.05 3.55 0.2 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.1 1.1 0.4</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>0.1 1.1 0.4</size></box></geometry>
+          <material><ambient>0.6 0.6 0.8 1</ambient><diffuse>0.6 0.6 0.8 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Divider wall splitting the whole box into top/bottom areas at
+         y=5.5, with a 2 m opening (x:7-9). -->
+    <model name="divider_wall_left">
+      <static>true</static>
+      <pose>3.45 5.5 0.2 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>7.1 0.1 0.4</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>7.1 0.1 0.4</size></box></geometry>
+          <material><ambient>0.6 0.6 0.8 1</ambient><diffuse>0.6 0.6 0.8 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="divider_wall_right">
+      <static>true</static>
+      <pose>9.55 5.5 0.2 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.1 0.1 0.4</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>1.1 0.1 0.4</size></box></geometry>
+          <material><ambient>0.6 0.6 0.8 1</ambient><diffuse>0.6 0.6 0.8 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Baffle: 2 m wall attached to the west outer wall at y=8.5,
+         extending into the top area (x:0-2). -->
+    <model name="baffle">
+      <static>true</static>
+      <pose>0.95 8.5 0.2 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>2.1 0.1 0.4</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>2.1 0.1 0.4</size></box></geometry>
+          <material><ambient>0.8 0.6 0.4 1</ambient><diffuse>0.8 0.6 0.4 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Vertical wall hanging from the top (north) outer wall at x=7,
+         down 2.5 m to y=7.5. -->
+    <model name="top_right_vertical_wall">
+      <static>true</static>
+      <pose>7.0 8.8 0.2 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.1 2.6 0.4</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>0.1 2.6 0.4</size></box></geometry>
+          <material><ambient>0.8 0.6 0.4 1</ambient><diffuse>0.8 0.6 0.4 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>
