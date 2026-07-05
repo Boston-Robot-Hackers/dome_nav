@@ -2,7 +2,7 @@
 
 ## Snapshot
 
-**Date:** 2026-07-04
+**Date:** 2026-07-05
 **Branch:** main
 **Status:** F12 complete. F13 (Gazebo simulation) in progress: T01-T03 done, full sim stack
 (Gazebo + slam_toolbox + Nav2 + explore) launches and drives the robot end-to-end. T04's
@@ -59,7 +59,8 @@ dome_nav` is required after every source edit before `bl`/`ros2 run` will see it
 - `dome_nav/nav_manager_node.py` — ROS2 node: `/intent` → NavigateToPose, status,
   `/amcl_pose` → localization status/score
 - `dome_nav/utils.py` — `dome_home()`, `yaml_override()`, `yaml_patch_dict()`,
-  `write_config()`
+  `write_config()`, **(2026-07-05 new)** `available_worlds()`, `require_world_name()`,
+  `world_spawn_xy()` — world-selection validation + per-world spawn point lookup
 - `tools/algo_demo.py` — **(F12 new)** interactive CLI demo of `FrontierAlgorithm` on
   hand-crafted ASCII maps. ANSI 256-color; shows clusters A-Z, target T, goal G, robot R,
   blacklist B. Maps: `room`, `corridor`, `ring`, `maze`, `large` (30×30, 3-room layout).
@@ -76,6 +77,15 @@ dome_nav` is required after every source edit before `bl`/`ros2 run` will see it
   into single-purpose files for manual, one-window-per-piece debugging — see F13 status below
 - `launch/sim_nav_full.launch.py` — **(F13, 2026-07-04)** single-command full stack,
   composed from the split files above via `bl.include()` instead of duplicating their logic
+- `worlds/multi_room.world` — **(F13, 2026-07-05 new)** second world file, 10x10m,
+  corner origin (0,0) unlike `simple_room.world`'s centered origin. Floorplan worked out
+  interactively with the user via ASCII-diagram iteration before writing SDF: 4x4m room
+  (corner, 2m doorway), a whole-box divider wall with a 2m opening, a baffle, and a
+  vertical wall segment. Robot spawns at (1,1) in this world (vs. (-1,-1) in
+  `simple_room.world`) — see `world_name`/`world_spawn_xy()` below.
+- All Gazebo-launching sim files now require `--world_name <simple_room|multi_room>`
+  (validated dynamically against `share/dome_nav/worlds/*.world`, not a hardcoded list) —
+  see F13 T04j.
 - `tools/nav_intent_check.py` — diagnostic: publishes target + intent, verifies nav pipeline
 
 ## Tests
@@ -83,17 +93,17 @@ dome_nav` is required after every source edit before `bl`/`ros2 run` will see it
 | File | Count | Type |
 |---|---|---|
 | `test_nav_manager_pure.py` | 27 | pure Python |
-| `test_utils_pure.py` | 5 | pure Python |
+| `test_utils_pure.py` | 13 | pure Python |
 | `test_frontier_explorer.py` | 38 | pure Python |
 | `test_frontier_algorithm.py` | 13 | pure Python |
 | `test_nav_manager.py` | 19 | ROS mock |
 | `test_slam_manager.py` | 11 | ROS lifecycle |
 | `test_explore_manager_node.py` | 24 | ROS mock |
-| `test_pluggable_explore_manager_node.py` | 25 | ROS mock |
+| `test_pluggable_explore_manager_node.py` | 29 | ROS mock |
 | `test_map_validation.py` | 4 | manual/live only |
 
-**83 pure-Python tests pass** (`test_frontier_algorithm.py` + `test_frontier_explorer.py` + `test_nav_manager_pure.py` + `test_utils_pure.py`).
-**162/166 total pass** via `pytest test/ -m "not manual"` (4 deselected are `test_map_validation.py`'s manual/live-only tests).
+**91 pure-Python tests pass** (`test_frontier_algorithm.py` + `test_frontier_explorer.py` + `test_nav_manager_pure.py` + `test_utils_pure.py`).
+**174/178 total pass** via `pytest test/ -m "not manual"` (4 deselected are `test_map_validation.py`'s manual/live-only tests).
 
 ## F12 summary
 
@@ -300,6 +310,59 @@ live testing, prefer_farthest algorithm change**:
   variant reading `/global_costmap/costmap` to reject inflated cells (the "Future: costmap-
   based frontier exploration" idea already in `02-doc/notes.md`) — user said no for now.
 
+**Session 2026-07-05 — inflation math worked out by hand, new `multi_room.world`,
+`prefer_farthest` debugged through two real bugs**:
+- **T04f**: Live-verified `prefer_farthest` and found it ping-ponging between two points
+  ~1.7m apart (17 `goal_sent`/`redirect` pairs, 0 reached). Root cause and fix: see
+  `prefer_farthest` entry above — `check_goal_redirect()` disabled under `prefer_farthest`.
+- **Inflation geometry worked out with the user**: for a zero-cost centerline through a
+  passage, `inflation_radius <= (doorway_width / 2) - robot_radius`. For the old
+  `simple_room.world` doorway (0.6m) and `robot_radius` (0.15m), that's `<=0.15`. Tried
+  lowering `local_costmap.inflation_layer.inflation_radius` 0.2→0.15 and raising
+  `cost_scaling_factor` 10→20 (T04h) — but Nav2 itself flagged 0.15 as below the
+  footprint's own computed inscribed radius (0.157), and the math shows **no**
+  `inflation_radius` value can satisfy both Nav2's safety minimum and this doorway's
+  clearance simultaneously (0.6 - 2×0.157 = 0.286m, still less than the ~0.32m footprint
+  diameter) — inflation tuning alone cannot fix a doorway this tight; it needs widening.
+  Decided to build a new world instead of widening this one; `inflation_radius` reverted
+  to 0.2 (safe), `cost_scaling_factor` kept at 20 (general improvement, doorway-independent).
+- **T04i — `worlds/multi_room.world` created**: floorplan worked out interactively via
+  ASCII-diagram iteration (0.5m/char text grids, refined turn-by-turn) before writing any
+  SDF — 10x10m box, corner origin (0,0) (unlike `simple_room.world`'s centered origin), a
+  4x4m room with a 2m doorway, a whole-box divider wall with a 2m opening, a baffle, and a
+  vertical wall segment. Robot spawns at (1,1). Verified via `gz model --list` (all 12
+  models load) since `gz sim -s --iterations 50` hangs in this sandbox for *both* world
+  files (pre-existing environment quirk, not a regression).
+- **T04j — `world_name` launch argument**: added `available_worlds()`,
+  `require_world_name()`, `world_spawn_xy()` to `dome_nav/utils.py` (pure, tested).
+  `require_world_name()` raises listing every world actually installed under
+  `share/dome_nav/worlds/` (dynamic, not hardcoded) plus a usage hint, when missing/invalid.
+  `world_spawn_xy()` maps a world name to its designed spawn point automatically. Wired
+  into `sim_robot.launch.py`, `sim_explore.launch.py`, `sim_nav_full.launch.py`. Verified
+  live: missing arg raises the listing error; `--world_name multi_room` spawns at exactly
+  `(1.0, 1.0)` (confirmed via the actual `ros_gz_sim create -x 1.0 -y 1.0` command line).
+- **T04k**: raised sim cruise speed 50% at user request (`desired_linear_vel` 0.3→0.45,
+  `velocity_smoother` linear cap 0.4→0.6) in both `sim_nav2.launch.py` and
+  `sim_explore.launch.py`. Sim-only; real-robot cap (0.12) untouched.
+- **T04l — critical bug found via `multi_room.world` live testing**: `prefer_farthest` +
+  `min_frontier_size=1` (T04g) caused a **100% goal failure rate** (24 sent, 0 reached) in
+  the bigger world. Root cause from the actual Nav2 logs: `planner_server` repeatedly
+  failed the *same* goal with `Failed to create a plan from potential when a legal
+  potential was found. This shouldn't happen.` — a known NavFn edge case where the goal
+  sits right at the ragged edge between known and unknown space. Confirmed this was not
+  the inflation/doorway mechanism, since the user reported the stall reproducing with the
+  robot 1m clear of every wall (inflation-based caution requires physical obstacle
+  proximity; this only requires a bad goal coordinate). `min_frontier_size=1` let isolated
+  single-cell frontier slivers at that ragged edge qualify as `prefer_farthest` targets —
+  exactly the pathological NavFn input, and plausibly the same root cause as an earlier
+  `worldToMap failed: mx,my: 207,98, size_x,size_y: 202,202` error seen in the same
+  investigation (202 cells ≈ this world's ~10m extent; the error fires for points near the
+  map's edge). Fixed by raising `min_frontier_size` back to 5 in all three sim launch
+  files. **Not yet re-verified live** — next session should confirm goals stop hitting the
+  "legal potential" planner failure. The `worldToMap` boundary error itself is a separate,
+  still-open item — may need its own investigation if it recurs after the `min_frontier_size`
+  fix (e.g. it could be specific to edge-of-map goals rather than edge-of-known-space ones).
+
 **Manual single-window debug launch files (2026-07-03)**: built a set of `sim_*.launch.py`
 files so each piece of the sim stack can be started in its own terminal, for step-by-step
 debugging independent of `sim_explore.launch.py`'s all-in-one behavior. Started at 9 files
@@ -420,34 +483,47 @@ in place.
 
 ## Likely next steps
 
-1. **F13 T04** — fix the doorway costmap-inflation stall (see T04 finding #5b above): reduce
-   `local_costmap.inflation_layer.inflation_radius` (currently 0.2 m) and/or widen the
-   doorway in `worlds/simple_room.world` (currently 0.6 m) so the robot has genuine low-cost
-   clearance to cross it; neither `max_frontier_dist` nor `prefer_farthest` resolve this
-   directly — they change which frontier is targeted, not whether it's reachable.
-2. **F13** — live-verify `prefer_farthest` (T04e) actually reduces the retry-nearby pattern
-   in Gazebo now that `max_frontier_dist` (T04d) lets exploration run at all — check
-   telemetry's `goal_sent` entries are spread across the map instead of clustered.
-3. **F13** — the TF-extrapolation/collision_monitor stop is currently believed to be a
+1. **F13 T04l** — live-verify the `min_frontier_size` 1→5 fix in `multi_room.world`: confirm
+   goals stop hitting the NavFn "legal potential" planner failure and start actually
+   reaching. Not yet re-tested after the fix.
+2. **F13** — investigate the `worldToMap failed: mx,my: 207,98, size_x,size_y: 202,202`
+   error separately if it recurs after the `min_frontier_size` fix — may be a distinct
+   edge-of-map-extent issue (not edge-of-known-space) specific to the larger `multi_room.world`.
+3. **F13** — `simple_room.world`'s 0.6m doorway is still too tight for this robot at any
+   safe `inflation_radius` (see the inflation-geometry math worked out 2026-07-05) — either
+   avoid that world for doorway-dependent testing (use `multi_room.world`'s 2m/1.5m openings
+   instead) or widen the doorway directly if `simple_room.world` needs to keep working.
+4. **F13** — the TF-extrapolation/collision_monitor stop is currently believed to be a
    process-hygiene side effect (stale/duplicate `/clock` source), not a structural bug — keep
    an eye out if it recurs in a verified-clean run.
-4. **F13 T05** — end-to-end exploration smoke test in sim (blocked until the doorway stall is resolved)
-5. **F13 T06** — update feature/task file status, move to done, update this doc
-6. **Architecture decision (2026-07-04, not yet actioned)** — user wants sim and real-robot
+5. **F13 T05** — end-to-end exploration smoke test in sim (blocked until T04l is re-verified)
+6. **F13 T06** — update feature/task file status, move to done, update this doc
+7. **Architecture decision (2026-07-04, not yet actioned)** — user wants sim and real-robot
    code to converge on `pluggable_explore_manager_node.py` for both, differing only by
    parameter values; `robot_explore.launch.py` still uses the original `explore_manager_node`
    and has not been switched over. Do this as a distinct, explicitly-confirmed step, not
    silently alongside other changes.
-7. **I06** — underscore rename sweep in remaining files
-8. **I07, I08, I09** — verify/close quick wins
-9. **TF10 T06** — hop-size issue: `MIN_FRONTIER_DIST` was raised 0.8→1.3m on 2026-07-03
-   (see below) at the user's request for a 1.0m real-goal floor; still worth considering a
-   cluster-size preference in `pick_best_frontier` on top of this if hop-size issues persist.
+8. **I06** — underscore rename sweep in remaining files
+9. **I07, I08, I09** — verify/close quick wins
+10. **TF10 T06** — hop-size issue: `MIN_FRONTIER_DIST` was raised 0.8→1.3m on 2026-07-03
+    (see below) at the user's request for a 1.0m real-goal floor; still worth considering a
+    cluster-size preference in `pick_best_frontier` on top of this if hop-size issues persist.
 
 ## Exploration params (explore_param_patch.yaml + ExploreParams defaults)
 
-- `desired_linear_vel`: 0.12 m/s
-- `MIN_FRONTIER_SIZE`: 10 cells (noise threshold; good range 5–20)
+- `desired_linear_vel`: 0.12 m/s real robot (`explore_param_patch.yaml`, protects
+  slam_toolbox scan-matching); **0.45 m/s in sim** (raised from 0.3 on 2026-07-05, a 50%
+  bump at user request — `velocity_smoother`'s linear cap raised to 0.6 m/s to match, so it
+  doesn't clip the new desired speed). Sim-only override in `sim_nav2.launch.py` +
+  `sim_explore.launch.py`; real-hardware config untouched.
+- `MIN_FRONTIER_SIZE` / `min_frontier_size`: 10 cells at the `ExploreParams` dataclass
+  level and the pluggable node's own ROS parameter default (real-robot value, unchanged).
+  Sim launch files: briefly set to **1** on 2026-07-05 (F13 T04g) to test whether
+  `prefer_farthest` could reach ~2m-class clusters — this **caused a 100% goal failure
+  rate** (isolated single-cell frontier slivers at the ragged edge of known space broke
+  NavFn's path reconstruction: `Failed to create a plan from potential when a legal
+  potential was found`). Raised back to **5** the same day (F13 T04l) — still below the
+  original 10, but excludes the pathological single-cell edge slivers.
 - `MIN_FRONTIER_DIST`: **1.3 m** (raised from 0.8 m on 2026-07-03, in both
   `explore_manager_node.py` and `ExploreParams`' default — see note below)
 - `MAX_FRONTIER_DIST`: 0.0 (unlimited) at the `ExploreParams` dataclass level; the pluggable
@@ -458,7 +534,13 @@ in place.
 - `prefer_farthest`: `False` at the `ExploreParams` dataclass level and on
   `pluggable_explore_manager_node`'s ROS parameter default; sim launch files default it to
   `True` (added 2026-07-04, F13 T04e) — selects the farthest qualifying frontier instead of
-  nearest, to avoid repeatedly retrying wall-hugging frontiers near a failed obstacle
+  nearest, to avoid repeatedly retrying wall-hugging frontiers near a failed obstacle.
+  **`check_goal_redirect()` is now disabled whenever `prefer_farthest` is `True`** (F13 T04f,
+  2026-07-05): mid-navigation redirect re-picks "best frontier" from the robot's *current*
+  position every tick, which is unstable under farthest-first (the answer flips sides as
+  soon as the robot moves toward it — confirmed via telemetry showing the robot ping-ponging
+  between two points, 17 goals sent, 0 reached). Once a farthest-first goal is sent, the
+  robot now commits to it instead of re-evaluating mid-flight.
 - `BLACKLIST_RADIUS`: 0.5 m
 - `GOAL_INSET_M`: 0.3 m (nudge goal off frontier boundary)
 - `GOAL_TIMEOUT_S`: 25.0 s (break Nav2 BT recovery loops)

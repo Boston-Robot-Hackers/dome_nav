@@ -1,6 +1,6 @@
 ---
-version: "1.3"
-generated: "2026-07-04"
+version: "1.4"
+generated: "2026-07-05"
 ---
 
 # PluggableExploreManagerNode — Autonomous Exploration with Injected Algorithms
@@ -114,6 +114,18 @@ declared-parameter default are actually the same value — it's the *launch
 files* that override it to `True` for sim use, not this node's constructor.
 See `06-frontier_explorer.md` for what the flag does and why nearest-first
 selection turned out to be self-defeating near the doorway.
+
+**`min_frontier_size` (added 2026-07-05)** follows the same "node default
+matches `ExploreParams`, launch files override" pattern — this node's own
+declared-parameter default is `10`, identical to `ExploreParams`, so
+real-robot behavior is unaffected. It exists as a ROS parameter specifically
+so sim launch files could experiment with lowering it without touching this
+node's code. That experiment (briefly setting it to `1` in the sim launch
+files, then back to `5` after it caused a 100% goal failure rate — Nav2's
+planner choking on isolated single-cell frontier slivers at the ragged edge
+of known space — see `02-doc/current.md` and `TF13-gazebo-simulation.md` for
+the full incident) is a cautionary example of how far a "just tweak one
+launch default" change can reach into planner-level failure modes.
 
 The `or` idiom works here because `None` is the only falsy value that should ever be
 passed. An explicitly constructed algorithm object is always truthy. This is simpler than
@@ -374,6 +386,29 @@ investigation: recompute cost dropped from ~4 ms (fresh clustering pass) to
 ~0.1 ms (cache hit) on every tick but the first one after a genuinely new map.
 
 ### check_goal_redirect()
+
+**Disabled under `prefer_farthest`, added 2026-07-05.** The very first line of
+the method now short-circuits:
+
+```python
+if self.prefer_farthest:
+    return
+```
+
+Live testing found this redirect mechanism actively fighting
+`prefer_farthest`: "best frontier from here" under farthest-first means "the
+side of the map farthest from wherever the robot currently is" — which flips
+to the *opposite* side the moment the robot makes progress toward its current
+goal. Every tick, the redirect logic would see a >1.5m shift (because the
+robot moved, not because the map changed) and cancel, sending the robot back
+the way it came, which would then flip again next tick. Telemetry confirmed
+this exactly: 17 `goal_sent`/`redirect` pairs alternating between the same
+two points roughly 1.7m apart, zero goals ever reached. Nearest-first doesn't
+have this failure mode — moving toward the nearest frontier either keeps it
+nearest, or the map updates and a new nearby one legitimately takes over,
+which is the genuine map-change signal this method was built to react to.
+Farthest-first's answer depends on the robot's own position as much as on the
+map, so the two features are fundamentally incompatible without the guard.
 
 ```python
 def check_goal_redirect(self):
