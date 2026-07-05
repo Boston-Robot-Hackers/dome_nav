@@ -604,6 +604,42 @@ blocks; does not touch the shared real-robot `explore_param_patch.yaml`
 **Test**: No test asserts specific speed values (checked; none do). Rebuilt,
 174/178 pure tests pass (unaffected, config-only change).
 
+## T04l — Raise min_frontier_size back up: 1 was breaking the global planner
+**Status**: done
+**Description**: Live testing in `multi_room.world` (10x10m, much larger than
+`simple_room.world`) with `prefer_farthest` + `min_frontier_size=1` showed a
+100% failure rate — one session logged 24 goals sent, 0 reached, 24 failed.
+Root-caused from the actual Nav2 logs: `planner_server` repeatedly logged
+`Failed to create a plan from potential when a legal potential was found.
+This shouldn't happen.` for the *same* goal coordinate across many retries
+(Wait/BackUp/Spin recoveries, costmap clears — all failed identically),
+while a different goal sent immediately after planned and executed fine.
+This NavFn failure mode is a known edge case: the wavefront potential
+calculation says a goal cell is reachable, but backtracing an actual path
+from it fails because the goal sits right at the ragged edge between known
+and unknown space, where the cost gradient is inconsistent. Confirmed this
+wasn't the earlier inflation/doorway mechanism, since the user reported the
+stall happening with the robot 1m clear of every wall — inflation-based
+caution requires physical obstacle proximity, but this failure only requires
+a *bad goal coordinate*, independent of the robot's own surroundings.
+`min_frontier_size=1` (lowered in T04g to test whether `prefer_farthest`
+could reach 2m-class clusters) is the direct cause: it let single, isolated
+frontier cells at the ragged edge of explored space qualify as targets —
+exactly the pathological case for NavFn's plan reconstruction, and plausibly
+the same root cause behind the `worldToMap` out-of-bounds error seen
+earlier in the same investigation. Fixed by raising `min_frontier_size`
+back up to 5 in all three sim launch files (still well below the original
+10, keeping some benefit from T04g, but excluding single/near-single-cell
+edge slivers). Node's own ROS parameter default (10, matching
+`ExploreParams`) was never changed.
+**Test**: No test asserts a specific `min_frontier_size` value (the T04d
+regression test only checks `max_frontier_dist > min_frontier_dist`, still
+valid). Rebuilt, 174/178 pure tests pass (unaffected, config-only change).
+Not yet re-verified live — next session should confirm goals stop hitting
+the "legal potential" planner failure and start actually reaching (still
+separately, the `worldToMap` boundary bug near the world's outer edge is
+unresolved and may need its own investigation if it persists).
+
 ## T05 — End-to-end exploration smoke test
 **Status**: not done — blocked on T04's doorway costmap-inflation finding (robot cannot
 reliably cross the interior doorway; recovery behaviors fail there too)
