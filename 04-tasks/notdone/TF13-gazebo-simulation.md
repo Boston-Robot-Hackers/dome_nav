@@ -501,6 +501,41 @@ live whether `min_frontier_size=1` actually lets farthest-first reach the
 2m-class clusters, or whether those turn out to be scan noise that make
 exploration worse (chasing single-cell targets). Follow up after a live run.
 
+## T04h — Reduce local_costmap inflation to fit the doorway
+**Status**: done — not yet re-verified live
+**Description**: Worked out the geometry with the user: for a zero-cost
+centerline through a passage, `inflation_radius <= (doorway_width / 2) -
+robot_radius`. This world's doorway is 0.6m and `robot_radius` is 0.15m, so
+`inflation_radius` must be `<= 0.15` — the prior value of `0.2` guaranteed
+overlap between the two walls' inflation gradients (0.6/2 - 0.15 - 0.2 =
+-0.05m), which is the root of the doorway stall documented since T04 finding
+#5b. Changed `config/nav2_param_patch.yaml`'s `local_costmap.inflation_layer`:
+`inflation_radius` 0.2 -> 0.15, `cost_scaling_factor` 10.0 -> 20.0 (steeper
+decay keeps the gradient useful for cautious routing in open areas — matches
+the existing `global_costmap`'s 15.0 — without the elevated-cost region
+reaching as far as it did at scaling factor 10). This file is shared with the
+real robot's launch files; `robot_radius` (0.15) matches the physical
+`dome3.urdf` too, so this is a general tightening, not sim-only, though the
+0.6m doorway constraint that drove the exact number is specific to
+`worlds/simple_room.world`.
+**Test**: No existing test asserts specific inflation values (checked; none
+do). Rebuilt, 166/170 pure tests pass (unaffected, config-only change).
+**Superseded same day**: added `slam_manager_node` to `sim_nav_full.launch.py`
+(so composed single-command runs persist maps like `sim_explore.launch.py`
+does) and smoke-tested the full change. The smoke test log showed Nav2 itself
+flagging `inflation_radius: 0.15` as unsafe — below the footprint's own
+computed inscribed radius (0.157) — independent of the doorway question.
+Worked out that no value of `inflation_radius` can simultaneously satisfy
+Nav2's footprint-safety minimum (~0.157) and leave a genuinely clear lane
+through this 0.6m doorway (0.6 - 2×0.157 = 0.286m, still less than the
+robot's ~0.31-0.33m footprint diameter) — inflation tuning alone cannot fix
+this doorway; it needs to be physically widened. Per user decision, a new
+world is being built instead of widening this one, so `inflation_radius` was
+reverted to `0.2` (the original, Nav2-safe value) since the constraint that
+justified `0.15` no longer applies once the doorway isn't the bottleneck.
+`cost_scaling_factor` stays at `20.0` — a general improvement independent of
+any specific doorway. 166/170 pure tests pass after revert.
+
 ## T05 — End-to-end exploration smoke test
 **Status**: not done — blocked on T04's doorway costmap-inflation finding (robot cannot
 reliably cross the interior doorway; recovery behaviors fail there too)

@@ -8,8 +8,15 @@ local_costmap:
       width: 5
       height: 5
       inflation_layer:
+        # inflation_radius reverted to 0.2 (F13 T04h had temporarily lowered it
+        # to 0.15 to fit worlds/simple_room.world's 0.6m doorway, but Nav2 itself
+        # flagged 0.15 as below the footprint's own computed inscribed radius
+        # (0.157) -- too small to be safe regardless of doorway width. A new
+        # world (wider doorway) removes the constraint that motivated 0.15.
+        # cost_scaling_factor stays raised: steeper cost decay near the robot's
+        # own radius is a general improvement, not tied to any specific doorway.
         inflation_radius: 0.2
-        cost_scaling_factor: 10.0
+        cost_scaling_factor: 20.0
 
 global_costmap:
   global_costmap:
