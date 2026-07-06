@@ -763,6 +763,118 @@ still holds at 15.0 > 1.3).
 `prefer_farthest` instead of exhausting patience early, and that `/explore/status`
 stops reporting done/no-frontier while map coverage is still incomplete.
 
+## T04p — Switch global planner from NavFn to SmacPlanner2D
+**Status**: in progress
+**Description**: T04m confirmed the "Failed to create a plan from potential when a
+legal potential was found" error recurs on ordinary open-space goals, not just
+ragged-edge ones. External research (GitHub ros-navigation/navigation2#4655)
+confirms this is a known, unresolved upstream bug in `nav2_navfn_planner::NavfnPlanner`
+reported independently by another user with the identical message, plus related
+NavFn potential/tolerance defects (#2016, #1683) — not something specific to this
+repo's config. Rather than wait on an upstream fix, switch `planner_server`'s
+`GridBased` plugin from `nav2_navfn_planner::NavfnPlanner` to
+`nav2_smac_planner::SmacPlanner2D` (confirmed installed: `/opt/ros/jazzy/lib/
+libnav2_smac_planner_2d.so`) via an override in `config/nav2_param_patch.yaml`,
+shared by both sim and real-robot launches. SmacPlanner2D uses a different
+search algorithm (2D A*/dijkstra on the costmap grid) that does not share NavFn's
+potential-field plan-reconstruction code path.
+**Test**: Live — rerun `multi_room.world` exploration session, confirm goals that
+previously hit the NavFn "legal potential" error now either plan successfully or
+fail with a different, more actionable error. Record `reached` vs `failed` counts
+in telemetry compared to the 0/29 baseline from T04m.
+
+## T04q — Add initial 360° spin before frontier exploration begins
+**Status**: in progress
+**Description**: Live testing (2026-07-06, `boat1` session in `multi_room.world`)
+found slam_toolbox does not update `/map` unless the robot moves past
+`minimum_travel_distance`/`minimum_travel_heading` (stock defaults, not
+overridden in `slam_param_patch.yaml`) — confirmed live: real lidar hits kept
+landing on cells `/map` still reported as unknown while the robot sat still.
+A single stationary scan only reveals whatever is unoccluded in the robot's
+starting orientation; a full rotation in place gives slam_toolbox's very
+first scan the widest possible initial view before frontier-seeking starts,
+independent of and prior to any fix to the travel-threshold gating itself.
+Implemented via Nav2's existing `nav2_behaviors::Spin` behavior (served by
+`behavior_server` at action `spin`, `nav2_msgs/action/Spin`, `target_yaw`
+field) rather than raw `/cmd_vel` — reuses the same recovery machinery
+Nav2's BT already exercises, avoiding any conflict with `controller_server`'s
+own `/cmd_vel` output. `on_intent`'s `exploration_start` handler now
+transitions to a new `spinning` state (instead of `exploring` directly),
+sends a `2*pi` Spin goal, and only calls the new `begin_exploring()` (sets
+state to `exploring`) once the spin action completes or is rejected/
+unavailable (graceful fallback, does not block exploration if
+`behavior_server`'s spin plugin isn't ready). `exploration_stop` during
+`spinning` cancels the in-flight spin goal via a new `spin_goal_handle`,
+mirroring the existing nav-goal cancel pattern in `stop_exploring()`.
+`explore_tick()`'s existing `if self.state != "exploring": return` guard
+already skips frontier-seeking while `spinning`, no change needed there.
+**Test**: Unit tests in `test_pluggable_explore_manager_node.py` covering:
+state transitions to `spinning` (not `exploring`) on `exploration_start`;
+spin goal sent via `spin_client.send_goal_async`; spin rejection/unavailable
+server falls back to `exploring` directly; spin completion transitions
+`spinning` → `exploring`; `exploration_stop` mid-spin cancels the spin goal
+and does not later resume exploring when the stale completion callback
+fires; `explore_tick` performs no frontier-seeking while `spinning`.
+**Not yet done**: live re-verification in Gazebo that the initial spin
+measurably improves early map coverage before the first frontier goal is
+sent. Does not address the underlying `minimum_travel_distance`/
+`minimum_travel_heading` gating itself (still stock defaults) — only
+mitigates its effect on the very first scan.
+
+## T04r — Buffer-cell frontier definition + tighter local costmap inflation
+**Status**: in progress
+**Description**: Telemetry analysis of `explore-toy6-20260706.jsonl` (105 goals,
+0 reached) after the T04p SmacPlanner2D switch found a new failure mode:
+`planner_server` log showed `GridBased plugin failed to plan from (-0.90,
+-0.39) to ...: "Start occupied"` repeating for 28 consecutive goals — the
+robot's own position, per the global costmap, was inside a lethal/inflated
+cell after a difficult prior maneuver, so no plan to *any* goal could ever
+succeed from there. Two user-proposed changes, implemented together:
+1. **Buffer-cell frontier definition** (`frontier_explorer.py`,
+   `find_frontier_clusters()`): a frontier cell must no longer itself touch
+   an unknown cell — it must have at least one 4-neighbor that touches
+   unknown, while the cell itself does not. This keeps every goal candidate
+   one known "buffer" cell off the ragged known/unknown boundary, the same
+   boundary implicated in the NavFn "legal potential" bug (T04m) and in
+   general costmap-geometry ambiguity. Simpler than the shelved T04n
+   `nudge_away_from_unknown()` heuristic — achieved by redefining the
+   candidate set itself rather than nudging a chosen goal after the fact.
+2. **Tighter local costmap inflation** (`config/nav2_param_patch.yaml`):
+   `local_costmap.inflation_layer.inflation_radius` lowered and
+   `cost_scaling_factor` raised further, within the safety floor Nav2 itself
+   flagged in T04h (inflation_radius must stay >= the footprint's inscribed
+   radius, ~0.157 for this robot) — a smaller, steeper-decay inflated zone
+   reduces the chance a robot that stops slightly off-goal lands inside a
+   lethal/inflated cell.
+**Test**: Existing `test_frontier_explorer.py` cases updated for the new
+buffer semantics (a cell directly touching unknown is no longer itself a
+frontier cell); added a regression test with a >=2-cell-deep known region
+confirming the one-buffer-cell candidate is selected instead of the
+boundary cell. `nav2_param_patch.yaml` change is config-only, no existing
+test asserts a specific inflation value. Full suite rerun after.
+**Not yet done**: live re-verification in Gazebo — rerun exploration in
+`multi_room.world` and confirm the "Start occupied" pattern no longer
+recurs, and that `reached` counts improve from the 0/105 baseline.
+
+## T04s — Stop reconsidering the frontier mid-navigation
+**Status**: done
+**Description**: User-proposed simplification: only reconsider the map/
+frontier choice when the current goal completes (reached, aborted, or
+timed out) — not continuously while a goal is in flight. `explore_tick()`
+no longer calls `check_goal_redirect()` from its `has_active_goal` branch;
+`check_goal_timeout()` still runs every tick. Per explicit user choice, the
+method itself (`check_goal_redirect()`, `frontier_goal_for_current_map()`,
+`REDIRECT_THRESHOLD`, `is_redirecting` handling) is left in place, unused,
+rather than deleted — kept in case the mid-flight redirect behavior is
+wanted again later. This was already a no-op under `prefer_farthest=True`
+(the sim default, see T04f), so the behavioral change only affects
+`prefer_farthest=False` configurations (the real-robot default).
+**Test**: No new tests needed — `test_redirect_fires_when_not_prefer_farthest`
+and `test_redirect_suppressed_when_not_prefer_farthest` still call
+`check_goal_redirect()` directly and continue to pass, confirming the method
+itself still works correctly even though `explore_tick()` no longer invokes
+it. Full suite rerun after the change.
+
 ## T05 — End-to-end exploration smoke test
 **Status**: not done — blocked. Originally blocked on T04's doorway costmap-inflation
 finding (`simple_room.world`); now confirmed (T04m, `multi_room.world`) blocked on an

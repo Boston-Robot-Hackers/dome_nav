@@ -45,24 +45,24 @@ def test_no_frontiers_all_occupied():
 
 
 def test_single_frontier_cell():
-    # 3x3: center is free, surrounded by unknown on top edge
-    # Row-major: idx = row*width + col
-    # Layout (3x3): all unknown except cell (1,1) = free, (0,1) = unknown neighbor
-    info = make_info(3, 3)
-    data = [-1] * 9
-    data[4] = 0  # center cell (row=1, col=1) = free, neighbors include unknowns
+    # 1x5: [-1, 0, 0, 0, -1]. Cells 1 and 3 touch unknown directly and are
+    # excluded as frontiers under the buffer-cell rule; cell 2 (the buffer
+    # cell, adjacent to both but not itself touching unknown) is the sole
+    # frontier candidate.
+    info = make_info(5, 1)
+    data = [-1, 0, 0, 0, -1]
     clusters = find_frontier_clusters(data, info)
     assert len(clusters) == 1
-    assert clusters[0] == [4]
+    assert clusters[0] == [2]
 
 
 def test_two_separate_clusters():
-    # 5x1 map: [free, unknown, unknown, unknown, free]
-    # Cell 0 is free, neighbor cell 1 is unknown → frontier
-    # Cell 4 is free, neighbor cell 3 is unknown → frontier
-    # They are not 8-adjacent so two clusters
-    info = make_info(5, 1)
-    data = [0, -1, -1, -1, 0]
+    # Two independent 5-cell "single frontier cell" patterns (see above)
+    # concatenated with a 1-cell unknown gap between them, giving two
+    # buffer-cell frontiers (local index 2 and 7) far enough apart to stay
+    # in separate clusters.
+    info = make_info(10, 1)
+    data = [-1, 0, 0, 0, -1, -1, 0, 0, 0, -1]
     clusters = find_frontier_clusters(data, info)
     assert len(clusters) == 2
     total_cells = sum(len(c) for c in clusters)
@@ -70,18 +70,44 @@ def test_two_separate_clusters():
 
 
 def test_occupied_cell_not_frontier():
-    info = make_info(3, 1)
-    data = [100, -1, 0]  # cell 2 free, neighbor cell 1 unknown → frontier
+    # 1x6: [occupied, unknown, free, free, free, unknown]. Cell 2 touches
+    # unknown directly (excluded under the buffer rule); cell 3 is the
+    # buffer cell and the sole frontier. The occupied cell must never
+    # appear in any cluster.
+    info = make_info(6, 1)
+    data = [100, -1, 0, 0, 0, -1]
     clusters = find_frontier_clusters(data, info)
     assert len(clusters) == 1
-    assert 2 in clusters[0]
+    assert clusters[0] == [3]
     assert 0 not in clusters[0]
 
 
+def test_cell_touching_unknown_directly_excluded_from_frontier():
+    # 1x6: [-1, 0, 0, 0, 0, -1]. Cells 1 and 4 touch unknown directly and
+    # must never appear as frontier cells, regardless of cluster size —
+    # only cells 2 and 3 (the buffer ring, one known cell removed from
+    # unknown) qualify.
+    info = make_info(6, 1)
+    data = [-1, 0, 0, 0, 0, -1]
+    clusters = find_frontier_clusters(data, info)
+    all_frontier_cells = {cell for cluster in clusters for cell in cluster}
+    assert all_frontier_cells == {2, 3}
+    assert 1 not in all_frontier_cells
+    assert 4 not in all_frontier_cells
+
+
 def test_adjacent_frontiers_form_one_cluster():
-    # 1x4: [-1,free,free,-1] → cells 1,2 touch unknowns, 8-adjacent → one cluster
-    info = make_info(4, 1)
-    data = [-1, 0, 0, -1]
+    # 6x5 grid: a 1-cell unknown border surrounds a 4x3 free interior. The
+    # interior ring touching the border is excluded under the buffer rule;
+    # only the two center cells (row 2, cols 2-3) are never adjacent to
+    # unknown, so they are the frontier — 4-adjacent to each other, one
+    # cluster of size 2.
+    width, height = 6, 5
+    info = make_info(width, height)
+    data = [
+        -1 if (r in (0, height - 1) or c in (0, width - 1)) else 0
+        for r in range(height) for c in range(width)
+    ]
     clusters = find_frontier_clusters(data, info)
     assert len(clusters) == 1
     assert len(clusters[0]) == 2
@@ -288,12 +314,19 @@ def test_cell_to_world_nonzero_origin():
 # --- find_frontier_clusters 2D diagonal adjacency ---
 
 def test_diagonal_frontier_cells_form_one_cluster():
-    # 3x3: cell 0 (r=0,c=0) and cell 4 (r=1,c=1) are only diagonally adjacent.
-    # Both touch unknown neighbors → both frontier. 8-connectivity must merge them.
-    info = make_info(3, 3)
-    data = [-1] * 9
-    data[0] = 0   # top-left free — neighbors cell 1 and cell 3 are unknown
-    data[4] = 0   # center free — all neighbors unknown
+    # Two overlapping "plus" shapes of free cells, centered at (2,2) and
+    # (3,3) on a 6x6 grid (all other cells unknown). Each plus's own center
+    # is the only cell in it with all-free neighbors (its four arms each
+    # touch unknown), so each center is a buffer-cell frontier — and the two
+    # centers are only diagonally adjacent to each other. 8-connectivity
+    # must still merge them into one cluster.
+    width, height = 6, 6
+    info = make_info(width, height)
+    free_cells = {(1, 2), (2, 1), (2, 2), (2, 3), (3, 2), (3, 3), (3, 4), (4, 3)}
+    data = [
+        0 if (r, c) in free_cells else -1
+        for r in range(height) for c in range(width)
+    ]
     clusters = find_frontier_clusters(data, info)
     assert len(clusters) == 1
     assert len(clusters[0]) == 2

@@ -19,9 +19,17 @@ class MapInfo:
 def find_frontier_clusters(data: list[int], info: MapInfo) -> list[list[int]]:
     # Returns list[list[int]]: each inner list is a cluster of cell indices (flat
     # offsets into data). row = idx // width, col = idx % width. Convert to world
-    # coords via cell_to_world(idx, info). A frontier cell is free (data[idx]==0)
-    # with at least one 4-neighbor that is unknown (data[nb]==-1). Adjacent
-    # frontier cells are grouped into clusters by 8-connectivity flood-fill.
+    # coords via cell_to_world(idx, info).
+    #
+    # A frontier cell is free (data[idx]==0), does NOT itself touch an unknown
+    # cell, but has at least one 4-neighbor that does — i.e. there is always one
+    # known "buffer" cell between a frontier goal and the unknown region it
+    # borders. Goals sitting directly on the ragged known/unknown boundary are
+    # where Nav2's planners have historically been unreliable (the NavFn "legal
+    # potential" bug, TF13 T04m) and where costmap geometry is most ambiguous;
+    # requiring a buffer cell keeps every candidate goal one step further into
+    # confirmed-known space. Adjacent frontier cells are grouped into clusters
+    # by 8-connectivity flood-fill.
     width, height = info.width, info.height
 
     def neighbors4(idx: int):
@@ -41,14 +49,20 @@ def find_frontier_clusters(data: list[int], info: MapInfo) -> list[list[int]]:
                 if 0 <= nr < height and 0 <= nc < width:
                     yield nr * width + nc
 
-    is_frontier: set[int] = set()
+    touches_unknown: set[int] = set()
     for idx in range(width * height):
         if data[idx] != 0:
             continue
         for nb in neighbors4(idx):
             if data[nb] == -1:
-                is_frontier.add(idx)
+                touches_unknown.add(idx)
                 break
+
+    is_frontier: set[int] = set()
+    for idx in touches_unknown:
+        for nb in neighbors4(idx):
+            if data[nb] == 0 and nb not in touches_unknown:
+                is_frontier.add(nb)
 
     visited: set[int] = set()
     clusters: list[list[int]] = []

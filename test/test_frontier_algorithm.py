@@ -159,9 +159,11 @@ def test_latest_diag_transitions():
 
 def test_blacklist_causes_none_when_only_frontier_blocked():
     algo = FrontierAlgorithm()
-    info = make_info(5, 1)
-    # Cell 2 (x=2.5) is the only frontier cell
-    data = [0, 0, 0, -1, -1]
+    info = make_info(6, 1)
+    # 6x1: cells 0-3 free, 4-5 unknown. Cell 3 touches unknown directly and
+    # is excluded under the buffer-cell rule; cell 2 (x=2.5) is the buffer
+    # cell and the sole frontier.
+    data = [0, 0, 0, 0, -1, -1]
     blacklist = {(2.5, 0.5)}
     ctx = make_ctx(data, info, blacklist=blacklist,
                    params=ExploreParams(min_frontier_size=1, min_frontier_dist=0.0,
@@ -193,7 +195,9 @@ def test_nudge_applied_goal_closer_than_raw_cell():
 
 def test_nudge_amount_correct():
     algo = FrontierAlgorithm()
-    # 10x1 map with frontier at cell 4 (x=4.5, y=0.5), robot at origin
+    # 10x1 map, cells 0-4 free, 5-9 unknown. Cell 4 touches unknown directly
+    # and is excluded under the buffer-cell rule; cell 3 (x=3.5, y=0.5) is
+    # the buffer cell and the sole frontier. Robot at origin.
     info = make_info(10, 1)
     data = [0] * 5 + [-1] * 5
     robot_xy = (0.0, 0.0)
@@ -203,9 +207,9 @@ def test_nudge_amount_correct():
                                         goal_inset_m=inset))
     result = algo.next_goal(ctx)
     assert result is not None
-    # Nearest frontier cell is cell 4 at (4.5, 0.5). After nudge toward (0,0)
-    # by 0.3m, the distance should be reduced by exactly 0.3m.
-    raw_xy = (4.5, 0.5)
+    # After nudge toward (0,0) by 0.3m, the distance should be reduced by
+    # exactly 0.3m.
+    raw_xy = (3.5, 0.5)
     raw_dist = math.sqrt(raw_xy[0] ** 2 + raw_xy[1] ** 2)
     result_dist = math.sqrt(result[0] ** 2 + result[1] ** 2)
     assert abs((raw_dist - result_dist) - inset) < 1e-6

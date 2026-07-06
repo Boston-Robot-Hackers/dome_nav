@@ -15,7 +15,7 @@ from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import OccupancyGrid
 from visualization_msgs.msg import MarkerArray
-from nav2_msgs.action import NavigateToPose
+from nav2_msgs.action import NavigateToPose, Spin
 import tf2_ros
 
 from dome_nav.explore_context import (
@@ -56,9 +56,18 @@ class PluggableExploreManagerNode(Node):
     # large → stale goals persist after the map changes significantly.
     REDIRECT_THRESHOLD = 1.5
 
+    # Full rotation commanded once at the start of each exploration session,
+    # before any frontier is sought — gives slam_toolbox's first scan the
+    # widest possible initial view. slam_toolbox only updates the map once the
+    # robot moves past minimum_travel_distance/minimum_travel_heading (stock
+    # defaults), so whatever the first stationary scan misses stays unknown
+    # until the robot happens to move enough to trigger a new one.
+    INITIAL_SPIN_YAW = 2 * math.pi
+
     def __init__(self, algorithm: ExplorationAlgorithm | None = None):
         super().__init__("explore_manager_node")
         self.nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
+        self.spin_client = ActionClient(self, Spin, "spin")
         self.status_pub = self.create_publisher(String, "/explore/status", 10)
         self.marker_pub = self.create_publisher(MarkerArray, "/explore/markers", 10)
         self.intent_sub = self.create_subscription(
@@ -114,13 +123,13 @@ class PluggableExploreManagerNode(Node):
         if name == "exploration_start" and self.state in ("idle", "done"):
             self.reset_session()
             self.start_xy = self.robot_xy_in_map()
-            self.state = "exploring"
-            self.publish_status("exploring")
+            self.state = "spinning"
+            self.publish_status("spinning")
             r = (
                 f", max_radius={self.params.max_explore_radius}m"
                 if self.params.max_explore_radius > 0 else ""
             )
-            self.get_logger().info(f"Exploration started{r}.")
+            self.get_logger().info(f"Exploration started{r} — spinning in place first.")
             self.telemetry.write(
                 "session_start", map_name=self.map_name,
                 start_xy=list(self.start_xy) if self.start_xy else None,
@@ -134,8 +143,44 @@ class PluggableExploreManagerNode(Node):
                     "min_frontier_size": self.params.min_frontier_size,
                 },
             )
+            self.send_initial_spin()
         elif name == "exploration_stop":
             self.stop_exploring("idle")
+
+    def send_initial_spin(self):
+        if not self.spin_client.server_is_ready():
+            self.get_logger().warning(
+                "Spin behavior server not ready — skipping initial spin."
+            )
+            self.begin_exploring()
+            return
+        goal = Spin.Goal()
+        goal.target_yaw = self.INITIAL_SPIN_YAW
+        future = self.spin_client.send_goal_async(goal)
+        future.add_done_callback(self.on_spin_goal_accepted)
+
+    def on_spin_goal_accepted(self, future):
+        if self.state != "spinning":
+            return
+        handle = future.result()
+        if not handle.accepted:
+            self.get_logger().warning("Initial spin rejected — proceeding without it.")
+            self.begin_exploring()
+            return
+        self.spin_goal_handle = handle
+        result_future = handle.get_result_async()
+        result_future.add_done_callback(self.on_spin_result)
+
+    def on_spin_result(self, future):
+        self.spin_goal_handle = None
+        if self.state != "spinning":
+            return
+        self.get_logger().info("Initial 360° spin complete — beginning exploration.")
+        self.begin_exploring()
+
+    def begin_exploring(self):
+        self.state = "exploring"
+        self.publish_status("exploring")
 
     def explore_tick(self):
         self.publish_status(self.state)
@@ -144,7 +189,10 @@ class PluggableExploreManagerNode(Node):
             return
         if self.has_active_goal:
             self.check_goal_timeout()
-            self.check_goal_redirect()
+            # check_goal_redirect() is intentionally not called here (F13 T04s):
+            # the map/frontier choice is now only reconsidered when the current
+            # goal finishes (reached, aborted, or timed out), not mid-flight.
+            # The method and its tests are kept for potential future use.
             return
         self.find_and_send_frontier()
 
@@ -314,6 +362,7 @@ class PluggableExploreManagerNode(Node):
         self.goal_count = 0
         self.goals_reached = 0
         self.goals_failed = 0
+        self.spin_goal_handle = None
 
     def clear_active_goal(self):
         self.goal_handle = None
@@ -412,6 +461,9 @@ class PluggableExploreManagerNode(Node):
         self.blacklist.add(centroid)
 
     def stop_exploring(self, new_state: str):
+        if self.spin_goal_handle is not None:
+            self.spin_goal_handle.cancel_goal_async()
+            self.spin_goal_handle = None
         if self.goal_handle is not None:
             self.goal_handle.cancel_goal_async()
             self.goal_handle = None
