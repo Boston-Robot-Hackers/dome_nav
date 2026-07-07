@@ -40,9 +40,14 @@ class PluggableExploreManagerNode(Node):
     EXPLORE_HZ = 2.0
 
     # How many consecutive ticks with no valid frontier before declaring done.
-    # At 2 Hz this is 4 s of patience. Too low → quits while map is still updating.
-    # Too high → long wait at end of a complete map. 8 ticks (4 s) works well.
-    NO_FRONTIER_PATIENCE = 8
+    # At 2 Hz this is 7 s of patience. Too low → quits while map is still updating.
+    # Too high → long wait at end of a complete map. Must exceed slam_toolbox's own
+    # map_update_interval (5 s default, not overridden) -- 8 ticks (4 s) was shorter
+    # than that, so patience could run out before /map had refreshed even once,
+    # e.g. right after the initial spin (F13 T04q) revealed new area but before
+    # slam_toolbox's next scheduled rebuild. 14 ticks (7 s) gives one full 5 s
+    # interval plus margin.
+    NO_FRONTIER_PATIENCE = 14
 
     # Cancel active goal after this many seconds to break Nav2 BT recovery loops.
     # Nav2's default BT runs spin + retry before aborting, which can take 60+ s.

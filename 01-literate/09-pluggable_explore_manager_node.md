@@ -260,10 +260,13 @@ confusing downstream behaviour — the algorithm receiving a stale or zero robot
 **The `no_frontier_count` patience counter** is the mechanism for distinguishing "no
 frontiers right now" from "exploration is genuinely complete." The occupancy grid updates
 asynchronously: a single tick with no valid frontier might simply reflect a map update
-lag. Eight consecutive empty ticks at 2 Hz equals 4 seconds of sustained
-empty-frontier state, which is enough to rule out transient lags. Too low a patience value
-causes premature termination; too high a value means the robot sits idle at the end of a
-complete run longer than necessary.
+lag. Fourteen consecutive empty ticks at 2 Hz equals 7 seconds of sustained
+empty-frontier state (raised from 8 ticks/4s on 2026-07-07: slam_toolbox's own
+`map_update_interval` defaults to 5s, so a shorter patience window could expire before
+`/map` had refreshed even once — observed concretely right after the initial 360° spin,
+where the spin revealed new area but patience ran out before the next scheduled map
+rebuild). Too low a patience value causes premature termination; too high a value means
+the robot sits idle at the end of a complete run longer than necessary.
 
 A successful frontier resets `no_frontier_count` to zero. The counter therefore measures
 _consecutive_ empty ticks, not a running total.

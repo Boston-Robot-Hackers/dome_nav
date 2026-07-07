@@ -875,6 +875,65 @@ and `test_redirect_suppressed_when_not_prefer_farthest` still call
 itself still works correctly even though `explore_tick()` no longer invokes
 it. Full suite rerun after the change.
 
+## T04t — Fix robot_state_publisher never starting (root cause: anonymous-name full-system process scan)
+**Status**: done
+**Description**: Live debugging (2026-07-07) of a "robot model does not appear
+in RViz" report found `sim_robot.launch.py`'s two `bl.node()` calls
+(`robot_state_publisher`, `gz_laser_frame_bridge`'s `static_transform_publisher`)
+never actually started — confirmed via repeated `ros2 node list`/`ps aux`
+checks across many independent runs (minutes-long, never resolving), while
+`gazebo.spawn_model()` and `gazebo.spawn_topic_bridge()` (both also
+`bl.node()`-family calls, both `raw=True`) succeeded instantly every time.
+Ruled out, in order: URDF/params content (standalone `ros2 run
+robot_state_publisher robot_state_publisher` with the same params worked
+instantly); command-line length (switching `robot_description` from an
+inline `params=` dict — which `bl.node()` renders as a single giant `-p
+key:=<json>` CLI arg — to a real `param_files=[...]` params file made no
+difference); Gazebo's own process/logging competing for the GIL (reproduced
+identically with Gazebo started completely externally, outside
+`better_launch` entirely). **Actual root cause**: neither failing call
+passed an explicit `name=`, so `bl.node()` treated them as anonymous and
+called `get_unique_name()`, which (to avoid a name collision) calls
+`get_nodes(include_foreign=True)` — a full scan of every process on the
+system (342 on this VM) via `find_foreign_nodes()`/`parse_process_args()` to
+reconstruct foreign ROS2 node identities. Under this VM's CPU load this scan
+effectively never completed. `gazebo.spawn_model()`/`spawn_topic_bridge()`
+were unaffected because they already pass explicit names (`gz_bridge`, the
+spawn helper's own name) and `raw=True` skips the anonymous-naming path
+entirely. Fixed by adding `name="robot_state_publisher"` to that `bl.node()`
+call in `sim_robot.launch.py` (`gz_laser_frame_bridge`'s call already had an
+explicit name — it was only ever blocked because the *prior* call, for
+`robot_state_publisher`, never returned).
+Separately found and fixed a second, independent bug while building the
+`param_files` params-file diagnostic above: `better_launch`'s own
+`elements/node.py` emitted `--param-file <path>` for `param_files` entries,
+but ROS2's actual `rcl` flag is `--params-file` (plural) — confirmed via
+`strings` on `librcl.so`. This silently broke `param_files` for every caller
+in this workspace's `better_launch`, not just this one. Fixed in
+`src/better_launch/better_launch/elements/node.py`.
+Also removed `sim_robot.launch.py`'s `gazebo.gazebo_launch()` call entirely
+(a change made and reverted earlier in the same investigation once the real
+root cause was found) — it now expects `gz sim <world>.world` to already be
+running, started separately by hand, rather than launching Gazebo through
+`better_launch`'s own `bl.include()` machinery. This was not the root cause
+of the stall, but was kept: running Gazebo as a fully independent process
+simplifies debugging (native `gz topic -l` can confirm the sim layer
+independent of ROS2/better_launch) and was validated as part of this
+session's step-by-step isolation. `sim_nav_full.launch.py` and its header
+comment were updated to match (Gazebo is a precondition, not something it
+starts).
+**Test**: Manual — full live verification via `bl dome_nav sim_nav_full.launch.py
+--map_name tue3 --world_name multi_room` (Gazebo started separately first):
+`ros2 node list` now shows the complete stack (`robot_state_publisher`,
+`gz_laser_frame_bridge`, `slam_toolbox`, every Nav2 server, `lifecycle_manager_navigation`,
+`explore_manager`); robot model confirmed visible in RViz. No automated test
+added — this is launch-time process orchestration behavior, not covered by
+the pure-Python test suite.
+**Not yet done**: `controller_server` logs a non-fatal inflation-radius
+warning (0.160 vs. footprint circumscribed radius 0.164142) on every run —
+worth a small bump to `config/nav2_param_patch.yaml`'s `inflation_radius`
+above 0.164142, but not blocking.
+
 ## T05 — End-to-end exploration smoke test
 **Status**: not done — blocked. Originally blocked on T04's doorway costmap-inflation
 finding (`simple_room.world`); now confirmed (T04m, `multi_room.world`) blocked on an

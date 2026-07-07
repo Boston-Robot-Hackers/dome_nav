@@ -2,9 +2,19 @@
 
 ## Snapshot
 
-**Date:** 2026-07-05
+**Date:** 2026-07-07
 **Branch:** main
-**Status:** F12 complete. F13 (Gazebo simulation) in progress: T01-T03 done, full sim stack
+**Status (2026-07-07 update):** F13 sim stack now boots end-to-end and reaches the "robot
+visible in RViz, full Nav2/SLAM/explore stack active" state reliably — see the
+**Session 2026-07-07** entry under F13 below for the two real bugs found and fixed today
+(`robot_state_publisher` never starting; a `--param-file`/`--params-file` typo in
+`better_launch` itself) plus a race-condition fix, a patience-timing fix, and an
+inflation-radius fix. F13 T05 (end-to-end exploration smoke test) is still blocked: goals
+are now reliably *sent*, but most still *fail* (0/4 reached in the last observed session) —
+this is the current top blocker, not yet root-caused. Everything below this point in the
+Snapshot (dated 2026-07-05) predates today's session; treat it as historical context for
+*how* the stack reached its current state, not as the current status.
+**Status (as of 2026-07-05, superseded above):** F12 complete. F13 (Gazebo simulation) in progress: T01-T03 done, full sim stack
 (Gazebo + slam_toolbox + Nav2 + explore) launches and drives the robot end-to-end. T04's
 earlier TF-extrapolation theory was **ruled out** — traced the failing lookup's TF chain and
 found every edge in it is static; a clean run (after killing orphaned processes from a prior
@@ -495,6 +505,86 @@ Also note: `setup.py` was updated to add the `pluggable_explore_manager_node` co
 point and to install `worlds/*` as package share data — both required for T03 and already
 in place.
 
+**Session 2026-07-07 — root-caused and fixed `robot_state_publisher` never starting
+(the actual cause of "robot model does not appear in RViz"), a `better_launch` typo bug,
+a Nav2/SLAM startup race, a patience-timing bug, and an inflation-radius performance
+issue. See F13 T04t for full detail.**
+
+- **T04t** — Live debugging of a "robot model does not appear in RViz" report found
+  `sim_robot.launch.py`'s `bl.node()` calls for `robot_state_publisher` and
+  `gz_laser_frame_bridge` never actually started (confirmed via repeated `ros2 node
+  list`/`ps aux` checks across many independent runs, never resolving even after minutes).
+  Ruled out, in order: URDF/params content, command-line length (params-file vs. inline
+  dict), and Gazebo's own process competing for the GIL (reproduced identically with
+  Gazebo started completely externally). **Actual root cause**: neither call passed an
+  explicit `name=`, so `bl.node()` treated them as anonymous and called
+  `get_unique_name()`, which scans *every process on the system* via
+  `get_nodes(include_foreign=True)`/`find_foreign_nodes()` to avoid a name collision —
+  on this VM (342 processes) that scan effectively never completed. Fixed by adding
+  `name="robot_state_publisher"` to that call. Separately found and fixed a second,
+  independent bug in `better_launch` itself: `elements/node.py` emitted `--param-file`
+  for `param_files` entries, but ROS2's actual `rcl` flag is `--params-file` (plural,
+  confirmed via `strings` on `librcl.so`) — this silently broke `param_files` for every
+  caller in this workspace's `better_launch`, not just this one. Both fixes rebuilt and
+  live-verified: full stack (`robot_state_publisher`, `gz_laser_frame_bridge`,
+  `slam_toolbox`, every Nav2 server, `lifecycle_manager_navigation`, `explore_manager`)
+  now comes up, robot visible in RViz.
+- **Gazebo launch removed from `sim_robot.launch.py`** — no longer calls
+  `gazebo.gazebo_launch()`; expects `gz sim -r <world>.world` to already be running,
+  started separately by hand. This was explored as a hypothesis for the
+  `robot_state_publisher` hang (it wasn't the cause, see above) but kept anyway: running
+  Gazebo as a fully independent process simplifies debugging (native `gz topic -l` can
+  confirm the sim layer independent of ROS2/`better_launch`). `sim_nav_full.launch.py`
+  and its header comment updated to match — Gazebo is now a precondition, not something
+  it starts. A `headless` launch arg was added and then fully removed again during this
+  same investigation (per explicit user decision to drop headless support entirely and
+  return to the GUI-only, Gazebo-started-separately model).
+- **`wait_for_map_odom_tf()` added to `sim_nav_full.launch.py`** — fixes a
+  previously-known-but-unfixed race (flagged as open back in the 2026-07-04 session
+  notes): `bl.include()` only guarantees launch *order*, not *readiness*, so
+  `sim_nav2.launch.py` could start before `slam_toolbox` had published its first
+  `map→odom` transform. Nav2's `global_costmap` only waits a **hardcoded 0.5s** for that
+  transform during activation (confirmed via `strings` on `libnav2_costmap_2d_core.so`;
+  not YAML-configurable) and `lifecycle_manager` aborts the *entire* bringup if it times
+  out — confirmed live via `planner_server`'s own log: "Failed to activate global_costmap
+  because transform from base_link to map did not become available before timeout",
+  leaving `global_costmap`, `bt_navigator`, `behavior_server`, `collision_monitor`,
+  `docking_server`, `route_server`, `velocity_smoother`, and `waypoint_follower` all
+  stuck `inactive` while `controller_server`/`smoother_server`/`local_costmap` (which
+  don't need the `map` frame) activated fine. Fixed by blocking on the real transform
+  (via `tf2_ros.Buffer`/`TransformListener` on `bl.shared_node`, polling up to 30s, with
+  visible "Waiting..."/"available after N.Ns" log messages) between the `sim_slam` and
+  `sim_nav2` includes. Note: must use `bl.shared_node`, not a node created via
+  `rclpy.create_node()` — `better_launch` runs `rclpy.init()` against its own private
+  `Context`, not the global default one, so a plain `rclpy.create_node()` call raises
+  `NotInitializedException`. `bl.shared_node` is already spun continuously by
+  `better_launch`'s own background executor thread, so the wait only needs to poll with
+  `time.sleep()`, not call `spin_once()` itself.
+- **`NO_FRONTIER_PATIENCE` raised 8→14 ticks (4s→7s)** — found via live testing after a
+  spin: `slam_toolbox`'s `map_update_interval` (5.0s, never overridden) was *longer* than
+  the old 4s patience window, so exploration could give up before `/map` had refreshed
+  even once after the initial 360° spin (F13 T04q) revealed new area. 14 ticks gives one
+  full 5s interval plus margin. 183/183 tests pass (tests reference the constant
+  relatively, not hardcoded).
+- **`inflation_radius` raised 0.16→0.17** (`config/nav2_param_patch.yaml`,
+  `local_costmap`) — `controller_server` logged "the inflation radius (0.160000) is
+  smaller than the circumscribed radius (0.164142)" on every run, forcing MPPI to do
+  full-footprint collision checks on every candidate trajectory instead of using the
+  costmap potential-field fast path. Measured actual robot speed at ~0.15 m/s against a
+  configured 0.45 m/s cruise speed (via two Gazebo-native `/odom` position samples 2.25s
+  apart) before the fix. This is shared config used by both sim and real-robot launches.
+- **Still open**: with all of the above fixed, goals are now reliably *sent* but most
+  still *fail* — one observed session showed `reached: 0, failed: 3, goal_num: 4`. This
+  is now the primary blocker for F13 T05, not yet root-caused (candidates not yet
+  investigated: read the actual `planner_server`/`controller_server`/`bt_navigator` logs
+  for a specific failing goal). The "map isn't growing" symptom investigated at length
+  this session (confirmed real via repeated `/map` occupancy-grid sampling, byte-for-byte
+  identical over 25s at one point) turned out to be fully explained as a downstream
+  consequence of this: `slam_toolbox` only folds a new pose into the map after 0.5m/0.5rad
+  of net movement, and a robot that keeps failing goals rarely accumulates that much *net*
+  progress even though it is genuinely moving frame-to-frame. Confirmed `slam_toolbox`
+  itself is healthy — user's own manual teleop test made the map expand normally.
+
 ## Open issues (05-issues/open/)
 
 - I06: leading-underscore MUST violations (3 source + 3 test files) — partially addressed
@@ -504,41 +594,27 @@ in place.
 
 ## Likely next steps
 
-1. **F13 T04o** — live re-verify the `max_frontier_dist` 3.0→15.0 fix (2026-07-05, found
-   via live user observation in RViz): `no_frontier` telemetry showed 10 genuinely-sized
-   frontier clusters all rejected by the distance band, not absent — `max_frontier_dist:
-   3.0` was carried over from the smaller `simple_room.world` and silently capped
-   `prefer_farthest` in the bigger `multi_room.world`. Fixed by raising the default to
-   15.0 in all three sim launch files + the node's ROS parameter default. Not yet
-   re-verified live.
-2. **F13 T04m** — root-cause the NavFn "legal potential" planner bug itself (confirmed
-   2026-07-05: it still fires on ordinary open-space goals, not just ragged-edge ones;
-   `min_frontier_size` 1→5 only reduced its frequency). Candidates: switch the global
-   planner plugin (e.g. Smac2D/SmacHybrid instead of NavFn/GridBased), or pad goal
-   placement further from ragged known/unknown edges. Every logged sim run on 2026-07-05
-   reached 0 of its goals — this is now the primary blocker for F13 T05.
-2. **F13** — investigate the `worldToMap failed: mx,my: ..., size_x,size_y: 202,202` error —
-   confirmed still occurring (4,460 times in one run, 2026-07-05) and unresolved; may be a
-   distinct edge-of-map-extent issue (not edge-of-known-space) specific to `multi_room.world`.
-3. **F13** — `simple_room.world`'s 0.6m doorway is still too tight for this robot at any
-   safe `inflation_radius` (see the inflation-geometry math worked out 2026-07-05) — either
-   avoid that world for doorway-dependent testing (use `multi_room.world`'s 2m/1.5m openings
-   instead) or widen the doorway directly if `simple_room.world` needs to keep working.
-4. **F13** — the TF-extrapolation/collision_monitor stop is currently believed to be a
-   process-hygiene side effect (stale/duplicate `/clock` source), not a structural bug — keep
-   an eye out if it recurs in a verified-clean run.
-5. **F13 T05** — end-to-end exploration smoke test in sim (blocked until T04l is re-verified)
-6. **F13 T06** — update feature/task file status, move to done, update this doc
-7. **Architecture decision (2026-07-04, not yet actioned)** — user wants sim and real-robot
+1. **F13 T05 (blocked, primary blocker)** — root-cause why most goals still *fail* after
+   being sent (one observed 2026-07-07 session: `reached: 0, failed: 3, goal_num: 4`).
+   Not yet investigated: read the actual `planner_server`/`controller_server`/
+   `bt_navigator` logs for a specific failing goal to get a concrete error, the same way
+   T04t's investigation did for the `robot_state_publisher` and lifecycle-race bugs.
+   `slam_toolbox`, Nav2 activation, and the launch-time race are all confirmed healthy as
+   of 2026-07-07 — this is now an isolated navigation-reliability question, not a
+   startup/orchestration one.
+2. **F13 T06** — update feature/task file status, move to done, update this doc (blocked
+   on T05).
+3. **Architecture decision (2026-07-04, not yet actioned)** — user wants sim and real-robot
    code to converge on `pluggable_explore_manager_node.py` for both, differing only by
    parameter values; `robot_explore.launch.py` still uses the original `explore_manager_node`
    and has not been switched over. Do this as a distinct, explicitly-confirmed step, not
    silently alongside other changes.
-8. **I06** — underscore rename sweep in remaining files
-9. **I07, I08, I09** — verify/close quick wins
-10. **TF10 T06** — hop-size issue: `MIN_FRONTIER_DIST` was raised 0.8→1.3m on 2026-07-03
-    (see below) at the user's request for a 1.0m real-goal floor; still worth considering a
-    cluster-size preference in `pick_best_frontier` on top of this if hop-size issues persist.
+4. **I06** — underscore rename sweep in remaining files
+5. **I07, I08, I09** — verify/close quick wins
+6. **`better_launch` fix upstreaming** — the `--param-file`→`--params-file` fix
+   (2026-07-07) was applied directly to this workspace's local `src/better_launch`; if
+   that repo tracks an upstream remote separately from this workspace, consider whether
+   it should be contributed back.
 
 ## Exploration params (explore_param_patch.yaml + ExploreParams defaults)
 
@@ -577,7 +653,9 @@ in place.
 - `BLACKLIST_RADIUS`: 0.5 m
 - `GOAL_INSET_M`: 0.3 m (nudge goal off frontier boundary)
 - `GOAL_TIMEOUT_S`: 25.0 s (break Nav2 BT recovery loops)
-- `NO_FRONTIER_PATIENCE`: 8 ticks = 4 s at 2 Hz
+- `NO_FRONTIER_PATIENCE`: 14 ticks = 7 s at 2 Hz (raised from 8/4s on 2026-07-07 — must
+  exceed slam_toolbox's `map_update_interval` of 5s, or patience can run out before
+  `/map` has refreshed even once, e.g. right after the initial spin)
 - `max_explore_radius`: 0.0 = unlimited
 
 **`MIN_FRONTIER_DIST` 0.8→1.3 (2026-07-03)**: user request was "never ask Nav2 to go to a
@@ -606,6 +684,19 @@ bl dome_nav robot_nav.launch.py --map_name <name>
 # Mode E: autonomous exploration (original node)
 bl dome_nav robot_explore.launch.py --map_name <name>
 bl dome_nav robot_explore.launch.py --map_name <name> --max_explore_radius 8.0
+```
+
+## Sim launch commands (2026-07-07: two steps, Gazebo started separately)
+
+`sim_robot.launch.py` (and therefore `sim_nav_full.launch.py`, which includes it) no
+longer starts Gazebo itself — start it by hand first, then run the launch file:
+
+```bash
+# Step 1: start Gazebo (own terminal, wait for it to fully load)
+gz sim -r ~/ros2_ws/install/dome_nav/share/dome_nav/worlds/multi_room.world
+
+# Step 2: spawn the robot + full stack (second terminal, after Gazebo is up)
+bl dome_nav sim_nav_full.launch.py --map_name <name> --world_name multi_room
 ```
 
 ## Exploration manual commands

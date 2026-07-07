@@ -16,7 +16,14 @@ local_costmap:
         # found in T04r's telemetry analysis (explore-toy6-20260706.jsonl).
         # cost_scaling_factor raised further (20 -> 30) for a steeper decay,
         # keeping the elevated-cost region tight around the smaller radius.
-        inflation_radius: 0.16
+        # F13 T04t: raised again, 0.16 -> 0.17. controller_server logged
+        # "inflation radius (0.16) is smaller than the circumscribed radius
+        # (0.164142)" on every run, forcing MPPI to do full-footprint
+        # collision checks on every candidate trajectory instead of using the
+        # costmap potential field fast path -- measured actual robot speed at
+        # ~0.15 m/s against a configured 0.45 m/s cruise speed. 0.17 clears
+        # the 0.164142 floor with a small margin.
+        inflation_radius: 0.17
         cost_scaling_factor: 30.0
 
 global_costmap:

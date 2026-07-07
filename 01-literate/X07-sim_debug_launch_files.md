@@ -74,14 +74,14 @@ step-by-step debugging.
 
 ## sim_robot.launch.py — Everything Needed for a Visible, TF-Correct Robot
 
-This is `sim_explore.launch.py`'s first five stages, unchanged, extracted
-verbatim:
+**Updated 2026-07-07**: this file no longer calls `gazebo.gazebo_launch()` at
+all — Gazebo must now be started separately, by hand (`gz sim -r
+<world>.world`), before running this file. The current shape is:
 
 ```python
-gazebo.gazebo_launch("dome_nav", "simple_room.world", gz_args=["-r"])
 gazebo.spawn_model(
     "dome2", urdf_path,
-    spawn_args=gazebo.get_gazebo_axes_args(x=-1.0, y=-1.0, z=0.05),
+    spawn_args=gazebo.get_gazebo_axes_args(x=spawn_x, y=spawn_y, z=0.05),
 )
 gazebo.spawn_topic_bridge(
     GazeboBridge.clock_bridge(),
@@ -91,13 +91,53 @@ gazebo.spawn_topic_bridge(
     GazeboBridge("/cmd_vel", "geometry_msgs/msg/Twist", "ros2gz"),
     GazeboBridge("/model/dome2/joint_state", "sensor_msgs/msg/JointState", "gz2ros"),
 )
+rsp_params_path = write_config({
+    "/**": {"ros__parameters": {
+        "robot_description": robot_description,
+        "use_sim_time": True,
+    }}
+})
 bl.node("robot_state_publisher", "robot_state_publisher",
-        params={"robot_description": robot_description, "use_sim_time": True},
+        name="robot_state_publisher",
+        param_files=[rsp_params_path],
         remaps={"/joint_states": "/model/dome2/joint_state"})
 bl.node("tf2_ros", "static_transform_publisher", name="gz_laser_frame_bridge",
         params={"use_sim_time": True},
         cmd_args=["0", "0", "0", "0", "0", "0", "laser", "dome2/base_footprint/lidar"])
 ```
+
+Two things changed from the original version, both found via live debugging
+of a "robot model does not appear in RViz" report:
+
+1. **`robot_state_publisher` now passes `name="robot_state_publisher"`
+   explicitly.** Without it, `bl.node()` treats the node as anonymous and
+   calls `get_unique_name()`, which scans *every process on the system*
+   (`get_nodes(include_foreign=True)` → `find_foreign_nodes()`) to avoid a
+   name collision — on a busy VM (hundreds of processes) this scan
+   effectively never completed, so the node never started at all, even
+   though `better_launch` had already logged its "Starting process..."
+   message. `gazebo.spawn_model()`/`spawn_topic_bridge()` were never
+   affected by this because they already pass explicit names and use
+   `raw=True`, which skips the anonymous-naming path entirely.
+2. **`robot_description` now goes through `param_files=[...]` (a real params
+   file written via `write_config()`), not `params={...}`.** `bl.node()`
+   renders `params=` dict entries as individual `-p key:=<json value>`
+   command-line arguments — a 300-line URDF blown up into one giant CLI arg
+   was suspected as a contributing factor (the same failure family as the
+   multi-line-XML CLI-arg bug documented earlier in this same file, for
+   `test5.bash`), though the name-collision scan above turned out to be the
+   actual root cause. Kept anyway since it avoids the huge command line
+   regardless. This also surfaced an independent, unrelated bug: the
+   installed `better_launch`'s `elements/node.py` emitted `--param-file` for
+   `param_files` entries, but ROS2's real `rcl` flag is `--params-file`
+   (plural) — fixed directly in `src/better_launch`.
+
+Gazebo's own process was investigated and ruled out as the cause (reproduced
+the identical hang with Gazebo started completely externally, outside
+`better_launch` entirely) — removing `gazebo.gazebo_launch()` from this file
+did not fix the bug, but was kept anyway per user decision: running Gazebo as
+a fully independent process simplifies debugging (native `gz topic -l` can
+confirm the sim layer independent of ROS2/`better_launch`).
 
 Nothing here needs a `map_name` argument, because none of these five pieces
 know or care about a saved map — the robot is fully visible and drivable
@@ -346,3 +386,26 @@ different problem became visible — see `06-frontier_explorer.md`'s
   files rather than re-implementing their logic a third time, so at least
   that entry point can't drift independently. `sim_explore.launch.py` itself
   is still a separate, hand-duplicated implementation of the same stack.
+- **`bl.include()` guarantees order, not readiness** — flagged as an open risk
+  back in the 2026-07-04 notes above, this was confirmed as a real bug and
+  fixed on 2026-07-07: `sim_nav_full.launch.py` called
+  `bl.include("dome_nav", "sim_slam.launch.py")` immediately followed by
+  `bl.include("dome_nav", "sim_nav2.launch.py")`, but `bl.include()` returns
+  as soon as it *registers* the nested launch, not once it's actually ready.
+  `slam_toolbox` needs a moment after starting to receive its first `/scan`
+  and publish `map→odom`. Nav2's `global_costmap` only waits a **hardcoded
+  0.5s** for that transform during activation (confirmed via `strings` on
+  `libnav2_costmap_2d_core.so` — not a YAML-configurable parameter) and
+  `lifecycle_manager` aborts the *entire* bringup if it times out — confirmed
+  live via `planner_server`'s own log: "Failed to activate global_costmap
+  because transform from base_link to map did not become available before
+  timeout." Fixed by adding a `wait_for_map_odom_tf()` helper in
+  `sim_nav_full.launch.py` that blocks (polling a `tf2_ros.Buffer` up to 30s)
+  between the `sim_slam` and `sim_nav2` includes until the transform genuinely
+  exists. It uses `bl.shared_node` rather than a node of its own —
+  `better_launch` runs `rclpy.init()` against its own private `Context`, not
+  the global default one, so a plain `rclpy.create_node()` call raises
+  `NotInitializedException`. `bl.shared_node` is already spun continuously by
+  `better_launch`'s own background executor thread, so the wait only needs to
+  poll with `time.sleep()`, not call `spin_once()` itself (which would race
+  with that thread).
