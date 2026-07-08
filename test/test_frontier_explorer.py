@@ -7,7 +7,7 @@ import math
 import pytest
 from dome_nav.frontier_explorer import (
     MapInfo,
-    _frontier_diag,
+    frontier_diag,
     cell_to_world,
     find_frontier_clusters,
     nudge_toward_robot,
@@ -403,7 +403,7 @@ def test_pick_all_cells_over_max_dist_skips_cluster():
     assert result is None
 
 
-def test_frontier_diag_reports_cells_filtered_by_max_dist():
+def testfrontier_diag_reports_cells_filtered_by_max_dist():
     # Regression: a cluster entirely beyond max_dist must be counted in
     # all_cells_out_of_range, even though it passes the min_dist check (bug found
     # 2026-07-03 — the diag helper only checked min_dist, so pick_best_frontier
@@ -411,7 +411,7 @@ def test_frontier_diag_reports_cells_filtered_by_max_dist():
     # telemetry: large_clusters > 0 but all_cells_out_of_range reported 0).
     info = make_info(10, 1, resolution=1.0)
     cluster = [8]  # world x=8.5, dist=8.5 from robot at (0,0)
-    diag = _frontier_diag([cluster], info, (0.0, 0.0), min_size=1, min_dist=0.0,
+    diag = frontier_diag([cluster], info, (0.0, 0.0), min_size=1, min_dist=0.0,
                            max_dist=1.0)
     assert diag["large_clusters"] == 1
     assert diag["all_cells_out_of_range"] == 1

@@ -625,10 +625,11 @@ issue. See F13 T04t for full detail.**
 
 ## Open issues (05-issues/open/)
 
-- I06: leading-underscore MUST violations (3 source + 3 test files) — partially addressed
-- I07: localization score not clamped to 1.0 → already clamped; verify before closing
-- I08: test files missing header
-- I09: `should_save()` 1-line method — verify moot before closing
+**None open** as of 2026-07-08 — `05-issues/open/` is empty. I06–I09 are all in
+`05-issues/closed/`. Verified 2026-07-08: I08 (test-file headers) all present; I06
+(leading underscores) — its documented targets are clean, and two later-added helpers in
+`frontier_explorer.py` (`_frontier_diag`, `_cell_out_of_range`) were renamed to drop the
+underscore in this session's cleanup, so no leading-underscore violations remain in source.
 
 ## Likely next steps
 

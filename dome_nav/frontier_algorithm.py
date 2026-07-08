@@ -8,7 +8,7 @@ from dome_nav.frontier_explorer import (
     find_frontier_clusters,
     nudge_toward_robot,
     pick_best_frontier,
-    _frontier_diag,
+    frontier_diag,
 )
 
 
@@ -39,7 +39,7 @@ class FrontierAlgorithm:
             prefer_farthest=ctx.params.prefer_farthest,
         )
         if target is None:
-            self.latest_diag = _frontier_diag(
+            self.latest_diag = frontier_diag(
                 clusters,
                 ctx.map_info,
                 ctx.robot_xy,

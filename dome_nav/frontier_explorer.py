@@ -154,7 +154,7 @@ def pick_best_frontier(
     return best
 
 
-def _frontier_diag(
+def frontier_diag(
     clusters: list[list[int]],
     info: MapInfo,
     robot_xy: tuple[float, float],
@@ -170,7 +170,7 @@ def _frontier_diag(
     all_out_of_range = 0
     for cluster in large:
         if all(
-            _cell_out_of_range(cell_to_world(i, info), robot_xy, min_dist, max_dist)
+            cell_out_of_range(cell_to_world(i, info), robot_xy, min_dist, max_dist)
             for i in cluster
         ):
             all_out_of_range += 1
@@ -181,7 +181,7 @@ def _frontier_diag(
     }
 
 
-def _cell_out_of_range(
+def cell_out_of_range(
     cell_xy: tuple[float, float],
     robot_xy: tuple[float, float],
     min_dist: float,

@@ -1,17 +1,29 @@
 ---
-version: "2.1"
-generated: "2026-07-05"
+version: "2.2"
+generated: "2026-07-08"
 ---
 
-# utils.py — Shared Utilities for dome_nav
+# utils.py — Shared Launch Utilities for dome_nav
 
-## Purpose
+`utils.py` is the small pile of helpers the launch files lean on. It has no ROS
+dependencies and no side effects at import time, which is exactly what lets the
+pure-Python test suite exercise it directly. As of the 2026-07-08 config
+refactor it does much less than it used to: every YAML *patching* helper
+(`build_slam_config`, `patch_dock_db`, `yaml_override`, `yaml_patch_dict`,
+`deep_merge`) was deleted when the project moved from runtime patch-merges to
+standalone, committed config files. What remains are three concerns:
 
-`utils.py` provides three services: locating the robot's home directory on disk (`dome_home`), merging YAML configuration files at launch time (`yaml_override`, `yaml_patch_dict`), and — added 2026-07-05 — validating which Gazebo world a sim launch should use (`available_worlds`, `require_world_name`, `world_spawn_xy`). These are foundational; every launch file and node that needs config or a simulated world depends on them.
+1. locating the DOME home directory,
+2. validating and mapping simulation world names, and
+3. writing a content-addressed config file (the one place a file is still
+   generated at launch time).
 
-## The DOME_HOME Convention
+## Where does state live? `dome_home()`
 
-Rather than hard-coding paths, all persistent state (maps, logs, calibration) lives under a single directory resolved at runtime:
+Everything the robot persists — saved maps, telemetry, the launch cache — lives
+under a single root. That root is `~/.dome` by default but can be relocated with
+the `DOME_HOME` environment variable, which is invaluable in tests (point it at a
+`tmp_path` and nothing touches the real home directory).
 
 ```python
 def dome_home() -> str:
@@ -19,65 +31,77 @@ def dome_home() -> str:
     return os.path.expanduser(os.environ.get("DOME_HOME", "~/.dome"))
 ```
 
-The `DOME_HOME` environment variable lets CI and multi-robot deployments redirect state without touching code. The `~/.dome` default keeps a developer's workstation tidy.
+The function is deliberately trivial and called everywhere rather than caching a
+module-level constant — so a test that sets `DOME_HOME` via `monkeypatch.setenv`
+takes effect immediately, with no import-order surprises.
 
-## YAML Merging
+## Choosing a simulation world safely
 
-ROS2 launch files often need to layer a robot-specific override on top of a shared base config. Two functions handle this:
-
-**File-to-file merge** — reads both YAML files and merges them:
-
-```python
-def yaml_override(base_file: str, override_file: str) -> str:
-    with open(base_file) as f:
-        base_params = yaml.safe_load(f) or {}
-    with open(override_file) as f:
-        override_params = yaml.safe_load(f) or {}
-    merged = _deep_merge(base_params, override_params)
-    return write_config(merged)
-```
-
-**Dict-to-file merge** — useful when overrides are computed at launch time:
+The sim launch files take a `--world_name` argument. The naive approach — pass
+the name straight to Gazebo — fails late and opaquely ("file not found") if the
+name is wrong. Instead we validate up front against the worlds *actually
+installed*, so the error message can list the real choices.
 
 ```python
-def yaml_patch_dict(base_file: str, overrides: dict) -> str:
-    with open(base_file) as f:
-        base_params = yaml.safe_load(f) or {}
-    merged = _deep_merge(base_params, overrides)
-    return write_config(merged)
+def available_worlds(worlds_dir: str) -> list[str]:
+    """List installed Gazebo world names (without the .world extension)."""
+    return sorted(
+        f[: -len(".world")] for f in os.listdir(worlds_dir) if f.endswith(".world")
+    )
 ```
 
-Both return a path to a config file on disk. The caller passes that path to a ROS2 node as a params file argument.
-
-## Deep Merge Algorithm
-
-Shallow merge (`dict.update`) would clobber entire nested namespaces. `_deep_merge` recurses into matching dict keys so that overriding a single deeply-nested parameter doesn't erase its siblings:
+`available_worlds()` reads the installed `share/dome_nav/worlds/` directory at
+launch time — it is never a hardcoded list, so it cannot drift out of sync with
+what is actually shipped.
 
 ```python
-def _deep_merge(base: dict, override: dict) -> dict:
-    result = base.copy()
-    for key, value in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge(result[key], value)
-        else:
-            result[key] = value
-    return result
+def require_world_name(world_name: str, worlds_dir: str, usage: str) -> str:
+    choices = available_worlds(worlds_dir)
+    if world_name not in choices:
+        raise ValueError(
+            f"world_name is required and must be one of {choices}"
+            f" (got {world_name!r}): {usage}"
+        )
+    return world_name
 ```
 
-```mermaid
-flowchart TD
-    A[base dict] --> C[copy base]
-    B[override dict] --> D{for each key}
-    C --> D
-    D -->|both are dicts| E[recurse _deep_merge]
-    D -->|otherwise| F[override wins]
-    E --> G[merged result]
-    F --> G
+The `usage` string is passed in by each caller so the error carries the exact
+`bl dome_nav <file>.launch.py --world_name <name>` hint for *that* launch file.
+This is a boundary-validation helper: it rejects bad input at the edge and then
+trusts the value downstream.
+
+### Spawn points travel with the world
+
+Each world was authored around a specific robot starting pose — `simple_room`
+uses a centered origin and spawns at `(-1, -1)`, while `multi_room` uses a
+bottom-left corner origin and spawns at `(1, 1)`. Coupling "which world" to
+"where the robot starts" by hand would be an easy source of mistakes, so the
+mapping lives in one table:
+
+```python
+WORLD_SPAWN_XY: dict[str, tuple[float, float]] = {
+    "simple_room": (-1.0, -1.0),
+    "multi_room": (1.0, 1.0),
+}
+
+def world_spawn_xy(world_name: str) -> tuple[float, float]:
+    """Return the designed robot spawn (x, y) for a known world name."""
+    return WORLD_SPAWN_XY.get(world_name, (0.0, 0.0))
 ```
 
-## Content-Addressed Config Sink
+Selecting a world therefore also selects its spawn point automatically; the
+caller never repeats coordinates. Unknown names fall back to the origin — in
+practice `require_world_name()` has already rejected those, so the fallback is
+just defensive.
 
-The merged config must persist after the function returns — ROS2 nodes read it after the launch process writes it. An earlier version used `tempfile.NamedTemporaryFile(delete=False)`, which leaked one `/tmp` file on *every* launch since nothing ever deleted them (issue I11). The fix keys the file by a hash of its own content:
+## The one file still generated at launch: `write_config()`
+
+After the patching helpers were removed, only one launch input is still built at
+runtime rather than committed as a file: the `robot_state_publisher` params file,
+which embeds the (large, multi-line) URDF. `write_config()` serializes a dict to
+YAML under the launch cache.
+
+Its one non-obvious design choice is **content addressing**:
 
 ```python
 def write_config(data: dict) -> str:
@@ -91,73 +115,34 @@ def write_config(data: dict) -> str:
     return path
 ```
 
-Because the filename is derived from the rendered YAML, identical configs map to the same file and repeated launches overwrite rather than accumulate. The on-disk set is bounded by the number of *distinct* configs — a handful — instead of growing without limit. The cache lives under `DOME_HOME` so it travels with the rest of the robot's state and is easy to inspect or wipe.
+The filename is a hash of the rendered YAML. Identical configs therefore map to
+the same file and repeated launches reuse it, rather than accumulating a fresh
+temp file every run — the failure mode of the old `NamedTemporaryFile` approach,
+which leaked one file per launch into `/tmp`. `sort_keys=False` preserves the
+authored key order so the rendered file reads naturally.
 
-## World Selection (added 2026-07-05)
-
-Once a second Gazebo world file (`multi_room.world`) existed alongside
-`simple_room.world`, the world filename could no longer stay hardcoded in the
-sim launch files. Rather than each launch file guessing or hand-maintaining a
-list of valid names, three small pure functions centralize this:
-
-```python
-def available_worlds(worlds_dir: str) -> list[str]:
-    return sorted(
-        f[: -len(".world")] for f in os.listdir(worlds_dir) if f.endswith(".world")
-    )
+```mermaid
+flowchart LR
+    A[launch file] -->|world_name| B[require_world_name]
+    B --> C[world_spawn_xy]
+    A -->|rsp params dict| D[write_config]
+    D -->|sha1 name| E[(DOME_HOME/launch_cache/*.yaml)]
+    C -->|spawn x,y| F[gazebo.spawn_model]
 ```
 
-`available_worlds` reads the *installed* `share/dome_nav/worlds/` directory
-directly, so the list of valid choices can never drift out of sync with what
-actually exists on disk — no hardcoded name list to forget to update when a
-third world file is added later.
+## Observations / possible improvements
 
-```python
-def require_world_name(world_name: str, worlds_dir: str, usage: str) -> str:
-    choices = available_worlds(worlds_dir)
-    if world_name not in choices:
-        raise ValueError(
-            f"world_name is required and must be one of {choices}"
-            f" (got {world_name!r}): {usage}"
-        )
-    return world_name
-```
-
-This follows the same "fail loudly and early" pattern already used for
-`map_name` throughout the launch files (see `sim_slam.launch.py`, etc.): a
-missing or misspelled world name raises immediately, at launch time, with the
-actual list of what's available and a copy-pasteable usage hint — rather than
-letting Gazebo fail later with an opaque "world file not found" once several
-other nodes have already started.
-
-```python
-WORLD_SPAWN_XY: dict[str, tuple[float, float]] = {
-    "simple_room": (-1.0, -1.0),
-    "multi_room": (1.0, 1.0),
-}
-
-
-def world_spawn_xy(world_name: str) -> tuple[float, float]:
-    return WORLD_SPAWN_XY.get(world_name, (0.0, 0.0))
-```
-
-Each world was designed around a specific robot starting position —
-`simple_room.world` uses a centered origin (room spans roughly -2..2), so a
-sensible interior start is (-1,-1); `multi_room.world` uses a corner origin
-(0,0) with a room at x:0-4, y:0-4, so (1,1) sits safely inside it.
-`world_spawn_xy` means picking a world also picks the right spawn point
-automatically — a caller never has to remember "oh, and if you choose that
-world, also pass these particular spawn coordinates."
-
-The `dict.get(world_name, (0.0, 0.0))` fallback is deliberately permissive
-rather than raising: an unknown world name has already been rejected by
-`require_world_name` before this is ever called in practice, so this
-function's own contract is just "look up a spawn point, default to the
-origin if nothing is known about this name" — it doesn't need to re-validate.
-
-## Potential Improvements
-
-- **Cache eviction**: the launch cache is bounded by distinct configs but never pruned. A startup sweep of files older than N days would keep it tidy across many map/param variations.
-- **Missing-file error messages**: `open(base_file)` raises a generic `FileNotFoundError`. A wrapper with a descriptive message pointing to the offending config path would help operators debug misconfigured launches.
-- **`sort_keys=False`** preserves author intent in YAML output and, conveniently, keeps the content hash stable across runs — but it does make deterministic diffs against alphabetised configs harder.
-- **`WORLD_SPAWN_XY` is a hardcoded dict, unlike `available_worlds`' dynamic directory scan.** Adding a third world file requires remembering to also add its spawn point here, whereas the world-name list itself can never go stale. A small SDF convention (e.g. a comment or custom element naming the intended spawn pose) read alongside the `.world` file would close this gap, at the cost of more parsing logic for a rarely-changed value.
+- **`write_config` is now the module's only reason to depend on `yaml` and
+  `hashlib`.** If the URDF-params-file need ever goes away (e.g. `bl.node`
+  gains a first-class way to pass large parameters), this function and both
+  imports could be removed, leaving `utils.py` as pure path/validation helpers.
+- **The launch cache is never pruned.** Because names are content hashes it
+  won't grow unboundedly for a fixed set of configs, but distinct URDFs over
+  time will leave orphaned files. A tiny "delete entries older than N days"
+  sweep on launch would keep it tidy; not worth it yet.
+- **`world_spawn_xy` silently returns the origin for unknown worlds.** That's
+  safe only because `require_world_name` runs first. If a future caller uses
+  `world_spawn_xy` without that guard, an unknown world would spawn at `(0,0)`
+  with no warning — worth a raise-or-log if the two ever get decoupled.
+- **`available_worlds` does a directory listing on every call.** Negligible at
+  launch time, but if it were ever called in a hot path it should be cached.
