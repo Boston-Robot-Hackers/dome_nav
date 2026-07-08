@@ -59,17 +59,15 @@ def make_intent(name):
 def test_intent_start_from_idle(node):
     node.state = "idle"
     node.robot_xy_in_map = MagicMock(return_value=(1.0, 2.0))
-    node.spin_client = MagicMock()
     node.on_intent(make_intent("exploration_start"))
-    assert node.state == "spinning"
+    assert node.state == "exploring"
 
 
 def test_intent_start_from_done(node):
     node.state = "done"
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
-    node.spin_client = MagicMock()
     node.on_intent(make_intent("exploration_start"))
-    assert node.state == "spinning"
+    assert node.state == "exploring"
 
 
 def test_intent_start_while_exploring_ignored(node):
@@ -120,80 +118,6 @@ def test_intent_start_resets_counters(node):
     assert node.goals_reached == 0
     assert node.goals_failed == 0
     assert node.no_frontier_count == 0
-
-
-# --- initial spin before exploration ---
-
-def test_intent_start_sends_spin_goal(node):
-    node.state = "idle"
-    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
-    node.spin_client = MagicMock()
-    node.on_intent(make_intent("exploration_start"))
-    node.spin_client.send_goal_async.assert_called_once()
-    sent_goal = node.spin_client.send_goal_async.call_args[0][0]
-    assert sent_goal.target_yaw == pytest.approx(2 * math.pi)
-
-
-def test_spin_server_not_ready_falls_back_to_exploring(node):
-    node.state = "idle"
-    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
-    node.spin_client = MagicMock()
-    node.spin_client.server_is_ready.return_value = False
-    node.on_intent(make_intent("exploration_start"))
-    assert node.state == "exploring"
-
-
-def test_spin_goal_rejected_falls_back_to_exploring(node):
-    node.state = "spinning"
-    handle = MagicMock(accepted=False)
-    future = MagicMock()
-    future.result.return_value = handle
-    node.on_spin_goal_accepted(future)
-    assert node.state == "exploring"
-
-
-def test_spin_goal_accepted_stores_handle_and_awaits_result(node):
-    node.state = "spinning"
-    handle = MagicMock(accepted=True)
-    result_future = MagicMock()
-    handle.get_result_async.return_value = result_future
-    future = MagicMock()
-    future.result.return_value = handle
-    node.on_spin_goal_accepted(future)
-    assert node.spin_goal_handle is handle
-    result_future.add_done_callback.assert_called_once_with(node.on_spin_result)
-
-
-def test_spin_result_transitions_to_exploring(node):
-    node.state = "spinning"
-    node.spin_goal_handle = MagicMock()
-    node.on_spin_result(MagicMock())
-    assert node.state == "exploring"
-    assert node.spin_goal_handle is None
-
-
-def test_spin_result_ignored_if_stopped_mid_spin(node):
-    node.state = "idle"  # exploration_stop already fired before spin finished
-    node.on_spin_result(MagicMock())
-    assert node.state == "idle"
-
-
-def test_stop_during_spin_cancels_spin_goal(node):
-    node.state = "spinning"
-    spin_handle = MagicMock()
-    node.spin_goal_handle = spin_handle
-    node.goal_handle = None
-    node.stop_exploring("idle")
-    spin_handle.cancel_goal_async.assert_called_once()
-    assert node.spin_goal_handle is None
-    assert node.state == "idle"
-
-
-def test_explore_tick_does_nothing_while_spinning(node):
-    node.state = "spinning"
-    node.find_and_send_frontier = MagicMock()
-    node.explore_tick()
-    node.find_and_send_frontier.assert_not_called()
 
 
 # --- find_and_send_frontier via MockAlgorithm ---
@@ -261,34 +185,6 @@ def test_find_frontier_sends_algorithm_goal(node):
     call_args = node.send_nav_goal.call_args
     sent_xy = call_args[0][0]
     assert sent_xy == (1.0, 2.0)
-
-
-# --- check_goal_redirect disabled under prefer_farthest ---
-
-def test_redirect_fires_when_not_prefer_farthest(node):
-    node.prefer_farthest = False
-    node.is_redirecting = False
-    node.latest_map = MagicMock()
-    node.current_goal_xy = (0.0, 0.0)
-    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
-    node.frontier_goal_for_current_map = MagicMock(return_value=(5.0, 0.0))
-    node.goal_handle = MagicMock()
-    node.check_goal_redirect()
-    node.goal_handle.cancel_goal_async.assert_called_once()
-    assert node.is_redirecting is True
-
-
-def test_redirect_suppressed_when_prefer_farthest(node):
-    node.prefer_farthest = True
-    node.is_redirecting = False
-    node.latest_map = MagicMock()
-    node.current_goal_xy = (0.0, 0.0)
-    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
-    node.frontier_goal_for_current_map = MagicMock(return_value=(5.0, 0.0))
-    node.goal_handle = MagicMock()
-    node.check_goal_redirect()
-    node.goal_handle.cancel_goal_async.assert_not_called()
-    assert node.is_redirecting is False
 
 
 # --- check_goal_timeout ---
@@ -440,3 +336,14 @@ def test_min_frontier_size_default_matches_explore_params(node):
 
 def test_min_frontier_size_plumbed_into_params(node):
     assert node.params.min_frontier_size == node.min_frontier_size
+
+
+# --- min_frontier_dist ROS parameter wiring ---
+
+def test_min_frontier_dist_default_matches_explore_params(node):
+    # Default parameter must match the dataclass so real-robot behavior is unchanged.
+    assert node.min_frontier_dist == ExploreParams().min_frontier_dist
+
+
+def test_min_frontier_dist_plumbed_into_params(node):
+    assert node.params.min_frontier_dist == node.min_frontier_dist

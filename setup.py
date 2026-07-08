@@ -25,7 +25,6 @@ setup(
         "console_scripts": [
             "slam_manager_node = dome_nav.slam_manager_node:main",
             "nav_manager_node = dome_nav.nav_manager_node:main",
-            "explore_manager_node = dome_nav.explore_manager_node:main",
             "pluggable_explore_manager_node = dome_nav.pluggable_explore_manager_node:main",
         ],
     },

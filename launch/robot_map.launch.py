@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-# robot.launch.py — slam_toolbox + Nav2 + dome_nav nodes for the physical robot
+# robot_map.launch.py — slam_toolbox + Nav2 + dome_nav nodes for the physical robot
 # Author: Pito Salas and Claude Code
 # Open Source Under MIT license
 
 import os
 from ament_index_python.packages import get_package_share_directory
 from better_launch import BetterLaunch, launch_this
-from dome_nav.utils import dome_home, yaml_override, yaml_patch_dict
+from dome_nav.utils import dome_home
 
 
 @launch_this(ui=True)
 def robot_launch(use_sim_time: str = "false", map_name: str = ""):
     if not map_name:
-        raise ValueError("map_name is required: bl robot_map.launch.py --map_name <name>")
+        raise ValueError(
+            "map_name is required: bl robot_map.launch.py --map_name <name>"
+        )
 
     bl = BetterLaunch()
 
@@ -22,19 +24,11 @@ def robot_launch(use_sim_time: str = "false", map_name: str = ""):
 
     pkg = get_package_share_directory("dome_nav")
 
-    slam_base = bl.find("slam_toolbox", "mapper_params_online_async.yaml")
-    slam_patch = os.path.join(pkg, "config", "slam_param_patch.yaml")
-    slam_config = yaml_override(slam_base, slam_patch)
-    slam_config = yaml_patch_dict(slam_config, {
-        "slam_toolbox": {"ros__parameters": {"map_file_name": slam_map_path}}
-    })
-
-    nav2_base = bl.find("nav2_bringup", "nav2_params.yaml")
-    nav2_patch = os.path.join(pkg, "config", "nav2_param_patch.yaml")
-    nav2_config = yaml_override(nav2_base, nav2_patch)
+    slam_config = os.path.join(pkg, "config", "slam_real.yaml")
+    nav2_config = os.path.join(pkg, "config", "nav2_real.yaml")
 
     bl.include("slam_toolbox", "online_async_launch.py",
-        **{"slam_params_file": slam_config})
+        **{"slam_params_file": slam_config, "use_sim_time": use_sim_time})
 
     bl.include("nav2_bringup", "navigation_launch.py",
         **{"params_file": nav2_config, "use_sim_time": use_sim_time})

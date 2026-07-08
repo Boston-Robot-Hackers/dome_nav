@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
-# robot_explore.launch.py — Mode A stack + frontier exploration for autonomous map building
+# robot_explore.launch.py — Mode A stack + frontier exploration for autonomous
+# map building
 # Author: Pito Salas and Claude Code
 # Open Source Under MIT license
 
 import os
 from ament_index_python.packages import get_package_share_directory
 from better_launch import BetterLaunch, launch_this
-from dome_nav.utils import dome_home, yaml_override, yaml_patch_dict
+from dome_nav.utils import dome_home
 
 
 @launch_this(ui=True)
-def robot_explore_launch(use_sim_time: str = "false", map_name: str = "", max_explore_radius: float = 0.0):
+def robot_explore_launch(
+    use_sim_time: str = "false",
+    map_name: str = "",
+    max_explore_radius: float = 0.0,
+):
     if not map_name:
-        raise ValueError("map_name is required: bl robot_explore.launch.py --map_name <name>")
+        raise ValueError(
+            "map_name is required: bl robot_explore.launch.py --map_name <name>"
+        )
 
     bl = BetterLaunch()
 
@@ -22,25 +29,13 @@ def robot_explore_launch(use_sim_time: str = "false", map_name: str = "", max_ex
 
     pkg = get_package_share_directory("dome_nav")
 
-    slam_base = bl.find("slam_toolbox", "mapper_params_online_async.yaml")
-    slam_patch = os.path.join(pkg, "config", "slam_param_patch.yaml")
-    slam_config = yaml_override(slam_base, slam_patch)
-    slam_config = yaml_patch_dict(slam_config, {
-        "slam_toolbox": {"ros__parameters": {"map_file_name": slam_map_path}}
-    })
+    slam_config = os.path.join(pkg, "config", "slam_real.yaml")
 
-    nav2_base = bl.find("nav2_bringup", "nav2_params.yaml")
-    nav2_patch = os.path.join(pkg, "config", "nav2_param_patch.yaml")
-    explore_patch = os.path.join(pkg, "config", "explore_param_patch.yaml")
-    dock_db = os.path.join(pkg, "config", "empty_dock_database.yaml")
-    nav2_config = yaml_override(nav2_base, nav2_patch)
-    nav2_config = yaml_override(nav2_config, explore_patch)
-    nav2_config = yaml_patch_dict(nav2_config, {
-        "docking_server": {"ros__parameters": {"dock_database": dock_db}}
-    })
+    # Full standalone config, loaded verbatim -- no patch chain.
+    nav2_config = os.path.join(pkg, "config", "nav2_explore_real.yaml")
 
     bl.include("slam_toolbox", "online_async_launch.py",
-        **{"slam_params_file": slam_config})
+        **{"slam_params_file": slam_config, "use_sim_time": use_sim_time})
 
     bl.include("nav2_bringup", "navigation_launch.py",
         **{"params_file": nav2_config, "use_sim_time": use_sim_time})
@@ -54,10 +49,24 @@ def robot_explore_launch(use_sim_time: str = "false", map_name: str = "", max_ex
         lifecycle_waittime=None,
     )
 
+    # Same explorer node as the sim stack (pluggable_explore_manager_node), differing
+    # only by parameter values -- sim and real now share one code path. These are the
+    # real-robot values (they match ExploreParams' own defaults except max_frontier_dist,
+    # which the node declares as a sim-oriented 15.0 and is set back to 0.0 = unlimited
+    # here). The sim launch files override min_frontier_dist/max_frontier_dist/
+    # prefer_farthest/min_frontier_size for the simulated worlds.
     bl.node(
         "dome_nav",
-        "explore_manager_node",
+        "pluggable_explore_manager_node",
         name="explore_manager",
-        params={"max_explore_radius": max_explore_radius, "map_name": map_name},
+        params={
+            "max_explore_radius": max_explore_radius,
+            "max_frontier_dist": 0.0,
+            "min_frontier_dist": 1.3,
+            "prefer_farthest": False,
+            "min_frontier_size": 10,
+            "map_name": map_name,
+            "use_sim_time": use_sim_time == "true",
+        },
         ros_waittime=30.0,
     )

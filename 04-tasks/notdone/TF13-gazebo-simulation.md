@@ -684,7 +684,9 @@ or by padding goal placement further from ragged known/unknown edges) and the
 the robot cannot be expected to reach frontier goals reliably in `multi_room.world`.
 
 ## T04n — Prototype "nudge away from unknown" goal placement in algo_demo.py
-**Status**: in progress
+**Status**: deferred — prototype only, never ported to production. `nudge_away_from_unknown`
+lives solely in `tools/algo_demo.py`; the buffer-cell frontier redefinition (T04r) was
+adopted instead as the simpler way to keep goals off the known/unknown boundary.
 **Description**: T04m found the common trait across all 11 "legal potential" NavFn
 planner failures in the 2026-07-05 telemetry: every failing goal was a frontier
 cell sitting directly on the known/unknown boundary (that's the definition of a
@@ -764,7 +766,12 @@ still holds at 15.0 > 1.3).
 stops reporting done/no-frontier while map coverage is still incomplete.
 
 ## T04p — Switch global planner from NavFn to SmacPlanner2D
-**Status**: in progress
+**Status**: reverted for explore configs; planner choice unsettled. As of 2026-07-08 the
+explore configs (`nav2_explore_sim.yaml`, `nav2_explore_real.yaml`) are back on
+`nav2_navfn_planner::NavfnPlanner` (SmacPlanner2D kept as a commented alternate) after
+T04r found SmacPlanner2D's own "Start occupied" failure mode. `nav2_real.yaml` (Modes A/B)
+still uses SmacPlanner2D. Which planner to standardize on is a deliberate follow-up, not
+resolved here.
 **Description**: T04m confirmed the "Failed to create a plan from potential when a
 legal potential was found" error recurs on ordinary open-space goals, not just
 ragged-edge ones. External research (GitHub ros-navigation/navigation2#4655)
@@ -784,7 +791,7 @@ fail with a different, more actionable error. Record `reached` vs `failed` count
 in telemetry compared to the 0/29 baseline from T04m.
 
 ## T04q — Add initial 360° spin before frontier exploration begins
-**Status**: in progress
+**Status**: reverted — see T04u (removed 2026-07-08 at user request, never live-verified)
 **Description**: Live testing (2026-07-06, `boat1` session in `multi_room.world`)
 found slam_toolbox does not update `/map` unless the robot moves past
 `minimum_travel_distance`/`minimum_travel_heading` (stock defaults, not
@@ -822,7 +829,10 @@ sent. Does not address the underlying `minimum_travel_distance`/
 mitigates its effect on the very first scan.
 
 ## T04r — Buffer-cell frontier definition + tighter local costmap inflation
-**Status**: in progress
+**Status**: done. The buffer-cell frontier definition is shipped in
+`frontier_explorer.py`'s `find_frontier_clusters()` (a frontier cell must not itself touch
+unknown but must have a 4-neighbor that does). The local-costmap inflation values live in
+the standalone nav2 configs (`inflation_radius: 0.17`, `cost_scaling_factor: 30.0`).
 **Description**: Telemetry analysis of `explore-toy6-20260706.jsonl` (105 goals,
 0 reached) after the T04p SmacPlanner2D switch found a new failure mode:
 `planner_server` log showed `GridBased plugin failed to plan from (-0.90,
@@ -874,6 +884,10 @@ and `test_redirect_suppressed_when_not_prefer_farthest` still call
 `check_goal_redirect()` directly and continue to pass, confirming the method
 itself still works correctly even though `explore_tick()` no longer invokes
 it. Full suite rerun after the change.
+**2026-07-08 follow-up:** the kept-but-unused redirect code
+(`check_goal_redirect()`, `frontier_goal_for_current_map()`, `REDIRECT_THRESHOLD`,
+`is_redirecting`, `redirect_map_stamp`/`redirect_cached_goal`) and its two tests were
+**deleted** during cleanup — the mid-flight redirect behavior was not wanted after all.
 
 ## T04t — Fix robot_state_publisher never starting (root cause: anonymous-name full-system process scan)
 **Status**: done
@@ -933,6 +947,114 @@ the pure-Python test suite.
 warning (0.160 vs. footprint circumscribed radius 0.164142) on every run —
 worth a small bump to `config/nav2_param_patch.yaml`'s `inflation_radius`
 above 0.164142, but not blocking.
+
+## T04u — Remove the initial 360° spin at the start of exploration
+**Status**: done
+**Description**: Reverts T04q at explicit user request. The initial in-place spin
+(added to widen slam_toolbox's first scan) was never live-verified and is no longer
+wanted. Removed from `pluggable_explore_manager_node.py`: the `Spin` action import,
+`spin_client`, `INITIAL_SPIN_YAW`, the `send_initial_spin()`/`on_spin_goal_accepted()`/
+`on_spin_result()`/`begin_exploring()` methods, the `spin_goal_handle` state (in
+`reset_session()`) and its cancel branch in `stop_exploring()`. `on_intent`'s
+`exploration_start` handler now transitions straight from `idle`/`done` to `exploring`
+(no intermediate `spinning` state) and logs "Exploration started" without the
+spin-first phrasing. The `NO_FRONTIER_PATIENCE` comment's reference to the initial spin
+was dropped (the 14-tick value stands on its own — it must exceed slam_toolbox's 5 s
+`map_update_interval`). `explore_manager_node.py` (original real-robot node) never had
+the spin, so it is unaffected.
+**Test**: Removed the 8 spin-specific tests from
+`test_pluggable_explore_manager_node.py`; updated `test_intent_start_from_idle` and
+`test_intent_start_from_done` to assert the `exploring` state directly. Full suite:
+178 passed, 4 deselected (`pytest test/ -m "not manual"`).
+
+## T04v — Sim-only slam_toolbox faster/finer map updates
+**Status**: superseded by T04x. The mechanism this task added (`SIM_SLAM_OVERRIDES` +
+`build_slam_config(extra_overrides=...)`) was removed when all YAML patching was deleted;
+the same three sim values (`minimum_travel_distance`/`minimum_travel_heading` 0.1,
+`map_update_interval` 1.0) are now baked directly into the standalone `config/slam_sim.yaml`.
+**Description**: Live debugging (2026-07-08) confirmed the "early map too small / no
+frontiers found" symptom is slam_toolbox's stock motion-gating, not a plumbing bug
+(odom, TF bridge, and slam scan processing were all verified healthy — the map grows
+in coarse jumps only after the robot drives, and jumps to a much better carve once it
+does). Root cause: `minimum_travel_distance`/`minimum_travel_heading` (0.5) mean only
+the spawn scan exists until the robot moves 0.5 m, and `map_update_interval` (5.0)
+rebuilds `/map` just every 5 s — so at exploration start the tiny initial map offers no
+qualifying frontier, no goal is sent, the robot never moves, and the map never grows
+(a deadlock the removed T04q spin used to break). Added `SIM_SLAM_OVERRIDES`
+(`minimum_travel_distance` 0.1, `minimum_travel_heading` 0.1, `map_update_interval` 1.0)
+in `dome_nav/utils.py` and an optional `extra_overrides` parameter on
+`build_slam_config()`. Wired into `sim_slam.launch.py` (used by `sim_nav_full`) and
+`sim_explore.launch.py`. Real-robot callers (`robot_map.launch.py`,
+`robot_explore.launch.py`) pass no `extra_overrides`, so the shared
+`slam_param_patch.yaml` and the Pi's conservative scan-matching load are untouched.
+**Test**: `test_build_slam_config_extra_overrides_merge` in `test_utils_pure.py`
+(extra override wins over base, merges alongside map_file_name). 18/18 utils tests pass.
+**Not yet done**: this is Part 1 of the fix. Part 2 — breaking the startup deadlock so
+the robot moves at all without the spin (relax initial frontier filters or add a small
+startup nudge) — is still open. Live re-verification in Gazebo pending.
+
+## T04w — Sim-only lower min_frontier_dist to 0.9 m (allow nearer frontier goals)
+**Status**: done — not yet re-verified live
+**Description**: `wed3` telemetry (`explore-wed3-20260708.jsonl`) showed the startup
+deadlock concretely: all 14 ticks identical — `raw_clusters: 10, too_small: 9,
+large_clusters: 1, all_cells_out_of_range: 1`, 0 goals sent, then session_end. The one
+adequately-sized frontier cluster had every cell out of the `[min_frontier_dist,
+max_frontier_dist]` band; since `max_frontier_dist` is 15 m (world diagonal ~14 m), it
+was rejected for being **too close** (< `min_frontier_dist` 1.3 m). Per user request,
+lowered the floor to 0.9 m, **sim only**. `min_frontier_dist` was previously not a ROS
+parameter at all (only the `ExploreParams` dataclass default 1.3); exposed it as a ROS
+parameter on `pluggable_explore_manager_node.py` (default 1.3, matching `ExploreParams`,
+so real-robot launches are unchanged) and plumbed it into `self.params`, mirroring
+`max_frontier_dist`/`min_frontier_size`. Set to 0.9 in `sim_explore_node.launch.py`,
+`sim_nav_full.launch.py`, and `sim_explore.launch.py`. Semantics: frontier cells closer
+than 0.9 m are rejected; explore fails only when all adequately-sized frontiers are
+closer than 0.9 m. Note this partially walks back the 2026-07-03 "never closer than 1 m"
+decision, but for sim only. With `goal_inset` 0.3 m, the effective sent-goal floor
+becomes ~0.6 m in sim.
+**Test**: `test_min_frontier_dist_default_matches_explore_params` and
+`test_min_frontier_dist_plumbed_into_params` added in
+`test_pluggable_explore_manager_node.py`; existing
+`test_default_max_frontier_dist_exceeds_min_frontier_dist` still holds (15 > 1.3).
+48 pluggable + utils tests pass after rebuild.
+**Not yet done**: live re-verification in Gazebo that exploration now sends goals
+instead of hitting the all-too-close deadlock. This is Part 2 of the fix (Part 1 = T04v
+faster slam map updates); a startup nudge/spin was the other candidate and was not used.
+
+## T04x — Remove all YAML patching: standalone commented config copies
+**Status**: done — sim slam+dock live-verified; real-robot Modes A/B not yet run
+**Description**: Per user request, eliminated every runtime YAML patch/merge in
+favor of standalone config files that are modified copies of the upstream defaults
+(so the file on disk is exactly what runs -- no merge order to trace). Kept strictly
+to standard usage of better_launch/slam_toolbox/nav2, no tricks.
+- **slam**: `slam_real.yaml` + `slam_sim.yaml` (copies of upstream
+  `mapper_params_online_async.yaml`, deltas marked `# CHANGED`/`# ADDED`/`# SIM`);
+  loaded verbatim via the standard `online_async_launch.py` include. Dropped
+  `map_file_name` (Option A): `slam_manager_node` still persists per `--map_name`,
+  but slam no longer auto-resumes an existing map on startup (re-running a map_name
+  now overwrites rather than extends). Removed `build_slam_config`,
+  `SIM_SLAM_OVERRIDES`, `slam_param_patch.yaml`.
+- **dock_database**: root-caused the historical docking SIGABRT to `dock_database: ''`
+  (an empty-string artifact "not in upstream"), not a missing database. Removed the
+  line everywhere to match upstream (which omits it and works). Deleted `patch_dock_db`
+  and `empty_dock_database.yaml`. **Live-verified in sim**: `docking_server` reaches
+  `active` with no dock_database.
+- **nav2 Modes A/B**: `nav2_real.yaml` (Mode A + Mode B navigation) and
+  `nav2_localization_real.yaml` (Mode B AMCL/map_server) generated as byte-faithful
+  copies of the former `default + nav2_param_patch` / `default + nav2_amcl_patch`
+  merges (zero behavior change; not re-audited like the explore configs -- that's a
+  separate hardware-testable task). Mode B's map path now rides
+  `localization_launch.py`'s own `map=` arg (it sets `yaml_filename`), so the old
+  `yaml_patch_dict` is gone. Removed `yaml_override`, `yaml_patch_dict`, `deep_merge`,
+  `nav2_param_patch.yaml`, `nav2_amcl_patch.yaml`.
+- Final `config/`: `slam_real`, `slam_sim`, `nav2_real`, `nav2_localization_real`,
+  `nav2_explore_real`, `nav2_explore_sim` (+ `dome3_sim.urdf`, `minimal_sim.urdf`).
+  `utils.py` config helpers reduced to `write_config` (+ world/dome_home helpers).
+**Test**: removed the `build_slam_config`/`patch_dock_db` unit tests; full suite
+177 passed, 4 deselected. All edited launches `py_compile` clean; source/install parity
+verified.
+**Not yet done**: real-robot `robot_map`/`robot_nav`/`robot_explore` have never been
+live-run (F10 T07); the nav2 real configs are behavior-preserving copies but unproven
+on hardware.
 
 ## T05 — End-to-end exploration smoke test
 **Status**: not done — blocked. Originally blocked on T04's doorway costmap-inflation

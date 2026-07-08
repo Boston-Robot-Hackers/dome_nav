@@ -2,18 +2,46 @@
 
 ## Snapshot
 
-**Date:** 2026-07-07
+**Date:** 2026-07-08
 **Branch:** main
-**Status (2026-07-07 update):** F13 sim stack now boots end-to-end and reaches the "robot
-visible in RViz, full Nav2/SLAM/explore stack active" state reliably — see the
-**Session 2026-07-07** entry under F13 below for the two real bugs found and fixed today
-(`robot_state_publisher` never starting; a `--param-file`/`--params-file` typo in
+**Status (2026-07-08 update):** Sim exploration now works **notably better** — goals are
+sent and reached, the map fills in, the earlier "sits and never moves" cases are largely
+gone. This session was behavior fixes + a large cleanup:
+- **Removed the startup 360° spin** (was T04q) from `pluggable_explore_manager_node.py`.
+- **`min_frontier_dist` lowered to 0.9 m in sim** (real stays 1.3) — fixes the startup
+  deadlock where the only adequately-sized frontier was < 1.3 m away, so no goal was ever
+  sent (confirmed via `wed3` telemetry). Now a ROS parameter on the node.
+- **Converged sim and real on one explorer**: `robot_explore.launch.py` now runs
+  `pluggable_explore_manager_node` (real-robot param values); the original
+  `explore_manager_node.py` and its test/entry/literate doc were **deleted**.
+- **Removed ALL YAML patching.** `config/` is now six standalone, commented copies of the
+  upstream defaults — `slam_real.yaml`, `slam_sim.yaml`, `nav2_real.yaml`,
+  `nav2_localization_real.yaml`, `nav2_explore_real.yaml`, `nav2_explore_sim.yaml`. Deleted
+  `slam_param_patch.yaml`, `nav2_param_patch.yaml`, `nav2_amcl_patch.yaml`,
+  `empty_dock_database.yaml`, and the helpers `build_slam_config`, `patch_dock_db`,
+  `yaml_override`, `yaml_patch_dict`, `deep_merge`, `SIM_SLAM_OVERRIDES`. slam is dropped
+  from map_file_name (Option A: `slam_manager_node` still persists per `--map_name`, but
+  slam no longer auto-resumes an existing map — re-running a map_name overwrites it). The
+  historical docking SIGABRT was root-caused to a `dock_database: ''` artifact; removing it
+  to match upstream makes `docking_server` come up `active` (live-verified in sim).
+- **`yaw_goal_tolerance` raised to ~π in sim** so exploration goals (sent with a fixed
+  identity orientation) don't force a wasteful end-of-goal in-place spin.
+- **Remaining nav issues diagnosed but not fully fixed** (documented for a Nav2 post): the
+  ~0.11 m/s crawl on short goals is stock MPPI `GoalCritic.threshold_to_consider: 1.4` vs
+  ~1 m goals; near-border stalls are the planner reporting "Start occupied" when the robot
+  center sits in an inflated/lethal cell; "reversing without turning" is the straight-line
+  `BackUp` recovery (a stuck symptom), not a controller bug.
+- **Caveat:** real-robot launches (Modes A/B/E) were **not** live-run this session; the
+  new `nav2_real.yaml`/`nav2_localization_real.yaml` are byte-faithful copies of the old
+  merges (zero behavior change) but unproven on hardware.
+See the **Session 2026-07-08** entry under F13 and TF13 tasks T04u–T04x + TF10 T08.
+Everything below this point predates this session — historical context only.
+**Status (2026-07-07 update, superseded above):** F13 sim stack now boots end-to-end and
+reaches the "robot visible in RViz, full Nav2/SLAM/explore stack active" state reliably —
+see the **Session 2026-07-07** entry under F13 below for the two real bugs found and fixed
+that day (`robot_state_publisher` never starting; a `--param-file`/`--params-file` typo in
 `better_launch` itself) plus a race-condition fix, a patience-timing fix, and an
-inflation-radius fix. F13 T05 (end-to-end exploration smoke test) is still blocked: goals
-are now reliably *sent*, but most still *fail* (0/4 reached in the last observed session) —
-this is the current top blocker, not yet root-caused. Everything below this point in the
-Snapshot (dated 2026-07-05) predates today's session; treat it as historical context for
-*how* the stack reached its current state, not as the current status.
+inflation-radius fix.
 **Status (as of 2026-07-05, superseded above):** F12 complete. F13 (Gazebo simulation) in progress: T01-T03 done, full sim stack
 (Gazebo + slam_toolbox + Nav2 + explore) launches and drives the robot end-to-end. T04's
 earlier TF-extrapolation theory was **ruled out** — traced the failing lookup's TF chain and
@@ -51,18 +79,20 @@ dome_nav` is required after every source edit before `bl`/`ros2 run` will see it
 - `dome_nav/frontier_explorer.py` — pure Python frontier detection: OccupancyGrid scan,
   8-connectivity clustering, blacklist-aware nearest-cell selection (NOT centroid),
   max_radius and min_dist filters, `nudge_toward_robot` geometry helper
-- `dome_nav/explore_manager_node.py` — **original, untouched** ROS2 node: all F12 work
-  is additive; this file reverts to before F12 if needed
+- `dome_nav/explore_manager_node.py` — **DELETED 2026-07-08** (TF10 T08). The original
+  pre-F12 node was orphaned once `robot_explore.launch.py` switched to the pluggable node;
+  sim and real now share `pluggable_explore_manager_node.py`.
 - `dome_nav/explore_context.py` — **(F12 new)** `ExploreParams`, `ExplorationContext`
   dataclasses and `ExplorationAlgorithm` Protocol
 - `dome_nav/frontier_algorithm.py` — **(F12 new)** `FrontierAlgorithm` class wrapping
   the pure frontier functions behind the protocol
 - `dome_nav/explore_markers.py` — **(F12 new)** pure functions for RViz `MarkerArray`
   construction (frontiers/blacklist/goal markers); extracted for node file-length budget
-- `dome_nav/pluggable_explore_manager_node.py` — **(F12 new)** copy-and-modify of
-  `explore_manager_node.py` that accepts injected `ExplorationAlgorithm`; adds
-  mid-navigation re-evaluation via `check_goal_redirect()` + `is_redirecting` flag:
-  cancels current goal without blacklisting if best frontier shifts >1.5 m (`REDIRECT_THRESHOLD`)
+- `dome_nav/pluggable_explore_manager_node.py` — the explorer node for **both sim and real**
+  (2026-07-08); accepts an injected `ExplorationAlgorithm`. The startup spin was removed
+  (2026-07-08), and the mid-navigation redirect (`check_goal_redirect()`/
+  `frontier_goal_for_current_map()`/`is_redirecting`/`REDIRECT_THRESHOLD`) — disabled in
+  T04s, then **deleted** in the 2026-07-08 cleanup.
 - `dome_nav/explore_telemetry.py` — JSONL session logger
 - `dome_nav/slam_manager_node.py` — **LifecycleNode**: watches `/map`, saves pose graph
   on first map receipt + every 30s
@@ -77,7 +107,11 @@ dome_nav` is required after every source edit before `bl`/`ros2 run` will see it
   Now simulates lidar scanning along travel path via `uncover_along_path()` (sweeps at
   radius/2 steps from old to new robot position). Args: `--map`, `--inset`, `--min-size`,
   `--min-dist`, `--sensor-radius`, `--auto`
-- `config/` — slam_param_patch, nav2_param_patch, nav2_amcl_patch, explore_param_patch
+- `config/` — **(2026-07-08 refactor)** six standalone, commented copies of the upstream
+  defaults, no patch chain: `slam_real.yaml`, `slam_sim.yaml`, `nav2_real.yaml`
+  (Modes A/B), `nav2_localization_real.yaml` (Mode B AMCL), `nav2_explore_real.yaml`,
+  `nav2_explore_sim.yaml`. All the old `*_patch.yaml` files and `empty_dock_database.yaml`
+  were deleted; `utils.py` config helpers reduced to `write_config`.
 - `launch/robot_map.launch.py` (Mode A), `robot_nav.launch.py` (Mode B),
   `robot_explore.launch.py` (Mode E)
 - `launch/sim_explore.launch.py` — **(F13)** full sim stack in one file (Gazebo, bridge,
@@ -112,8 +146,12 @@ dome_nav` is required after every source edit before `bl`/`ros2 run` will see it
 | `test_pluggable_explore_manager_node.py` | 29 | ROS mock |
 | `test_map_validation.py` | 4 | manual/live only |
 
-**91 pure-Python tests pass** (`test_frontier_algorithm.py` + `test_frontier_explorer.py` + `test_nav_manager_pure.py` + `test_utils_pure.py`).
-**174/178 total pass** via `pytest test/ -m "not manual"` (4 deselected are `test_map_validation.py`'s manual/live-only tests).
+**153 pass, 4 deselected** via `pytest test/ -m "not manual"` (as of 2026-07-08, after
+deleting `test_explore_manager_node.py` with the orphaned original node, and the
+`build_slam_config`/`patch_dock_db` unit tests when YAML patching was removed). The 4
+deselected are `test_map_validation.py`'s manual/live-only tests. The table above lists
+pre-2026-07-08 per-file counts and is now partially stale (the `test_explore_manager_node.py`
+row is gone).
 
 ## F12 summary
 
@@ -594,21 +632,19 @@ issue. See F13 T04t for full detail.**
 
 ## Likely next steps
 
-1. **F13 T05 (blocked, primary blocker)** — root-cause why most goals still *fail* after
-   being sent (one observed 2026-07-07 session: `reached: 0, failed: 3, goal_num: 4`).
-   Not yet investigated: read the actual `planner_server`/`controller_server`/
-   `bt_navigator` logs for a specific failing goal to get a concrete error, the same way
-   T04t's investigation did for the `robot_state_publisher` and lifecycle-race bugs.
-   `slam_toolbox`, Nav2 activation, and the launch-time race are all confirmed healthy as
-   of 2026-07-07 — this is now an isolated navigation-reliability question, not a
-   startup/orchestration one.
-2. **F13 T06** — update feature/task file status, move to done, update this doc (blocked
-   on T05).
-3. **Architecture decision (2026-07-04, not yet actioned)** — user wants sim and real-robot
-   code to converge on `pluggable_explore_manager_node.py` for both, differing only by
-   parameter values; `robot_explore.launch.py` still uses the original `explore_manager_node`
-   and has not been switched over. Do this as a distinct, explicitly-confirmed step, not
-   silently alongside other changes.
+1. **F13 T05** — sim exploration now works well (goals sent and reached, map fills in). The
+   remaining known nav issues are diagnosed but not fully fixed and are candidates for a
+   deliberate tuning pass / Nav2 discussion post: (a) ~0.11 m/s crawl on ~1 m goals =
+   stock MPPI `GoalCritic.threshold_to_consider: 1.4`; (b) near-border "Start occupied"
+   planner failures when the robot center is in an inflated/lethal cell; (c) planner choice
+   (NavFn vs SmacPlanner2D — see TF13 T04p). None block basic exploration.
+2. **F13 T06** — update feature/task file status, move to done.
+3. **Architecture convergence — DONE (2026-07-08, TF10 T08).** `robot_explore.launch.py`
+   now runs `pluggable_explore_manager_node` with real-robot params; the original
+   `explore_manager_node.py` was deleted. Sim and real share one code path.
+4. **Real-robot verification (open):** Modes A/B/E have never been live-run on hardware;
+   the standalone `nav2_real.yaml`/`nav2_localization_real.yaml` are behavior-preserving
+   copies but unproven (F10 T07).
 4. **I06** — underscore rename sweep in remaining files
 5. **I07, I08, I09** — verify/close quick wins
 6. **`better_launch` fix upstreaming** — the `--param-file`→`--params-file` fix
@@ -616,13 +652,19 @@ issue. See F13 T04t for full detail.**
    that repo tracks an upstream remote separately from this workspace, consider whether
    it should be contributed back.
 
-## Exploration params (explore_param_patch.yaml + ExploreParams defaults)
+## Exploration params (ExploreParams defaults + node ROS parameters)
 
-- `desired_linear_vel`: 0.12 m/s real robot (`explore_param_patch.yaml`, protects
-  slam_toolbox scan-matching); **0.45 m/s in sim** (raised from 0.3 on 2026-07-05, a 50%
-  bump at user request — `velocity_smoother`'s linear cap raised to 0.6 m/s to match, so it
-  doesn't clip the new desired speed). Sim-only override in `sim_nav2.launch.py` +
-  `sim_explore.launch.py`; real-hardware config untouched.
+**2026-07-08 changes to note first:** the initial 360° spin was **removed**;
+`min_frontier_dist` is now a ROS parameter, **0.9 m in sim** / 1.3 m real (see below);
+sim `yaw_goal_tolerance` raised to ~π (goals carry a fixed identity orientation, so a tight
+yaw tolerance forced a wasteful end-of-goal spin); `explore_param_patch.yaml` no longer
+exists — speed/costmap values now live directly in the standalone `nav2_explore_*.yaml`.
+Note the `nav2_explore_*.yaml` header records that MPPI (the actual FollowPath plugin)
+**ignores `desired_linear_vel`** — real cruise speed is governed by `vx_max`/`vx_min`.
+
+- `desired_linear_vel`: historically 0.12 m/s real / 0.45 m/s sim, but this key is a no-op
+  under MPPIController (see the `nav2_explore_*.yaml` audit note); effective speed is set by
+  MPPI `vx_max` (0.45 sim).
 - `MIN_FRONTIER_SIZE` / `min_frontier_size`: 10 cells at the `ExploreParams` dataclass
   level and the pluggable node's own ROS parameter default (real-robot value, unchanged).
   Sim launch files: briefly set to **1** on 2026-07-05 (F13 T04g) to test whether
@@ -631,8 +673,12 @@ issue. See F13 T04t for full detail.**
   NavFn's path reconstruction: `Failed to create a plan from potential when a legal
   potential was found`). Raised back to **5** the same day (F13 T04l) — still below the
   original 10, but excludes the pathological single-cell edge slivers.
-- `MIN_FRONTIER_DIST`: **1.3 m** (raised from 0.8 m on 2026-07-03, in both
-  `explore_manager_node.py` and `ExploreParams`' default — see note below)
+- `MIN_FRONTIER_DIST` / `min_frontier_dist`: **1.3 m real, 0.9 m sim** (2026-07-08, TF13
+  T04w). Now a ROS parameter on `pluggable_explore_manager_node` (default 1.3 = real value);
+  sim launch files set 0.9 to fix the startup deadlock where the only large-enough frontier
+  was < 1.3 m away so no goal was ever sent (`wed3` telemetry). `ExploreParams` default is
+  1.3. (The original `explore_manager_node.py` referenced in older notes was deleted
+  2026-07-08 — sim and real now share `pluggable_explore_manager_node`.)
 - `MAX_FRONTIER_DIST`: 0.0 (unlimited) at the `ExploreParams` dataclass level; the pluggable
   sim node (`pluggable_explore_manager_node` / sim launch files) defaults its
   `max_frontier_dist` ROS parameter to **15.0 m** (raised from 3.0 on 2026-07-05, F13 T04o —

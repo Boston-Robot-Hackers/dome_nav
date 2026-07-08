@@ -40,6 +40,24 @@ publishes `/explore/status`. 84 tests pass including frontier_explorer pure test
 Record answers in `02-doc/notes.md`. Adjust params or auto-stop logic as needed.
 **Test**: Manual — run Mode E launch on real robot, observe behavior, record findings.
 
+## T08 — Converge real robot onto pluggable_explore_manager_node
+**Status**: done (launch switch) — orphaned original node not yet removed
+**Description**: Per the standing 2026-07-04 architecture decision (sim and real should
+share one explorer code path, differing only by parameter values), switched
+`robot_explore.launch.py` from the original `explore_manager_node` to
+`pluggable_explore_manager_node` (the same node the sim stack uses, with an injected
+`FrontierAlgorithm`). Real-robot parameter values set explicitly in the launch:
+`max_frontier_dist 0.0` (unlimited -- the node declares a sim-oriented 15.0, overridden
+back here), `min_frontier_dist 1.3`, `prefer_farthest False`, `min_frontier_size 10`,
+`max_explore_radius` from the launch arg, plus `use_sim_time` from the arg. These match
+`ExploreParams`' own defaults, so behavior matches the original node's intent.
+**Test**: `colcon build` clean; full suite 181 passed, 4 deselected. Not yet live on
+hardware (real-robot run is T07).
+**Not yet done**: `dome_nav/explore_manager_node.py` (original) is now orphaned -- no
+launch references it. Removing it (plus `test/test_explore_manager_node.py`, the
+`setup.py` console entry, and `01-literate/07-explore_manager_node.md`) is a separate,
+explicitly-confirmed deletion step, pending user go-ahead.
+
 ## T07 — Manual live smoke test
 **Status**: not done
 **Description**: Full end-to-end on real robot:

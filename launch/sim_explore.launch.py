@@ -9,16 +9,23 @@ from better_launch import BetterLaunch, launch_this
 from better_launch import gazebo
 from better_launch.gazebo import GazeboBridge
 from dome_nav.utils import (
-    dome_home, require_world_name, world_spawn_xy, yaml_override, yaml_patch_dict,
+    dome_home, require_world_name, world_spawn_xy, write_config,
 )
 
 
+# Sim-only exploration defaults, kept identical across sim_explore.launch.py,
+# sim_explore_node.launch.py, and sim_nav_full.launch.py. Can't be shared via an
+# imported constant: bl's CLI statically parses launch function signatures via
+# AST without importing the module (better_launch/utils/introspection.py), so a
+# non-literal default like `= SOME_IMPORTED_NAME` fails with "not a valid float"
+# -- only literal constants written directly in the signature work.
 @launch_this(ui=True)
 def sim_explore_launch(
     map_name: str = "",
     world_name: str = "",
     max_explore_radius: float = 0.0,
     max_frontier_dist: float = 15.0,
+    min_frontier_dist: float = 0.9,
     prefer_farthest: bool = True,
     min_frontier_size: int = 5,
 ):
@@ -43,43 +50,10 @@ def sim_explore_launch(
     with open(urdf_path) as f:
         robot_description = f.read()
 
-    slam_base = bl.find("slam_toolbox", "mapper_params_online_async.yaml")
-    slam_patch = os.path.join(pkg, "config", "slam_param_patch.yaml")
-    slam_config = yaml_override(slam_base, slam_patch)
-    slam_config = yaml_patch_dict(slam_config, {
-        "slam_toolbox": {"ros__parameters": {
-            "map_file_name": slam_map_path,
-            "use_sim_time": True,
-        }}
-    })
+    slam_config = os.path.join(pkg, "config", "slam_sim.yaml")
 
-    nav2_base = bl.find("nav2_bringup", "nav2_params.yaml")
-    nav2_patch = os.path.join(pkg, "config", "nav2_param_patch.yaml")
-    explore_patch = os.path.join(pkg, "config", "explore_param_patch.yaml")
-    dock_db = os.path.join(pkg, "config", "empty_dock_database.yaml")
-    nav2_config = yaml_override(nav2_base, nav2_patch)
-    nav2_config = yaml_override(nav2_config, explore_patch)
-    nav2_config = yaml_patch_dict(nav2_config, {
-        "docking_server": {"ros__parameters": {"dock_database": dock_db}}
-    })
-
-    # Sim-only speed bump: explore_param_patch.yaml intentionally caps exploration
-    # speed low to protect slam_toolbox scan-matching on real hardware. That
-    # constraint doesn't apply to development/testing in Gazebo, so raise the
-    # cap here rather than touching the shared real-robot config files.
-    # Linear cruise speed raised 50% (0.3 -> 0.45) at user request; velocity_smoother's
-    # linear cap raised to match (0.4 -> 0.6) so it doesn't clip the new desired speed.
-    nav2_config = yaml_patch_dict(nav2_config, {
-        "controller_server": {"ros__parameters": {
-            "FollowPath": {"desired_linear_vel": 0.45},
-        }},
-        "velocity_smoother": {"ros__parameters": {
-            "max_velocity": [0.6, 0.0, 1.9],
-            "min_velocity": [-0.6, 0.0, -1.9],
-            "max_accel": [1.5, 0.0, 3.2],
-            "max_decel": [-1.5, 0.0, -3.2],
-        }},
-    })
+    # Full standalone config, loaded verbatim -- no patch chain.
+    nav2_config = os.path.join(pkg, "config", "nav2_explore_sim.yaml")
 
     # Gazebo + robot spawn (GUI always on — needed to visually inspect costmap
     # inflation and robot behavior near obstacles during exploration debugging).
@@ -98,7 +72,9 @@ def sim_explore_launch(
         GazeboBridge("/odom", "nav_msgs/msg/Odometry", "gz2ros"),
         GazeboBridge("/tf", "tf2_msgs/msg/TFMessage", "gz2ros"),
         GazeboBridge("/cmd_vel", "geometry_msgs/msg/Twist", "ros2gz"),
-        GazeboBridge("/model/dome2/joint_state", "sensor_msgs/msg/JointState", "gz2ros"),
+        GazeboBridge(
+            "/model/dome2/joint_state", "sensor_msgs/msg/JointState", "gz2ros"
+        ),
     )
 
     # robot_state_publisher — fixed-joint TF (base_footprint→base_link→laser etc.)
@@ -106,10 +82,22 @@ def sim_explore_launch(
     # remaps passed to it, so the bridge publishes under its literal topic name.
     # Remap robot_state_publisher's subscription instead, since bl.node() honors
     # remaps for non-raw nodes.
+    #
+    # robot_state_publisher must be given an explicit name=, and robot_description
+    # must go through a params file rather than params=: see F13 T04t
+    # (04-tasks/notdone/TF13-gazebo-simulation.md) for why an anonymous name here
+    # hangs the launch indefinitely on a busy VM.
+    rsp_params_path = write_config({
+        "/**": {"ros__parameters": {
+            "robot_description": robot_description,
+            "use_sim_time": True,
+        }}
+    })
     bl.node(
         "robot_state_publisher",
         "robot_state_publisher",
-        params={"robot_description": robot_description, "use_sim_time": True},
+        name="robot_state_publisher",
+        param_files=[rsp_params_path],
         remaps={"/joint_states": "/model/dome2/joint_state"},
     )
 
@@ -154,6 +142,7 @@ def sim_explore_launch(
         params={
             "max_explore_radius": max_explore_radius,
             "max_frontier_dist": max_frontier_dist,
+            "min_frontier_dist": min_frontier_dist,
             "prefer_farthest": prefer_farthest,
             "min_frontier_size": min_frontier_size,
             "map_name": map_name,

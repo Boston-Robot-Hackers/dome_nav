@@ -1,0 +1,230 @@
+<?xml version="1.0"?>
+<!--
+  minimal_sim.urdf: diagnostic-only, bare-minimum robot model for isolating
+  whether the "diagonal line of lidar dots" artifact seen with dome3_sim.urdf
+  is caused by that model's own geometry (off-axis laser mount, laser/caster
+  proximity, etc.) or is a more fundamental Gazebo/bridge/TF issue that would
+  reproduce on any robot. Not used by any production launch file.
+
+  Deliberately minimal versus dome3_sim.urdf:
+  - Laser mounted with zero x/y offset, directly above the base center
+    (dome3_sim.urdf offsets it -0.15m in x).
+  - No separate laser_post_link.
+
+  base_footprint IS kept (jointed to base_link with a z=0.05 offset,
+  matching dome3_sim.urdf) despite being otherwise unnecessary here:
+  slam_toolbox's base_frame parameter (slam_param_patch.yaml, unchanged)
+  expects a "base_footprint" frame to exist; omitting it caused "Failed to
+  compute odom pose" once this file was actually run through the full
+  slam_toolbox/Nav2 pipeline (F13 T04t).
+
+  The caster is offset in x (-0.12m), NOT directly below the laser. An
+  earlier version placed both at x=0,y=0 (directly vertically aligned),
+  which caused a confirmed self-hit artifact: live TF measurement during a
+  full 360deg spin showed a "closest point" reading at a constant ~0.4m
+  range and ~178deg bearing (i.e. rigidly fixed relative to the sensor)
+  instead of a real external wall's bearing sweeping through the full
+  rotation as the robot turned. All wheel/caster z-offsets were also
+  recomputed for the corrected base_link height (F13 T04t).
+  Author: Pito Salas and Claude Code
+  Open Source Under MIT license
+-->
+<robot name="minimal_test_bot">
+
+  <material name="gray"><color rgba="0.6 0.6 0.6 1.0"/></material>
+  <material name="light_blue"><color rgba="0.5 0.8 1.0 1.0"/></material>
+
+  <link name="base_footprint"/>
+
+  <link name="base_link">
+    <inertial>
+      <mass value="2.5"/>
+      <inertia ixx="0.01406" ixy="0" ixz="0"
+               iyy="0.01406" iyz="0"
+               izz="0.02813"/>
+    </inertial>
+    <visual>
+      <geometry><cylinder radius="0.15" length="0.05"/></geometry>
+      <material name="gray"/>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="0.15" length="0.05"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="base_footprint_to_base_link" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0.05"/>
+  </joint>
+
+  <link name="left_wheel">
+    <inertial>
+      <mass value="0.2"/>
+      <inertia ixx="0.0000501" ixy="0" ixz="0"
+               iyy="0.0000900" iyz="0"
+               izz="0.0000501"/>
+    </inertial>
+    <visual>
+      <origin rpy="1.5707963267948966 0 0"/>
+      <geometry><cylinder radius="0.03" length="0.0175"/></geometry>
+      <material name="gray"/>
+    </visual>
+    <collision>
+      <origin rpy="1.5707963267948966 0 0"/>
+      <geometry><cylinder radius="0.03" length="0.0175"/></geometry>
+    </collision>
+  </link>
+
+  <link name="right_wheel">
+    <inertial>
+      <mass value="0.2"/>
+      <inertia ixx="0.0000501" ixy="0" ixz="0"
+               iyy="0.0000900" iyz="0"
+               izz="0.0000501"/>
+    </inertial>
+    <visual>
+      <origin rpy="1.5707963267948966 0 0"/>
+      <geometry><cylinder radius="0.03" length="0.0175"/></geometry>
+      <material name="gray"/>
+    </visual>
+    <collision>
+      <origin rpy="1.5707963267948966 0 0"/>
+      <geometry><cylinder radius="0.03" length="0.0175"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="base_link_to_left_wheel" type="continuous">
+    <parent link="base_link"/>
+    <child link="left_wheel"/>
+    <!-- wheel_radius=0.03: center at world z=0.03 for ground contact,
+         -0.07 relative to base_link's world z=0.10. -->
+    <origin xyz="0.15 0.15 -0.07"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <joint name="base_link_to_right_wheel" type="continuous">
+    <parent link="base_link"/>
+    <child link="right_wheel"/>
+    <origin xyz="0.15 -0.15 -0.07"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <link name="caster">
+    <inertial>
+      <mass value="0.05"/>
+      <inertia ixx="0.0000045" ixy="0" ixz="0"
+               iyy="0.0000045" iyz="0"
+               izz="0.0000045"/>
+    </inertial>
+    <visual>
+      <geometry><sphere radius="0.02"/></geometry>
+      <material name="gray"/>
+    </visual>
+    <collision>
+      <geometry><sphere radius="0.02"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="base_link_to_caster" type="fixed">
+    <parent link="base_link"/>
+    <child link="caster"/>
+    <origin xyz="-0.15 0 -0.08"/>
+  </joint>
+
+  <!-- Laser: directly above the base center, zero x/y offset, no yaw. -->
+  <link name="laser">
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.0000433" ixy="0" ixz="0"
+               iyy="0.0000433" iyz="0"
+               izz="0.0000450"/>
+    </inertial>
+    <visual>
+      <geometry><cylinder radius="0.03" length="0.05"/></geometry>
+      <material name="light_blue"/>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="0.03" length="0.05"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="base_link_to_laser" type="fixed">
+    <parent link="base_link"/>
+    <child link="laser"/>
+    <origin xyz="0 0 0.1"/>
+  </joint>
+
+  <!-- ===== Gazebo Harmonic simulation extensions ===== -->
+
+  <gazebo reference="left_wheel">
+    <collision><surface><friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction></surface></collision>
+  </gazebo>
+  <gazebo reference="right_wheel">
+    <collision><surface><friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction></surface></collision>
+  </gazebo>
+  <gazebo reference="caster">
+    <collision><surface><friction><ode><mu>0.0</mu><mu2>0.0</mu2></ode></friction></surface></collision>
+  </gazebo>
+
+  <gazebo>
+    <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
+      <left_joint>base_link_to_left_wheel</left_joint>
+      <right_joint>base_link_to_right_wheel</right_joint>
+      <wheel_separation>0.3</wheel_separation>
+      <wheel_radius>0.03</wheel_radius>
+      <odom_publish_frequency>20</odom_publish_frequency>
+      <max_linear_velocity>0.3</max_linear_velocity>
+      <min_linear_velocity>-0.3</min_linear_velocity>
+      <max_angular_velocity>1.5</max_angular_velocity>
+      <min_angular_velocity>-1.5</min_angular_velocity>
+      <max_linear_acceleration>1.0</max_linear_acceleration>
+      <min_linear_acceleration>-1.0</min_linear_acceleration>
+      <max_angular_acceleration>2.0</max_angular_acceleration>
+      <min_angular_acceleration>-2.0</min_angular_acceleration>
+      <topic>/cmd_vel</topic>
+      <odom_topic>/odom</odom_topic>
+      <tf_topic>/tf</tf_topic>
+      <frame_id>odom</frame_id>
+      <child_frame_id>base_footprint</child_frame_id>
+    </plugin>
+  </gazebo>
+
+  <gazebo>
+    <plugin filename="gz-sim-joint-state-publisher-system"
+            name="gz::sim::systems::JointStatePublisher">
+      <topic>/model/dome2/joint_state</topic>
+    </plugin>
+  </gazebo>
+
+  <!-- 2D lidar, directly above center, no offset. -->
+  <gazebo reference="laser">
+    <sensor name="lidar" type="gpu_lidar">
+      <topic>/scan</topic>
+      <always_on>true</always_on>
+      <update_rate>10</update_rate>
+      <lidar>
+        <scan>
+          <horizontal>
+            <samples>360</samples>
+            <resolution>1</resolution>
+            <min_angle>-3.14159265</min_angle>
+            <max_angle>3.14159265</max_angle>
+          </horizontal>
+        </scan>
+        <range>
+          <min>0.12</min>
+          <max>12.0</max>
+          <resolution>0.015</resolution>
+        </range>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.01</stddev>
+        </noise>
+      </lidar>
+      <visualize>true</visualize>
+    </sensor>
+  </gazebo>
+
+</robot>

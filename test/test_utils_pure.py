@@ -99,3 +99,5 @@ def test_world_spawn_xy_known_world():
 
 def test_world_spawn_xy_unknown_world_defaults_origin():
     assert world_spawn_xy("some_future_world") == (0.0, 0.0)
+
+

@@ -11,11 +11,18 @@
 from better_launch import BetterLaunch, launch_this
 
 
+# Sim-only exploration defaults, kept identical across sim_explore.launch.py,
+# sim_explore_node.launch.py, and sim_nav_full.launch.py. Can't be shared via an
+# imported constant: bl's CLI statically parses launch function signatures via
+# AST without importing the module (better_launch/utils/introspection.py), so a
+# non-literal default like `= SOME_IMPORTED_NAME` fails with "not a valid float"
+# -- only literal constants written directly in the signature work.
 @launch_this(ui=True)
 def sim_explore_node_launch(
     map_name: str = "",
     max_explore_radius: float = 0.0,
     max_frontier_dist: float = 15.0,
+    min_frontier_dist: float = 0.9,
     prefer_farthest: bool = True,
     min_frontier_size: int = 5,
 ):
@@ -34,6 +41,7 @@ def sim_explore_node_launch(
         params={
             "max_explore_radius": max_explore_radius,
             "max_frontier_dist": max_frontier_dist,
+            "min_frontier_dist": min_frontier_dist,
             "prefer_farthest": prefer_farthest,
             "min_frontier_size": min_frontier_size,
             "map_name": map_name,

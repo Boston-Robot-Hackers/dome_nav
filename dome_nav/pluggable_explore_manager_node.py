@@ -15,7 +15,7 @@ from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import OccupancyGrid
 from visualization_msgs.msg import MarkerArray
-from nav2_msgs.action import NavigateToPose, Spin
+from nav2_msgs.action import NavigateToPose
 import tf2_ros
 
 from dome_nav.explore_context import (
@@ -43,10 +43,8 @@ class PluggableExploreManagerNode(Node):
     # At 2 Hz this is 7 s of patience. Too low → quits while map is still updating.
     # Too high → long wait at end of a complete map. Must exceed slam_toolbox's own
     # map_update_interval (5 s default, not overridden) -- 8 ticks (4 s) was shorter
-    # than that, so patience could run out before /map had refreshed even once,
-    # e.g. right after the initial spin (F13 T04q) revealed new area but before
-    # slam_toolbox's next scheduled rebuild. 14 ticks (7 s) gives one full 5 s
-    # interval plus margin.
+    # than that, so patience could run out before /map had refreshed even once.
+    # 14 ticks (7 s) gives one full 5 s interval plus margin.
     NO_FRONTIER_PATIENCE = 14
 
     # Cancel active goal after this many seconds to break Nav2 BT recovery loops.
@@ -55,24 +53,9 @@ class PluggableExploreManagerNode(Node):
     # on long traversals. Cancelled goal is blacklisted so the same spot is not retried.
     GOAL_TIMEOUT_S = 25.0
 
-    # If the best frontier moves more than this many metres from the current goal,
-    # cancel mid-flight and redirect. Accounts for the map updating during transit
-    # (lidar reveals new cells along the path). Too small → constant churn; too
-    # large → stale goals persist after the map changes significantly.
-    REDIRECT_THRESHOLD = 1.5
-
-    # Full rotation commanded once at the start of each exploration session,
-    # before any frontier is sought — gives slam_toolbox's first scan the
-    # widest possible initial view. slam_toolbox only updates the map once the
-    # robot moves past minimum_travel_distance/minimum_travel_heading (stock
-    # defaults), so whatever the first stationary scan misses stays unknown
-    # until the robot happens to move enough to trigger a new one.
-    INITIAL_SPIN_YAW = 2 * math.pi
-
     def __init__(self, algorithm: ExplorationAlgorithm | None = None):
         super().__init__("explore_manager_node")
         self.nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
-        self.spin_client = ActionClient(self, Spin, "spin")
         self.status_pub = self.create_publisher(String, "/explore/status", 10)
         self.marker_pub = self.create_publisher(MarkerArray, "/explore/markers", 10)
         self.intent_sub = self.create_subscription(
@@ -87,11 +70,15 @@ class PluggableExploreManagerNode(Node):
 
         self.declare_parameter("max_explore_radius", 0.0)
         self.declare_parameter("max_frontier_dist", 15.0)
+        # Default matches ExploreParams.min_frontier_dist (real-robot 1.0 m sent-goal
+        # floor after the 0.3 m goal_inset); sim launch files lower it.
+        self.declare_parameter("min_frontier_dist", 1.3)
         self.declare_parameter("prefer_farthest", False)
         self.declare_parameter("min_frontier_size", 10)
         self.declare_parameter("map_name", "unknown")
         self.max_explore_radius: float = self.get_parameter("max_explore_radius").value
         self.max_frontier_dist: float = self.get_parameter("max_frontier_dist").value
+        self.min_frontier_dist: float = self.get_parameter("min_frontier_dist").value
         self.prefer_farthest: bool = self.get_parameter("prefer_farthest").value
         self.min_frontier_size: int = self.get_parameter("min_frontier_size").value
         self.map_name: str = self.get_parameter("map_name").value
@@ -100,6 +87,7 @@ class PluggableExploreManagerNode(Node):
         self.params = ExploreParams(
             max_explore_radius=self.max_explore_radius,
             max_frontier_dist=self.max_frontier_dist,
+            min_frontier_dist=self.min_frontier_dist,
             prefer_farthest=self.prefer_farthest,
             min_frontier_size=self.min_frontier_size,
         )
@@ -107,8 +95,6 @@ class PluggableExploreManagerNode(Node):
 
         self.latest_map: OccupancyGrid | None = None
         self.latest_map_info: MapInfo | None = None
-        self.redirect_map_stamp: tuple[int, int] | None = None
-        self.redirect_cached_goal: XY | None = None
         self.reset_session()
         self.clear_active_goal()
         self.get_logger().info("PluggableExploreManagerNode ready.")
@@ -128,13 +114,13 @@ class PluggableExploreManagerNode(Node):
         if name == "exploration_start" and self.state in ("idle", "done"):
             self.reset_session()
             self.start_xy = self.robot_xy_in_map()
-            self.state = "spinning"
-            self.publish_status("spinning")
+            self.state = "exploring"
+            self.publish_status("exploring")
             r = (
                 f", max_radius={self.params.max_explore_radius}m"
                 if self.params.max_explore_radius > 0 else ""
             )
-            self.get_logger().info(f"Exploration started{r} — spinning in place first.")
+            self.get_logger().info(f"Exploration started{r}.")
             self.telemetry.write(
                 "session_start", map_name=self.map_name,
                 start_xy=list(self.start_xy) if self.start_xy else None,
@@ -148,44 +134,8 @@ class PluggableExploreManagerNode(Node):
                     "min_frontier_size": self.params.min_frontier_size,
                 },
             )
-            self.send_initial_spin()
         elif name == "exploration_stop":
             self.stop_exploring("idle")
-
-    def send_initial_spin(self):
-        if not self.spin_client.server_is_ready():
-            self.get_logger().warning(
-                "Spin behavior server not ready — skipping initial spin."
-            )
-            self.begin_exploring()
-            return
-        goal = Spin.Goal()
-        goal.target_yaw = self.INITIAL_SPIN_YAW
-        future = self.spin_client.send_goal_async(goal)
-        future.add_done_callback(self.on_spin_goal_accepted)
-
-    def on_spin_goal_accepted(self, future):
-        if self.state != "spinning":
-            return
-        handle = future.result()
-        if not handle.accepted:
-            self.get_logger().warning("Initial spin rejected — proceeding without it.")
-            self.begin_exploring()
-            return
-        self.spin_goal_handle = handle
-        result_future = handle.get_result_async()
-        result_future.add_done_callback(self.on_spin_result)
-
-    def on_spin_result(self, future):
-        self.spin_goal_handle = None
-        if self.state != "spinning":
-            return
-        self.get_logger().info("Initial 360° spin complete — beginning exploration.")
-        self.begin_exploring()
-
-    def begin_exploring(self):
-        self.state = "exploring"
-        self.publish_status("exploring")
 
     def explore_tick(self):
         self.publish_status(self.state)
@@ -193,11 +143,9 @@ class PluggableExploreManagerNode(Node):
         if self.state != "exploring":
             return
         if self.has_active_goal:
+            # The frontier choice is only reconsidered when the current goal
+            # finishes (reached, aborted, or timed out), not mid-flight.
             self.check_goal_timeout()
-            # check_goal_redirect() is intentionally not called here (F13 T04s):
-            # the map/frontier choice is now only reconsidered when the current
-            # goal finishes (reached, aborted, or timed out), not mid-flight.
-            # The method and its tests are kept for potential future use.
             return
         self.find_and_send_frontier()
 
@@ -223,86 +171,6 @@ class PluggableExploreManagerNode(Node):
         if self.current_goal_centroid is not None:
             self.blacklist.add(self.current_goal_centroid)
         self.clear_active_goal()
-
-    def frontier_goal_for_current_map(self, robot_xy: XY) -> XY | None:
-        m = self.latest_map
-        stamp = (m.header.stamp.sec, m.header.stamp.nanosec)
-        if stamp == self.redirect_map_stamp:
-            return self.redirect_cached_goal
-        info = MapInfo(
-            width=m.info.width, height=m.info.height, resolution=m.info.resolution,
-            origin_x=m.info.origin.position.x, origin_y=m.info.origin.position.y,
-        )
-        ctx = ExplorationContext(
-            map_data=list(m.data),
-            map_info=info,
-            robot_xy=robot_xy,
-            blacklist=self.blacklist,
-            start_xy=self.start_xy,
-            params=self.params,
-        )
-        self.redirect_map_stamp = stamp
-        self.redirect_cached_goal = self.algorithm.next_goal(ctx)
-        return self.redirect_cached_goal
-
-    def check_goal_redirect(self):
-        # Re-evaluate the frontier each tick while in transit. If the best goal
-        # has moved more than REDIRECT_THRESHOLD from the current goal (because
-        # the map updated as the robot scanned along its path), cancel and redirect.
-        # The intent is to opportunistically capture map updates that happen
-        # mid-flight: the lidar keeps scanning during travel, so by the time the
-        # robot would have arrived at a goal picked minutes ago, that frontier may
-        # already be stale — a nearer, newly-revealed one is often better.
-        #
-        # slam_toolbox only republishes /map on its own map_update_interval (5s by
-        # default), far slower than this 2Hz tick — recomputing frontier clustering
-        # against an unchanged map is wasted work, so the result is memoized by map
-        # stamp and reused until a genuinely new map arrives.
-        #
-        # Disabled under prefer_farthest: "best" there means "farthest from the
-        # robot's current position," which flips sides as soon as the robot moves
-        # at all toward either side — not because the map changed, but purely as
-        # an artifact of the robot's own motion. Confirmed via telemetry
-        # (~/.dome/telemetry/explore-boo1-20260705.jsonl) on 2026-07-05: the robot
-        # ping-ponged between two points ~1.7m apart, redirected every ~10s,
-        # 17 goals sent and zero reached in one session. Under nearest-first this
-        # redirect is stable (moving toward the nearest frontier keeps it nearest,
-        # or the map reveals it and a new nearby one takes over) — the instability
-        # is specific to farthest-first's dependence on the robot's own position.
-        if self.prefer_farthest:
-            return
-        no_active_redirect_target = (
-            self.is_redirecting or self.latest_map is None
-            or self.current_goal_xy is None
-        )
-        if no_active_redirect_target:
-            return
-        robot_xy = self.robot_xy_in_map()
-        if robot_xy is None:
-            return
-        new_goal = self.frontier_goal_for_current_map(robot_xy)
-        if new_goal is None:
-            return
-        dist = math.sqrt(
-            (new_goal[0] - self.current_goal_xy[0]) ** 2
-            + (new_goal[1] - self.current_goal_xy[1]) ** 2
-        )
-        if dist < self.REDIRECT_THRESHOLD:
-            return
-        self.get_logger().info(
-            f"Redirect: best frontier moved {dist:.2f}m from current goal "
-            f"— cancelling #{self.goal_count} and redirecting."
-        )
-        self.telemetry.write(
-            "redirect", goal_num=self.goal_count,
-            old_goal_xy=[round(self.current_goal_xy[0], 3),
-                         round(self.current_goal_xy[1], 3)],
-            new_goal_xy=[round(new_goal[0], 3), round(new_goal[1], 3)],
-            shift_m=round(dist, 3),
-        )
-        self.is_redirecting = True
-        if self.goal_handle is not None:
-            self.goal_handle.cancel_goal_async()
 
     def find_and_send_frontier(self):
         if self.latest_map is None:
@@ -367,7 +235,6 @@ class PluggableExploreManagerNode(Node):
         self.goal_count = 0
         self.goals_reached = 0
         self.goals_failed = 0
-        self.spin_goal_handle = None
 
     def clear_active_goal(self):
         self.goal_handle = None
@@ -375,7 +242,6 @@ class PluggableExploreManagerNode(Node):
         self.goal_start_time = None
         self.current_goal_centroid = None
         self.current_goal_xy = None
-        self.is_redirecting = False
 
     def send_nav_goal(self, xy: XY, centroid: XY):
         if not self.nav_client.server_is_ready():
@@ -435,10 +301,6 @@ class PluggableExploreManagerNode(Node):
             round(time.monotonic() - self.goal_start_time, 1)
             if self.goal_start_time else 0.0
         )
-        if self.is_redirecting:
-            # Cancelled for a better frontier — not a failure, do not blacklist.
-            self.clear_active_goal()
-            return
         self.clear_active_goal()
         result = future.result()
         robot_xy = self.robot_xy_in_map()
@@ -466,9 +328,6 @@ class PluggableExploreManagerNode(Node):
         self.blacklist.add(centroid)
 
     def stop_exploring(self, new_state: str):
-        if self.spin_goal_handle is not None:
-            self.spin_goal_handle.cancel_goal_async()
-            self.spin_goal_handle = None
         if self.goal_handle is not None:
             self.goal_handle.cancel_goal_async()
             self.goal_handle = None
