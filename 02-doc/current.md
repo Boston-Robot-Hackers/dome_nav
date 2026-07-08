@@ -49,8 +49,8 @@ block basic exploration):
 ## Launch
 
 ```bash
-# Real robot — base stack first, then a mode:
-bl dome2 robot.launch.py --options "dri nav"
+# Real robot — base stack first (no nav), then a mode:
+bl dome2 robot.launch.py --options "drivers control vision voice"
 bl dome_nav robot_map.launch.py --map_name <name>      # Mode A: mapping (slam)
 bl dome_nav robot_nav.launch.py                        # Mode B: AMCL nav (uses saved basement1 map)
 bl dome_nav robot_explore.launch.py --map_name <name>  # Mode E: autonomous explore
