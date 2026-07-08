@@ -1,142 +1,117 @@
 ---
-version: "1.2"
-generated: "2026-06-19"
+version: "1.3"
+generated: "2026-07-08"
 ---
 
-# NavManager — Pure Python Navigation Logic
+# nav_manager.py — Pure Navigation Logic
 
-## Overview
+`NavManager` is the brain of point-to-point navigation (Mode B: "go to the
+chair") with none of the ROS plumbing. It parses intents, remembers the set of
+known targets, picks the nearest matching one, judges whether localization has
+converged, and formats status strings. Every method takes plain data and returns
+plain data, which is the whole point: the ROS node (`nav_manager_node.py`) is a
+thin adapter around this, and this class is exhaustively unit-testable without a
+running graph.
 
-`nav_manager.py` holds all testable navigation logic extracted from
-`nav_manager_node.py`. No ROS imports. Covers: JSON intent parsing,
-confirmed-target list maintenance, nearest-target selection, localization
-scoring, and status string generation.
+## Remembering targets
 
-## Confirmed Targets
-
-The `/targets/confirmed` topic carries a JSON array of object sightings,
-each with a label and world-frame XYZ. `on_targets` replaces the list on
-each message — no merging, no deduplication. The latest confirmed snapshot
-is authoritative.
-
-```python
-    def on_targets(self, json_str: str) -> bool:
-        try:
-            result = json.loads(json_str)
-        except json.JSONDecodeError:
-            return False
-        if not isinstance(result, list):
-            return False
-        self.confirmed_targets = result
-        return True
-```
-
-Returns `False` on bad JSON or a non-list payload so the node can log a
-warning without this class needing a logger. The `isinstance` guard prevents
-a dict-shaped payload from corrupting `confirmed_targets` and causing a
-downstream `AttributeError`.
-
-## Intent Parsing
-
-Intents arrive as JSON strings matching dome_control's established contract:
-`{"name": ..., "source": ..., "slots": {...}}`. Only two action names are
-recognized; anything else returns `None` so the node ignores unknown intents.
+Targets come from the vision system as a JSON array of dicts. `on_targets`
+validates and stores them, refusing anything that isn't a list:
 
 ```python
-    def parse_intent(self, json_str: str) -> tuple[str, dict] | None:
-        try:
-            intent = json.loads(json_str)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(intent, dict):
-            return None
-        action = intent.get("name", "")
-        if action not in ("navigation_go", "navigation_cancel"):
-            return None
-        return (action, intent)
+def on_targets(self, json_str: str) -> bool:
+    try:
+        result = json.loads(json_str)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(result, list):
+        return False
+    self.confirmed_targets = result
+    return True
 ```
 
-The key is `"name"` — not `"action"` — because that is the field dome_control's
-`IntentPublisher` and `IntentParser` use. Using `"action"` would cause every
-real intent to be silently ignored. The label for `navigation_go` lives in
-`intent["slots"]["label"]`, following dome_control's slot convention.
+The boolean return lets the node log a warning on bad input rather than crash —
+validation at the boundary, then trust downstream. Each target dict is expected
+to look like `{"label": str, "xyz_world": [x, y, z], ...}`.
 
-Returning `None` is a valid "nothing to do" signal — not an error. The node
-checks for `None` and logs a warning before returning early.
+## Parsing intents
 
-## Nearest Target Selection
-
-When multiple confirmed targets share a label (the same object seen from
-different viewpoints), we pick the closest to the robot's current map position.
-
-```mermaid
-flowchart TD
-    A[confirmed_targets] --> B{filter by label}
-    B -- empty --> C[return None]
-    B -- matches --> D{robot_xy known?}
-    D -- no --> E[return first match]
-    D -- yes --> F[return min dist match]
-```
+`parse_intent` is the counterpart on the command side. It accepts only the two
+navigation intents and rejects everything else (including non-dict JSON) by
+returning `None`:
 
 ```python
-    def find_nearest_confirmed(self, label: str, robot_xy: tuple | None) -> dict | None:
-        matches = [t for t in self.confirmed_targets if t.get("label") == label]
-        if not matches:
-            return None
-        if robot_xy is None:
-            return matches[0]
-        rx, ry = robot_xy
-
-        def dist(target: dict) -> float:
-            xyz = target.get("xyz_world", [0.0, 0.0, 0.0])
-            return math.sqrt((xyz[0] - rx) ** 2 + (xyz[1] - ry) ** 2)
-
-        return min(matches, key=dist)
+def parse_intent(self, json_str: str) -> tuple[str, dict] | None:
+    ...
+    action = intent.get("name", "")
+    if action not in ("navigation_go", "navigation_cancel"):
+        return None
+    return (action, intent)
 ```
 
-`robot_xy` is `None` when the TF lookup fails (e.g. map not yet published).
-Falling back to the first match is a reasonable degradation — still navigates,
-just not necessarily to the closest instance.
+Note it reads the `"name"` key — the dome_control intent contract. (This was
+once `"action"`, a mismatch that silently dropped every command; see the F09
+history.) Returning the whole intent dict alongside the action lets the caller
+pull `slots.label` without re-parsing.
 
-## Localization Scoring
+## Choosing the nearest match
 
-AMCL covariance diagonal entries [0] and [7] represent x and y position
-uncertainty in m². The score maps the worst of the two onto [0, 1] with 1 = fully
-converged and 0 = maximum uncertainty.
+Given a label, `find_nearest_confirmed` returns the closest target of that label
+to the robot — with a deliberate fallback:
 
 ```python
-    MAX_COV = 1.0
-    CONVERGED_THRESHOLD = 0.9
-
-    def check_localization(self, covariance: list[float]) -> tuple[str, float]:
-        worst = max(covariance[0], covariance[7])
-        score = min(1.0, max(0.0, 1.0 - worst / self.MAX_COV))
-        status = "converged" if score >= self.CONVERGED_THRESHOLD else "localizing"
-        return (status, score)
+def find_nearest_confirmed(self, label, robot_xy):
+    matches = [t for t in self.confirmed_targets if t.get("label") == label]
+    if not matches:
+        return None
+    if robot_xy is None:
+        return matches[0]
+    rx, ry = robot_xy
+    def dist(target):
+        xyz = target.get("xyz_world", [0.0, 0.0, 0.0])
+        return math.sqrt((xyz[0] - rx) ** 2 + (xyz[1] - ry) ** 2)
+    return min(matches, key=dist)
 ```
 
-`min(1.0, ...)` clamps the top end — AMCL should never produce negative
-variances, but the guard is cheap.
+The `robot_xy is None` branch is the interesting design decision: if no pose is
+available, rather than *block* navigation, it falls back to the first match.
+Better to drive toward *a* chair than to refuse because localization hiccuped.
 
-## Status Strings
+## Judging localization
 
-`navigate_status` produces the string published on `/dome_nav/nav_status`.
-Centralizing this in the pure class means tests can assert on status strings
-without a running publisher.
+`check_localization` turns an AMCL covariance matrix into a human-friendly
+(status, score) pair. The covariance is a 36-element row-major 6×6; only the
+`xx` (index 0) and `yy` (index 7) diagonal terms matter for a 2D base:
 
 ```python
-    def navigate_status(self, label: str, target: dict | None) -> str:
-        if target is None:
-            return f"no_target:{label}"
-        return f"navigating:{label}"
+def check_localization(self, covariance):
+    worst = max(covariance[0], covariance[7])
+    score = min(1.0, max(0.0, 1.0 - worst / self.MAX_COV))
+    status = "converged" if score >= self.CONVERGED_THRESHOLD else "localizing"
+    return (status, score)
 ```
 
-## Observations
+Score is `1 − worst/MAX_COV`, clamped to `[0, 1]`: 1.0 is fully converged, 0.0 is
+lost. `MAX_COV = 1.0` is the "lost" ceiling and `CONVERGED_THRESHOLD = 0.9` is
+the cutoff for calling it good. The clamp matters — without it a covariance above
+`MAX_COV` would produce a negative "score." (This clamp was issue I07.)
 
-- `on_targets` replaces the entire list; if dome_vision sends partial updates
-  in the future, this will need a merge strategy.
-- `find_nearest_confirmed` uses 2D Euclidean distance — correct for flat-floor
-  navigation where Z is always ~0.
-- The intent contract (`"name"` / `"slots"`) is defined by dome_control and
-  consumed here; F08 (typed messages) would eliminate the JSON-in-String encoding
-  entirely but is deferred pending cross-package coordination.
+```python
+def navigate_status(self, label, target):
+    return f"no_target:{label}" if target is None else f"navigating:{label}"
+```
+
+`navigate_status` is just the string contract the node publishes.
+
+## Observations / possible improvements
+
+- **`MAX_COV = 1.0` is a magic ceiling.** It works, but a real covariance can
+  exceed 1.0 m² when badly lost, and the clamp then just pins the score at 0.
+  Whether 1.0 is the right normalizer is a tuning question worth revisiting on
+  hardware.
+- **Target dicts are duck-typed with `.get(..., default)` everywhere.** Forgiving,
+  but a malformed target (missing `xyz_world`) silently sorts as if at the
+  origin. If the vision contract is stable, validating target shape once in
+  `on_targets` would catch that at the boundary.
+- **`find_nearest_confirmed` recomputes distances on every call.** Negligible for
+  a handful of targets; irrelevant unless the target list grows large.

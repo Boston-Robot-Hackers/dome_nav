@@ -28,7 +28,7 @@ from dome_nav.frontier_explorer import (
     find_frontier_clusters,
     nudge_toward_robot,
     pick_best_frontier,
-    _frontier_diag,
+    frontier_diag,
 )
 
 # ---------------------------------------------------------------------------
@@ -498,7 +498,7 @@ def main():
             prefer_farthest=params.prefer_farthest,
         )
         if target_xy is None:
-            algo.latest_diag = _frontier_diag(
+            algo.latest_diag = frontier_diag(
                 algo.latest_clusters, info, robot_xy,
                 params.min_frontier_size, params.min_frontier_dist,
                 params.max_frontier_dist,

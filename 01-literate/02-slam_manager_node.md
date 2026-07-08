@@ -1,185 +1,113 @@
 ---
-version: "3.2"
-generated: "2026-07-03"
+version: "3.3"
+generated: "2026-07-08"
 ---
 
-# SlamManagerNode — Lifecycle Node for SLAM Persistence
+# slam_manager_node.py — Persisting the Map That slam_toolbox Builds
 
-## Overview
-
-`slam_manager_node.py` watches slam_toolbox's `/map` topic and periodically
-serialises the pose graph to disk so a mapping session survives a restart. It is
-a **managed (lifecycle) node**: its ROS entities and its save timer come and go
-with explicit `configure`/`activate`/`deactivate`/`cleanup`/`shutdown`
-transitions rather than living for the whole process.
-
-Earlier revisions split the logic into a pure-Python `SlamManager` plus a thin
-delegating wrapper. That class wrapped roughly six lines of trivial state (a
-boolean and one `makedirs`), so the wrapper and its property-proxies cost more
-than they saved; the logic was folded back into the node and the extra class
-deleted. What justified the rewrite was not the cleanup but a real bug — see
-*Shutdown*.
+slam_toolbox happily builds a map in memory, but it only writes that map to disk
+when someone asks it to via its `serialize_map` service. `SlamManagerNode` is the
+"someone": a small **lifecycle** node whose entire job is to notice when a map
+exists and to serialize slam_toolbox's pose graph to disk — on first sight, on a
+timer, and (critically) at shutdown. Since the 2026-07-08 config refactor,
+slam_toolbox itself no longer carries a `map_file_name`, so this node is the
+*only* thing persisting maps.
 
 ## Why a lifecycle node
 
-A plain `Node` has no structured shutdown hook. The old `main()` called
-`save_map()` from a `finally:` block *after* `rclpy.spin()` had already returned,
-firing an async service call whose done-callback could never run because nothing
-was spinning the executor — the map was silently lost on every clean exit
-(issue I01). A `LifecycleNode` gives an `on_shutdown` transition that runs
-synchronously while the node is still usable, which is the right home for a
-final, blocking save.
+The node's shape is dictated by one hard-won bug (I01): the map was being lost on
+shutdown. The original plain `Node` fired the final save asynchronously *after*
+`spin()` had already returned, so the callback never ran. Making this a
+`LifecycleNode` gives a real `on_shutdown` transition that runs before the node
+is destroyed, where a **synchronous** save can complete.
+
+```python
+class SlamManagerNode(LifecycleNode):
+    DEFAULT_SAVE_PERIOD_SEC = 30.0
+```
+
+The lifecycle also gives clean start/stop semantics for the subscription, the
+status publisher, the service client, and the periodic timer — each created in
+`on_configure`/`on_activate` and torn down in `on_deactivate`/`on_cleanup`.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Unconfigured
-    Unconfigured --> Inactive: on_configure (create sub/pub/client)
-    Inactive --> Active: on_activate (start 30s timer)
-    Active --> Inactive: on_deactivate (stop timer)
-    Inactive --> Finalized: on_shutdown (synchronous save)
-    Active --> Finalized: on_shutdown (synchronous save)
+    [*] --> unconfigured
+    unconfigured --> inactive: on_configure (subs, pub, client)
+    inactive --> active: on_activate (start save timer)
+    active --> inactive: on_deactivate (stop timer)
+    active --> finalized: on_shutdown (SYNC final save)
+    inactive --> finalized: on_cleanup
 ```
 
-## Configure: build the I/O
+## Where and when it saves
 
-Resources are created in `on_configure`, not `__init__`, so the node can be
-reconfigured cleanly. The status publisher is a *lifecycle* publisher — it only
-emits while the node is active.
+The persist path is a parameter (`map_persist_path`, defaulting to
+`~/.dome/slam_map`) — the launch files set it to `~/.dome/slam_maps/<map_name>`,
+which is how `--map_name` reaches the saved file. The save cadence is likewise a
+parameter (`save_period_sec`, default 30 s; sim uses 120 s to reduce log noise).
+
+Three triggers cause a save:
+
+1. **First map received** — proof slam is actually mapping, so capture it
+   immediately:
+   ```python
+   def on_map(self, msg):
+       first_map = not self.map_ready
+       if first_map:
+           self.map_ready = True
+           self.get_logger().info("Map received — slam_toolbox is mapping.")
+       self.status_pub.publish(String(data="mapping"))
+       if first_map:
+           self.save_map_async()
+   ```
+   `on_map` also publishes a `/dome_nav/slam_status` heartbeat every message so
+   the rest of the system can tell mapping is live.
+2. **Periodic timer** — every `save_period_sec` while a map exists.
+3. **Shutdown** — a final synchronous save (see below).
+
+## Async vs sync saving: the same request, two waits
+
+Both `save_map_async` and `save_map_sync` build the identical
+`SerializePoseGraph` request; they differ only in how they wait. The timer and
+first-map paths fire-and-forget:
 
 ```python
-    def on_configure(self, state):
-        self.map_sub = self.create_subscription(OccupancyGrid, "/map", self.on_map, 10)
-        self.status_pub = self.create_lifecycle_publisher(String, "/dome_nav/slam_status", 10)
-        self.serialize_client = self.create_client(
-            SerializePoseGraph, "/slam_toolbox/serialize_map"
-        )
-        return TransitionCallbackReturn.SUCCESS
+def save_map_async(self):
+    if not self.prepare_save():
+        return
+    future = self.serialize_client.call_async(self.serialize_request())
+    future.add_done_callback(self.on_save_done)
 ```
 
-## Activate: start the save timer
-
-The save timer only exists while the node is active. `on_activate` must call
-`super().on_activate(state)` so the lifecycle publisher actually starts
-emitting.
+Shutdown must not fire-and-forget — it spins the call to completion before the
+node dies, which is the actual fix for I01:
 
 ```python
-    def on_activate(self, state):
-        self.save_timer = self.create_timer(self.save_period_sec, self.periodic_save)
-        return super().on_activate(state)
+def save_map_sync(self):
+    if not self.prepare_save():
+        return
+    future = self.serialize_client.call_async(self.serialize_request())
+    rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+    self.on_save_done(future)
 ```
 
-**Changed 2026-07-02**: the save period used to be a hardcoded class constant,
-`SAVE_PERIOD_SEC = 30.0`. It's now a declared ROS parameter, `save_period_sec`,
-read in `__init__` with `DEFAULT_SAVE_PERIOD_SEC = 30.0` as the default —
-unchanged behavior for the real robot, but `sim_explore.launch.py` sets it to
-`120.0` for Gazebo testing, since the 30-second default's repeated "Pose graph
-saved" logging was distracting during manual sim debugging where sessions run
-much longer than a typical mapping run. Note: the manual single-purpose debug
-launch files (`sim_robot.launch.py`, `sim_nav.launch.py`, see
-`11-sim_explore_launch.md`) don't start `slam_manager_node` at all — they only
-bring up `slam_toolbox` itself, not dome_nav's map-persistence wrapper around
-it — so this node currently only runs via `sim_explore.launch.py` or the real
-robot's `robot_map.launch.py`/`robot_explore.launch.py`.
+`prepare_save` is the shared guard: it ensures the target directory exists and
+waits up to 5 s for the `serialize_map` service, warning (not crashing) if
+slam_toolbox isn't there — a graceful degrade if the node is run without slam.
 
-`on_deactivate` and `on_cleanup` tear these down through a shared
-`destroy_entities()` helper so there is one place that knows how to release the
-timer, subscription, and publisher.
+## Observations / possible improvements
 
-## Map subscription
-
-The first `/map` flips `map_ready`, logs once, and immediately triggers an async
-save. This guarantees at least one persist even if the 30-second timer hasn't
-fired before shutdown. Later messages just re-publish the `"mapping"` status
-without log spam.
-
-```python
-    def on_map(self, msg: OccupancyGrid):
-        first_map = not self.map_ready
-        if first_map:
-            self.map_ready = True
-            self.get_logger().info("Map received — slam_toolbox is mapping.")
-        status = String()
-        status.data = "mapping"
-        self.status_pub.publish(status)
-        if first_map:
-            self.save_map_async()
-```
-
-The save-on-first-receipt is important because `on_shutdown` sends a service call
-to slam_toolbox, which itself is also shutting down on Ctrl-C. The race is
-unreliable; an earlier save wins.
-
-## Saving: one request, two drive modes
-
-Both the periodic timer and the shutdown hook build the same request, but they
-drive the future differently. The periodic path is fire-and-forget; the shutdown
-path blocks until the service answers so the write completes before the node
-dies.
-
-```python
-    def save_map_async(self):
-        if not self.prepare_save():
-            return
-        future = self.serialize_client.call_async(self.serialize_request())
-        future.add_done_callback(self.on_save_done)
-
-    def save_map_sync(self):
-        if not self.prepare_save():
-            return
-        future = self.serialize_client.call_async(self.serialize_request())
-        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
-        self.on_save_done(future)
-```
-
-`prepare_save()` creates the parent directory and waits briefly for the service,
-so neither drive mode can fail on a missing path or an absent server.
-
-## Shutdown: the synchronous save
-
-```python
-    def on_shutdown(self, state):
-        if self.map_ready:
-            self.save_map_sync()
-        self.destroy_entities()
-        return TransitionCallbackReturn.SUCCESS
-```
-
-`main()` drives the node through its states explicitly and triggers the shutdown
-transition in a `finally:` block, so the save runs whether exit is normal or via
-Ctrl-C:
-
-```python
-def main():
-    rclpy.init()
-    node = SlamManagerNode()
-    node.trigger_configure()
-    node.trigger_activate()
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        try:
-            node.trigger_shutdown()
-        except Exception as e:
-            node.get_logger().warning(f"trigger_shutdown failed on exit: {e}")
-        node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
-```
-
-`trigger_shutdown()` is wrapped because rclpy's SIGINT handler invalidates the
-context before the `finally` block runs, making the lifecycle state machine's
-transition publisher raise. The warning logs the reason without crashing.
-
-## Observations
-
-- The node self-drives its transitions in `main()` with `lifecycle_waittime=None`
-  in the launch file to prevent better_launch from also trying to drive them. If
-  it is ever placed under a Nav2 `lifecycle_manager`, remove the explicit
-  `trigger_*` calls and the `lifecycle_waittime` override.
-- `on_shutdown` still attempts a sync save even though the race with slam_toolbox
-  usually loses. Save-on-first-receipt is the reliable path; `on_shutdown` is a
-  best-effort bonus.
-- TF07 T04 verified on live robot (2026-06-18): fresh `.posegraph`/`.data` written,
-  `Pose graph saved` log appeared.
+- **`on_map` publishes `"mapping"` on every single map message.** That's a lot of
+  redundant status traffic; a state-change-only publish (or a slow heartbeat
+  timer) would be lighter.
+- **Load/resume is not this node's job.** It only saves. With slam_toolbox's
+  `map_file_name` now dropped, there is no auto-resume of a prior map — re-running
+  a map name overwrites it. If incremental multi-session mapping is ever wanted,
+  this node (or the slam config) is where a load-on-start would go.
+- **The 5 s service timeout is duplicated** in `prepare_save` and
+  `save_map_sync`. Fine, but a single constant would document the intent.
+- **`main()` drives the lifecycle manually** (`trigger_configure` then
+  `trigger_activate`), so this node self-activates rather than waiting on an
+  external lifecycle manager — convenient standalone, but means it won't
+  participate in a coordinated bringup sequence.

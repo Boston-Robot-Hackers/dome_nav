@@ -1,68 +1,77 @@
 ---
-version: "1.1"
-generated: "2026-06-25"
+version: "1.2"
+generated: "2026-07-08"
 ---
 
-# ExploreTelemetry — JSONL Session Logger
+# explore_telemetry.py — Append-Only Session Logging
 
-## Overview
+Exploration is hard to debug live: goals come and go asynchronously, the map
+changes underneath you, and failures happen minutes into a run. `TelemetryWriter`
+exists so that after any session you can reconstruct exactly what happened from a
+flat, greppable log. It is deliberately tiny — one class, three methods — and has
+no ROS dependency, so the node can log without any special infrastructure.
 
-`explore_telemetry.py` is a thin file-writing helper extracted from
-`explore_manager_node` to keep telemetry concerns out of the node. It opens a
-JSONL file per exploration session and writes one event per line.
-
-## File Naming
-
-All sessions for the same map on the same date share one file:
-
-```
-~/.dome/telemetry/explore-<map_name>-<YYYYMMDD>.jsonl
-```
-
-The file is opened in append mode — multiple exploration runs on the same day
-accumulate in one file. Each `session_start` / `session_end` pair marks a
-distinct run within the file. Use `grep '"event": "session_start"'` to find
-the boundary between runs.
-
-## Event Format
-
-Each line is a JSON object with `event`, `ts` (monotonic seconds), and
-event-specific fields:
-
-```jsonl
-{"event": "session_start", "ts": 100.1, "map_name": "basement", "start_xy": [0.0, 0.0], "params": {...}}
-{"event": "goal_sent",     "ts": 102.3, "goal_num": 1, "goal_xy": [1.2, 3.4], "dist_m": 2.1, ...}
-{"event": "goal_result",   "ts": 106.8, "goal_num": 1, "status": "reached", "elapsed_s": 4.5, ...}
-{"event": "no_frontier",   "ts": 110.0, "reason": "filtered", "tick": 1, "patience": 8,
-                           "raw_clusters": 12, "blacklisted": 3,
-                           "too_small": 10, "large_clusters": 2, "all_cells_too_close": 0}
-{"event": "no_frontier",   "ts": 110.5, "reason": "no_map"}
-{"event": "no_frontier",   "ts": 111.0, "reason": "no_tf"}
-{"event": "session_end",   "ts": 112.0, "reason": "done", "goals_sent": 5, "reached": 4, "failed": 1}
-```
-
-`ts` uses `time.monotonic()` — wall-clock-relative, not absolute. Sufficient
-for computing elapsed times within a session; not suitable for cross-session
-comparison.
-
-## Usage
+## One file per map per day, append mode
 
 ```python
-telemetry = TelemetryWriter(map_name, self.get_logger().info)
-telemetry.write("goal_sent", goal_num=1, goal_xy=[1.2, 3.4])
-telemetry.close()
+class TelemetryWriter:
+    def __init__(self, map_name: str, log_fn):
+        telemetry_dir = os.path.join(os.path.expanduser("~"), ".dome", "telemetry")
+        os.makedirs(telemetry_dir, exist_ok=True)
+        date = time.strftime("%Y%m%d")
+        path = os.path.join(telemetry_dir, f"explore-{map_name}-{date}.jsonl")
+        self.file = open(path, "a")
+        log_fn(f"Telemetry: {path}")
 ```
 
-## Observations
+The filename encodes both the map name and the date, and the file is opened in
+**append** mode. That choice matters: multiple exploration sessions against the
+same map on the same day accumulate into one file rather than clobbering each
+other, so you can compare runs. The constructor also takes a `log_fn` (the node
+passes `self.get_logger().info`) purely so it can announce the path without
+importing a logger — a small dependency-injection touch that keeps the module
+ROS-free.
 
-- `time.monotonic()` resets between process restarts — timestamps are only
-  meaningful within one session. If cross-session wall time is needed, switch
-  to `time.time()` or include an ISO timestamp field.
-- `flush()` on every write adds latency but ensures no events are lost if the
-  node crashes. For high-frequency logging, batch writes and flush on a timer.
-- `no_frontier` `reason` field distinguishes three causes: `no_map` (map not
-  yet received), `no_tf` (TF unavailable), `filtered` (clusters exist but none
-  passed size/distance/blacklist filters). `filtered` events include diagnostic
-  counters: `raw_clusters`, `too_small`, `large_clusters`, `all_cells_too_close`.
-  If `all_cells_too_close > 0` all valid clusters have every cell within
-  `MIN_FRONTIER_DIST` of the robot — reduce that constant.
+## JSON Lines, flushed every write
+
+```python
+def write(self, event: str, **kwargs):
+    row = {"event": event, "ts": round(time.monotonic(), 3), **kwargs}
+    self.file.write(json.dumps(row) + "\n")
+    self.file.flush()
+```
+
+Each record is one JSON object on its own line (the JSONL format), which is ideal
+for this: you can `tail -f` it live, `grep` for an event type, or parse it
+line-by-line without loading the whole file. Every row automatically carries an
+`event` tag and a monotonic timestamp; the caller supplies everything else as
+keyword arguments, so the schema is whatever the node decides per event
+(`goal_sent`, `goal_result`, `no_frontier`, `session_start`, `session_end`).
+
+The **flush on every write** is the deliberate reliability choice. Exploration
+runs often end with a `kill` or a crash, and an unflushed buffer would lose
+exactly the records that explain the ending. Flushing trades a little throughput
+(negligible at a few events per second) for the guarantee that what happened is
+on disk the instant it happens.
+
+```python
+def close(self):
+    self.file.close()
+```
+
+`close()` is called from the node's shutdown path, after a final `session_end`
+record is written — so even Ctrl-C leaves a well-formed log with a terminating
+event.
+
+## Observations / possible improvements
+
+- **`monotonic()` timestamps aren't wall-clock.** They're perfect for measuring
+  durations within a run but can't be correlated to ROS log timestamps or
+  `/clock` after the fact. Adding a wall-clock or sim-time field per row would
+  make cross-referencing with Nav2 logs easier.
+- **No schema/versioning.** Analysis scripts key off field names that the node
+  can change freely. A `schema` or writer-version field would let downstream
+  tooling adapt across format changes.
+- **Flush-per-write** is the right default here, but if event rates ever climb
+  (e.g. per-tick logging) a periodic flush would cost less while keeping most of
+  the crash-safety.
