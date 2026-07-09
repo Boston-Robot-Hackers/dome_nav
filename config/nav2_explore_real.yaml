@@ -409,7 +409,9 @@ collision_monitor:
       simulation_time_step: 0.1
       min_points: 6
       visualize: false
-      enabled: true
+      enabled: false  # DIAGNOSTIC (crawl isolation): temporarily off to measure how
+                      # much near-wall slowdown is the approach throttle vs the costmap.
+                      # Restore to true after the isolation run.
     observation_sources:
     - scan
     scan:
