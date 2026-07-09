@@ -208,14 +208,14 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      robot_radius: 0.22
+      robot_radius: 0.15  # upstream: 0.22 -- matches dome3 footprint
       plugins:
       - voxel_layer
       - inflation_layer
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.7
+        cost_scaling_factor: 30.0  # upstream: 3.0 -- steep decay keeps zone tight above inscribed radius
+        inflation_radius: 0.17  # upstream: 0.7 -- just above circumscribed radius 0.164
       voxel_layer:
         plugin: nav2_costmap_2d::VoxelLayer
         enabled: true
@@ -247,9 +247,12 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
-      robot_radius: 0.22
+      robot_radius: 0.15  # upstream: 0.22 -- matches dome3 footprint
       resolution: 0.05
       track_unknown_space: true
+      lethal_cost_threshold: 65  # upstream: 100
+      unknown_cost_value: -1     # upstream: 255 -- matches OccupancyGrid "-1 = unknown"
+      trinary_costmap: true
       plugins:
       - static_layer
       - obstacle_layer
@@ -273,8 +276,8 @@ global_costmap:
         map_subscribe_transient_local: true
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.7
+        cost_scaling_factor: 15.0  # upstream: 3.0
+        inflation_radius: 0.3  # upstream: 0.7
       always_send_full_costmap: true
 map_saver:
   ros__parameters:
