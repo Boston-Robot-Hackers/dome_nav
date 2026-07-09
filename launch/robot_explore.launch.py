@@ -62,8 +62,8 @@ def robot_explore_launch(
         params={
             "max_explore_radius": max_explore_radius,
             "max_frontier_dist": 0.0,
-            "min_frontier_dist": 1.3,
-            "prefer_farthest": False,
+            "min_frontier_dist": 0.5,
+            "prefer_farthest": True,
             "min_frontier_size": 10,
             "map_name": map_name,
             "use_sim_time": use_sim_time == "true",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# pluggable_explore_manager_node.py — autonomous frontier exploration via Nav2 (pluggable algorithm)
+# pluggable_explore_manager_node.py — Nav2 frontier exploration, pluggable algorithm
 # Author: Pito Salas and Claude Code
 # Open Source Under MIT license
 
@@ -26,11 +26,25 @@ from dome_nav.explore_context import (
 from dome_nav.explore_telemetry import TelemetryWriter
 from dome_nav.explore_markers import build_explore_markers
 from dome_nav.frontier_algorithm import FrontierAlgorithm
-from dome_nav.frontier_explorer import MapInfo
+from dome_nav.frontier_explorer import MapInfo, cell_to_world
 
 XY = tuple[float, float]
 
 GOAL_STATUS_NAMES = {4: "succeeded", 5: "canceled", 6: "aborted"}
+
+# ComputePathToPose error codes (200 range)
+# FollowPath error codes (100 range)
+NAV2_ERROR_CODES = {
+    0: "NONE",
+    100: "FOLLOW/UNKNOWN", 101: "FOLLOW/INVALID_CONTROLLER", 102: "FOLLOW/TF_ERROR",
+    103: "FOLLOW/INVALID_PATH", 104: "FOLLOW/PATIENCE_EXCEEDED",
+    105: "FOLLOW/FAILED_TO_MAKE_PROGRESS", 106: "FOLLOW/NO_VALID_CONTROL",
+    107: "FOLLOW/CONTROLLER_TIMED_OUT",
+    200: "PLAN/UNKNOWN", 201: "PLAN/INVALID_PLANNER", 202: "PLAN/TF_ERROR",
+    203: "PLAN/START_OUTSIDE_MAP", 204: "PLAN/GOAL_OUTSIDE_MAP",
+    205: "PLAN/START_OCCUPIED", 206: "PLAN/GOAL_OCCUPIED",
+    207: "PLAN/TIMEOUT", 208: "PLAN/NO_VALID_PATH",
+}
 
 
 class PluggableExploreManagerNode(Node):
@@ -64,6 +78,12 @@ class PluggableExploreManagerNode(Node):
         self.map_sub = self.create_subscription(
             OccupancyGrid, "/map", self.on_map, 10
         )
+        self.global_costmap_sub = self.create_subscription(
+            OccupancyGrid, "/global_costmap/costmap", self.on_global_costmap, 1
+        )
+        self.local_costmap_sub = self.create_subscription(
+            OccupancyGrid, "/local_costmap/costmap", self.on_local_costmap, 1
+        )
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         self.create_timer(1.0 / self.EXPLORE_HZ, self.explore_tick)
@@ -82,7 +102,7 @@ class PluggableExploreManagerNode(Node):
         self.prefer_farthest: bool = self.get_parameter("prefer_farthest").value
         self.min_frontier_size: int = self.get_parameter("min_frontier_size").value
         self.map_name: str = self.get_parameter("map_name").value
-        self.telemetry = TelemetryWriter(self.map_name, self.get_logger().info)
+        self.telemetry = TelemetryWriter(self.get_logger().info)
 
         self.params = ExploreParams(
             max_explore_radius=self.max_explore_radius,
@@ -95,12 +115,191 @@ class PluggableExploreManagerNode(Node):
 
         self.latest_map: OccupancyGrid | None = None
         self.latest_map_info: MapInfo | None = None
+        self.latest_global_costmap: OccupancyGrid | None = None
+        self.latest_local_costmap: OccupancyGrid | None = None
+        self.paused_on_failure = False
         self.reset_session()
         self.clear_active_goal()
         self.get_logger().info("PluggableExploreManagerNode ready.")
 
     def on_map(self, msg: OccupancyGrid):
         self.latest_map = msg
+
+    def on_global_costmap(self, msg: OccupancyGrid):
+        self.latest_global_costmap = msg
+
+    def on_local_costmap(self, msg: OccupancyGrid):
+        self.latest_local_costmap = msg
+
+    def costmap_cell_cost(self, costmap: OccupancyGrid | None, xy: XY) -> int | None:
+        if costmap is None:
+            return None
+        info = costmap.info
+        col = int((xy[0] - info.origin.position.x) / info.resolution)
+        row = int((xy[1] - info.origin.position.y) / info.resolution)
+        if col < 0 or col >= info.width or row < 0 or row >= info.height:
+            return None
+        return costmap.data[row * info.width + col]
+
+    def dump_frontier_exhaustion(self, robot_xy: XY | None):
+        sep = "=" * 60
+        clusters = self.algorithm.latest_clusters
+        info = self.latest_map_info
+        lines = [
+            sep,
+            f"FRONTIER EXHAUSTION — {len(clusters)} raw clusters,"
+            f" patience={self.NO_FRONTIER_PATIENCE}",
+            f"  filters: min_size={self.params.min_frontier_size}"
+            f"  min_dist={self.params.min_frontier_dist}m"
+            f"  max_dist={self.params.max_frontier_dist}m"
+            f"  blacklisted={len(self.blacklist)}",
+            f"  robot_xy: {robot_xy}",
+            "",
+        ]
+        if info is None or not clusters:
+            lines.append("  (no map info or no clusters)")
+        else:
+            rx, ry = robot_xy if robot_xy else (0.0, 0.0)
+            bl = self.blacklist
+            br = self.params.blacklist_radius
+            for i, cl in enumerate(clusters):
+                cx = sum(cell_to_world(idx, info)[0] for idx in cl) / len(cl)
+                cy = sum(cell_to_world(idx, info)[1] for idx in cl) / len(cl)
+                centroid_dist = (
+                    math.sqrt((cx - rx)**2 + (cy - ry)**2) if robot_xy else -1.0
+                )
+                too_small = len(cl) < self.params.min_frontier_size
+                # nearest non-blacklisted cell distance
+                min_cell_dist = float("inf")
+                for cell_idx in cl:
+                    wx, wy = cell_to_world(cell_idx, info)
+                    if any(math.sqrt((wx-bx)**2+(wy-by)**2) < br for bx, by in bl):
+                        continue
+                    d = math.sqrt((wx-rx)**2+(wy-ry)**2) if robot_xy else 0.0
+                    min_cell_dist = min(min_cell_dist, d)
+                min_dist = self.params.min_frontier_dist
+                max_dist = self.params.max_frontier_dist
+                min_size = self.params.min_frontier_size
+                reasons = []
+                if too_small:
+                    reasons.append(f"too_small({len(cl)}<{min_size})")
+                if min_cell_dist == float("inf"):
+                    reasons.append("all_blacklisted")
+                elif min_dist > 0 and min_cell_dist < min_dist:
+                    reasons.append(f"too_close({min_cell_dist:.2f}<{min_dist})")
+                elif max_dist > 0 and min_cell_dist > max_dist:
+                    reasons.append(f"too_far({min_cell_dist:.2f}>{max_dist})")
+                status = "SKIP:" + ",".join(reasons) if reasons else "OK"
+                min_str = (
+                    "inf" if min_cell_dist == float("inf") else f"{min_cell_dist:.2f}m"
+                )
+                lines.append(
+                    f"  [{i:2d}] centroid=({cx:.2f},{cy:.2f})"
+                    f"  size={len(cl):4d}"
+                    f"  centroid_dist={centroid_dist:.2f}m"
+                    f"  nearest_cell={min_str}"
+                    f"  {status}"
+                )
+        lines.append(sep)
+        print("\n".join(lines), flush=True)
+
+    def costmap_radius_costs(
+        self, costmap: OccupancyGrid | None, xy: XY, radius_cells: int = 4
+    ) -> str:
+        if costmap is None:
+            return "n/a"
+        info = costmap.info
+        cx = int((xy[0] - info.origin.position.x) / info.resolution)
+        cy = int((xy[1] - info.origin.position.y) / info.resolution)
+        costs = []
+        for dr in range(-radius_cells, radius_cells + 1):
+            row = []
+            for dc in range(-radius_cells, radius_cells + 1):
+                col, r = cx + dc, cy + dr
+                if 0 <= col < info.width and 0 <= r < info.height:
+                    v = costmap.data[r * info.width + col]
+                    if v == 254:
+                        row.append("XXX")
+                    elif v == 255:
+                        row.append("???")
+                    elif v < 0:
+                        row.append("???")
+                    elif dc == 0 and dr == 0:
+                        row.append(f"[{v:3d}]")
+                    else:
+                        row.append(f"{v:4d}")
+                else:
+                    row.append("    ")
+            costs.append(" ".join(row))
+        return "\n      ".join(costs)
+
+    def dump_failure_diagnostics(
+        self, goal_xy: XY, robot_xy: XY | None, status: str, elapsed: float,
+        nav2_error_code: int = 0, nav2_error_msg: str = "",
+    ):
+        sep = "=" * 60
+        error_name = NAV2_ERROR_CODES.get(nav2_error_code, f"code={nav2_error_code}")
+        lines = [
+            sep,
+            f"NAV FAILURE: goal #{self.goal_count}  status={status}  elapsed={elapsed}s",
+            (
+                f"  nav2 error: {error_name}  ({nav2_error_msg})"
+                if nav2_error_msg else f"  nav2 error: {error_name}"
+            ),
+            f"  goal_xy  : ({goal_xy[0]:.3f}, {goal_xy[1]:.3f})",
+        ]
+        if robot_xy:
+            dist = math.sqrt((goal_xy[0]-robot_xy[0])**2 + (goal_xy[1]-robot_xy[1])**2)
+            lines.append(f"  robot_xy : ({robot_xy[0]:.3f}, {robot_xy[1]:.3f})  dist={dist:.2f}m")
+        else:
+            lines.append("  robot_xy : unavailable")
+
+        costmaps = [
+            ("global", self.latest_global_costmap),
+            ("local", self.latest_local_costmap),
+        ]
+        for label, cm in costmaps:
+            gc = self.costmap_cell_cost(cm, goal_xy)
+            rc = self.costmap_cell_cost(cm, robot_xy) if robot_xy else None
+            lines.append(
+                f"  {label:6s} costmap @ goal={gc!s:>4}  @ robot={rc!s:>4}"
+                f"  (lethal=254 inscribed=253 unknown=255)"
+            )
+            lines.append(f"  {label:6s} costmap 4-cell radius around GOAL (XXX=lethal ???=unknown):")
+            lines.append(f"      {self.costmap_radius_costs(cm, goal_xy, 4)}")
+            if robot_xy:
+                lines.append(f"  {label:6s} costmap 4-cell radius around ROBOT:")
+                lines.append(f"      {self.costmap_radius_costs(cm, robot_xy, 4)}")
+
+        lines.append(f"  blacklist: {len(self.blacklist)} entries")
+        if self.blacklist:
+            entries = "  ".join(f"({x:.2f},{y:.2f})" for x, y in sorted(self.blacklist))
+            lines.append(f"    {entries}")
+
+        clusters = getattr(self.algorithm, "latest_clusters", [])
+        lines.append(f"  frontiers: {len(clusters)} clusters available")
+        info = self.latest_map_info
+        for i, cl in enumerate(clusters[:10]):
+            if info is not None and cl:
+                xs = [cell_to_world(idx, info)[0] for idx in cl]
+                ys = [cell_to_world(idx, info)[1] for idx in cl]
+                cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
+                lines.append(f"    [{i}] centroid=({cx:.2f},{cy:.2f}) size={len(cl)}")
+            else:
+                lines.append(f"    [{i}] size={len(cl)} (no map info)")
+        if len(clusters) > 10:
+            lines.append(f"    ... and {len(clusters)-10} more")
+
+        lines.append(sep)
+        resume_cmd = (
+            "To resume: ros2 topic pub --once /intent "
+            "std_msgs/msg/String "
+            "'{data: \"{\\\"name\\\": \\\"exploration_resume\\\"}\"}'"
+        )
+        lines.append(resume_cmd)
+        lines.append(sep)
+        print("\n".join(lines), flush=True)
+        self.paused_on_failure = True
 
     def on_intent(self, msg: String):
         try:
@@ -136,11 +335,17 @@ class PluggableExploreManagerNode(Node):
             )
         elif name == "exploration_stop":
             self.stop_exploring("idle")
+        elif name == "exploration_resume":
+            if self.paused_on_failure:
+                self.paused_on_failure = False
+                self.get_logger().info("Resumed by exploration_resume intent.")
 
     def explore_tick(self):
         self.publish_status(self.state)
         self.publish_markers()
         if self.state != "exploring":
+            return
+        if self.paused_on_failure:
             return
         if self.has_active_goal:
             # The frontier choice is only reconsidered when the current goal
@@ -215,6 +420,7 @@ class PluggableExploreManagerNode(Node):
                 self.get_logger().info(
                     "Frontier patience exhausted — exploration done."
                 )
+                self.dump_frontier_exhaustion(robot_xy)
                 self.stop_exploring("done")
             return
         self.no_frontier_count = 0
@@ -289,6 +495,7 @@ class PluggableExploreManagerNode(Node):
             )
             self.blacklist.add(centroid)
             self.has_active_goal = False
+            self.dump_failure_diagnostics(xy, self.robot_xy_in_map(), "rejected", 0.0)
             return
         self.goal_handle = handle
         result_future = handle.get_result_async()
@@ -318,6 +525,12 @@ class PluggableExploreManagerNode(Node):
                 f"Goal #{self.goal_count} FAILED ({xy[0]:.2f},{xy[1]:.2f})"
                 f" status={status_name} after {elapsed}s — blacklisting."
             )
+            if result.status == GoalStatus.STATUS_ABORTED:
+                self.dump_failure_diagnostics(
+                    xy, robot_xy, status_name, elapsed,
+                    nav2_error_code=result.result.error_code,
+                    nav2_error_msg=result.result.error_msg,
+                )
         self.telemetry.write(
             "goal_result", goal_num=self.goal_count,
             goal_xy=[round(xy[0], 3), round(xy[1], 3)],

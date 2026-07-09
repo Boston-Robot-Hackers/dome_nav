@@ -1,6 +1,6 @@
 ---
-version: "1.6"
-generated: "2026-07-08"
+version: "1.7"
+generated: "2026-07-09"
 ---
 
 # PluggableExploreManagerNode — Autonomous Frontier Exploration over Nav2
@@ -12,7 +12,7 @@ Nav2's job. Its entire responsibility is the *loop*: watch the map, ask the
 algorithm for a goal, send it, watch how it turns out, blacklist what fails, and
 know when to stop.
 
-As of 2026-07-08 this is the explorer for **both simulation and the real robot**
+As of 2026-07-09 this is the explorer for **both simulation and the real robot**
 — `robot_explore.launch.py` and the sim launch files all run this same node,
 differing only by parameter values. The older standalone `explore_manager_node`
 was retired.
@@ -47,25 +47,22 @@ them. This is the mechanism that lets sim and real share one node.
 ```python
 self.declare_parameter("max_explore_radius", 0.0)      # 0 = unlimited
 self.declare_parameter("max_frontier_dist", 15.0)
-self.declare_parameter("min_frontier_dist", 1.3)       # sim lowers to 0.9
-self.declare_parameter("prefer_farthest", False)       # sim uses True
+self.declare_parameter("min_frontier_dist", 1.3)       # real: 0.5; sim: 0.9
+self.declare_parameter("prefer_farthest", True)        # both real and sim
 self.declare_parameter("min_frontier_size", 10)        # sim uses 5
 self.declare_parameter("map_name", "unknown")
 ```
 
-`min_frontier_dist` became a parameter on 2026-07-08: the real robot keeps the
-1.3 m floor ("never send a goal closer than ~1 m," since `goal_inset` later pulls
-the sent goal 0.3 m back toward the robot), while sim uses 0.9 m. That fix
-resolved a startup deadlock where the only adequately sized frontier sat inside
-the 1.3 m floor, so no goal was ever sent and exploration gave up immediately.
-The values are bundled into an `ExploreParams` and handed to the algorithm via
-the context.
+`prefer_farthest` is `True` for both real and sim as of 2026-07-09 — farthest-first
+selection drives the robot toward unmapped area at the map periphery rather than
+re-visiting nearby frontiers. `min_frontier_dist` for real is 0.5 m (the node
+default is 1.3 m, the launch file overrides to 0.5 m). All values are bundled
+into an `ExploreParams` and handed to the algorithm via the context.
 
 ## The state machine
 
-Exploration is a tiny three-state machine. (An earlier design added a
-`spinning` startup state that commanded a 360° in-place rotation before seeking
-frontiers; it was removed on 2026-07-08 as unwanted.)
+Exploration is a three-state machine with an optional pause overlay. (An earlier
+design added a `spinning` startup state; removed 2026-07-08 as unwanted.)
 
 ```mermaid
 stateDiagram-v2
@@ -75,6 +72,8 @@ stateDiagram-v2
     exploring --> done: frontier patience exhausted
     exploring --> idle: exploration_stop intent
     done --> exploring: exploration_start intent
+    exploring --> paused: NAV2 abort (paused_on_failure=True)
+    paused --> exploring: exploration_resume intent
 ```
 
 Intents arrive as JSON on `/intent`. `exploration_start` (only honored from
@@ -82,6 +81,17 @@ Intents arrive as JSON on `/intent`. `exploration_start` (only honored from
 `exploring`, and logs a `session_start` telemetry record. `exploration_stop`
 cancels any active goal and returns to `idle`. Malformed JSON is warned about and
 ignored — a boundary that never crashes the node.
+
+The **pause-on-failure** overlay (`paused_on_failure` flag) activates whenever
+Nav2 aborts a goal. While paused the tick loop skips frontier search, preventing
+an immediate retry of a likely-stuck situation. A human can inspect the full
+diagnostic dump printed to stdout (costmap heatmaps, blacklist, available
+frontiers) and then resume by publishing an `exploration_resume` intent:
+
+```bash
+ros2 topic pub --once /intent std_msgs/msg/String \
+  'data: "{\"name\": \"exploration_resume\"}"'
+```
 
 ```python
 name = intent.get("name", "")
@@ -92,6 +102,9 @@ if name == "exploration_start" and self.state in ("idle", "done"):
     ...
 elif name == "exploration_stop":
     self.stop_exploring("idle")
+elif name == "exploration_resume":
+    if self.paused_on_failure:
+        self.paused_on_failure = False
 ```
 
 ## The tick loop
@@ -106,6 +119,8 @@ def explore_tick(self):
     self.publish_markers()
     if self.state != "exploring":
         return
+    if self.paused_on_failure:
+        return                      # wait for exploration_resume intent
     if self.has_active_goal:
         # The frontier choice is only reconsidered when the current goal
         # finishes (reached, aborted, or timed out), not mid-flight.
@@ -216,19 +231,27 @@ if (time.monotonic() - self.goal_start_time) <= self.GOAL_TIMEOUT_S:
 ... cancel_goal_async(); self.blacklist.add(self.current_goal_centroid); clear_active_goal()
 ```
 
-## Observability: status, markers, telemetry
+## Observability: status, markers, telemetry, diagnostics
 
-Three output streams make the node debuggable without attaching a debugger:
+Four output streams make the node debuggable without attaching a debugger:
 
 - **`/explore/status`** (JSON on a `String`): state plus `reached`/`failed`
   counts, and while exploring the current goal, distance, elapsed time, blacklist
   size, and no-frontier tick count.
 - **`/explore/markers`** (`MarkerArray`): frontier cells, blacklist points, and
   the current goal, built by the pure `build_explore_markers` helper.
-- **Telemetry** (`TelemetryWriter`, JSONL): `session_start`, `goal_sent`,
-  `goal_result`, `no_frontier`, `session_end` — the record used to reconstruct
-  exactly what happened in a run after the fact. `main()` guarantees a final
-  `session_end` even on shutdown/Ctrl-C.
+- **Telemetry** (`TelemetryWriter`, sequential `exp-NNNN.json`): `session_start`,
+  `goal_sent`, `goal_result`, `no_frontier`, `session_end`.
+- **Failure diagnostics** (stdout dump): on NAV2 abort and on frontier patience
+  exhaustion, the node prints a structured report including nav2 error codes,
+  goal/robot coordinates, 4-cell costmap heatmaps around both goal and robot
+  (lethal=254, inscribed=253, unknown=255), the full blacklist, and all known
+  frontier clusters with their sizes. The costmap data comes from subscriptions
+  to `/global_costmap/costmap` and `/local_costmap/costmap`.
+
+The `NAV2_ERROR_CODES` lookup table translates numeric Nav2 error codes into
+human-readable names (`PLAN/GOAL_OCCUPIED`, `FOLLOW/PATIENCE_EXCEEDED`, etc.) for
+the diagnostic dump.
 
 ## Robot pose from TF
 

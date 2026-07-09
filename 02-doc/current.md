@@ -3,13 +3,22 @@
 Concise cold-start orientation. Detailed history lives in git log and the
 `04-tasks/` files — do **not** re-narrate it here.
 
-**Date:** 2026-07-08 · **Branch:** main (pushed through `24833e9`)
+**Date:** 2026-07-09 · **Branch:** main
 
 ## Status
 
 Sim exploration works: goals are sent and reached, the map fills in. Full sim
 stack (Gazebo + slam_toolbox + Nav2 + explore) comes up healthy. Real-robot
 Modes A/B/E have **not** been live-run — treat them as unverified.
+
+Recent changes (2026-07-09):
+- `prefer_farthest` changed to `True` in `robot_explore.launch.py` (real-robot)
+- Telemetry now uses sequential run numbers (`exp-0001.json`) instead of date+map_name
+- Added nav failure diagnostics: `dump_failure_diagnostics` dumps costmap heatmap,
+  blacklist, frontier clusters on NAV2 abort; `dump_frontier_exhaustion` on patience expiry
+- Added `paused_on_failure` state: exploration pauses on abort and resumes via `exploration_resume` intent
+- Subscribed to `/global_costmap/costmap` and `/local_costmap/costmap` for diagnostics
+- Added `NAV2_ERROR_CODES` lookup table (100/200 range)
 
 Known-but-unfixed nav tuning issues (candidates for a Nav2 discussion, none
 block basic exploration):
@@ -38,10 +47,10 @@ block basic exploration):
 
 ## Key params (node ROS params; real default / sim override)
 
-- `min_frontier_dist`: 1.3 / **0.9** m (raw frontier-cell floor; `goal_inset` 0.3 pulls the sent goal 0.3 m closer)
+- `min_frontier_dist`: 0.5 / **0.9** m (raw frontier-cell floor; `goal_inset` 0.3 pulls the sent goal 0.3 m closer)
 - `max_frontier_dist`: 0.0 (unlimited) / **15.0** m
 - `min_frontier_size`: 10 / **5** cells
-- `prefer_farthest`: False / **True**
+- `prefer_farthest`: **True** (real and sim)
 - `max_explore_radius`: 0.0 (unlimited); `goal_inset_m`: 0.3; `blacklist_radius`: 0.5 m
 - Constants: `EXPLORE_HZ` 2, `NO_FRONTIER_PATIENCE` 14 ticks (must exceed slam's 5 s `map_update_interval`), `GOAL_TIMEOUT_S` 25 s
 - Sim goal checker: `yaw_goal_tolerance` ~π (goals sent with identity orientation; exploration doesn't care about final heading)
@@ -68,7 +77,7 @@ bl dome_nav sim_nav_full.launch.py --map_name <name> --world_name multi_room
 ros2 topic pub --once /intent std_msgs/msg/String 'data: "{\"name\": \"exploration_start\", \"source\": \"cli\", \"slots\": {}}"'
 ros2 topic pub --once /intent std_msgs/msg/String 'data: "{\"name\": \"exploration_stop\",  \"source\": \"cli\", \"slots\": {}}"'
 ros2 topic echo /explore/status          # {"state","reached","failed",... goal_xy,dist_m,elapsed_s}
-tail -f ~/.dome/telemetry/*.jsonl        # session_start/goal_sent/goal_result/no_frontier/session_end
+tail -f ~/.dome/telemetry/exp-*.json    # session_start/goal_sent/goal_result/no_frontier/session_end
 ```
 
 Intent contract: `nav go <label>`→`navigation_go {label}`, `nav cancel`→`navigation_cancel`,

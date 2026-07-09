@@ -5,16 +5,17 @@
 
 import json
 import os
+import re
 import time
 
 
 class TelemetryWriter:
-    def __init__(self, map_name: str, log_fn):
+    def __init__(self, log_fn):
         telemetry_dir = os.path.join(os.path.expanduser("~"), ".dome", "telemetry")
         os.makedirs(telemetry_dir, exist_ok=True)
-        date = time.strftime("%Y%m%d")
-        path = os.path.join(telemetry_dir, f"explore-{map_name}-{date}.jsonl")
-        self.file = open(path, "a")
+        next_n = next_run_number(telemetry_dir)
+        path = os.path.join(telemetry_dir, f"exp-{next_n:04d}.json")
+        self.file = open(path, "w")
         log_fn(f"Telemetry: {path}")
 
     def write(self, event: str, **kwargs):
@@ -24,3 +25,13 @@ class TelemetryWriter:
 
     def close(self):
         self.file.close()
+
+
+def next_run_number(telemetry_dir: str) -> int:
+    pattern = re.compile(r"^exp-(\d{4})\.json$")
+    nums = [
+        int(m.group(1))
+        for f in os.listdir(telemetry_dir)
+        if (m := pattern.match(f))
+    ]
+    return (max(nums) + 1) if nums else 1
