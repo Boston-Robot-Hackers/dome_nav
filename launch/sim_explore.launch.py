@@ -128,7 +128,7 @@ def sim_explore_launch(
         params={
             "map_persist_path": slam_map_path,
             "use_sim_time": True,
-            "save_period_sec": 120.0,
+            "save_period_sec": 60.0,
         },
         ros_waittime=30.0,
         lifecycle_waittime=None,

@@ -17,7 +17,7 @@ def default_map_path() -> str:
 
 
 class SlamManagerNode(LifecycleNode):
-    DEFAULT_SAVE_PERIOD_SEC = 30.0
+    DEFAULT_SAVE_PERIOD_SEC = 60.0
 
     def __init__(self):
         super().__init__("slam_manager_node")
