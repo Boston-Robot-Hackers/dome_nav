@@ -1,6 +1,6 @@
 ---
-version: "1.4"
-generated: "2026-07-08"
+version: "1.5"
+generated: "2026-07-09"
 ---
 
 # explore_context.py — The Contract Between the Node and Its Algorithm
@@ -32,6 +32,7 @@ class ExploreParams:
     goal_inset_m: float = 0.3
     max_explore_radius: float = 0.0
     prefer_farthest: bool = False
+    frontier_buffer_cells: int = 2
 ```
 
 The one field worth dwelling on is `min_frontier_dist`. It filters the **raw
@@ -40,6 +41,11 @@ the robot by `goal_inset_m`. So the effective floor on the *sent* goal distance
 is `min_frontier_dist − goal_inset_m` — with the defaults, `1.3 − 0.3 = 1.0 m`.
 That indirection is exactly why the number is 1.3 and not 1.0, and it's the kind
 of non-obvious coupling that belongs in a comment right on the field (and is).
+
+`frontier_buffer_cells` (default 2) is plumbed straight through to
+`find_frontier_clusters` — it sets how many confirmed-known cells separate a
+frontier goal from the unknown boundary, guarding against goals landing in the
+seam between the SLAM map and the (smaller) global costmap.
 
 `0.0` is used as an "unset / unlimited" sentinel for `max_frontier_dist` and
 `max_explore_radius` — the pure functions treat `> 0.0` as "a real limit."

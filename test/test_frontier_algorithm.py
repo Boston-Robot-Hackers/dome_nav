@@ -35,7 +35,9 @@ def make_ctx(
         robot_xy=robot_xy,
         blacklist=blacklist or set(),
         start_xy=start_xy,
-        params=params or ExploreParams(min_frontier_size=1, min_frontier_dist=0.0),
+        params=params or ExploreParams(
+            min_frontier_size=1, min_frontier_dist=0.0, frontier_buffer_cells=1
+        ),
     )
 
 
@@ -80,7 +82,8 @@ def test_next_goal_prefer_farthest_picks_far_cluster():
     # farthest is x=8.5.
     data = [0, 0, 0, -1, 0, 0, 0, 0, 0, -1]
     params = ExploreParams(
-        min_frontier_size=1, min_frontier_dist=0.0, prefer_farthest=True
+        min_frontier_size=1, min_frontier_dist=0.0, prefer_farthest=True,
+        frontier_buffer_cells=1,
     )
     ctx = make_ctx(data, info, params=params)
     result = algo.next_goal(ctx)
@@ -94,7 +97,9 @@ def test_next_goal_default_picks_near_cluster():
     algo = FrontierAlgorithm()
     info = make_info(10, 1)
     data = [0, 0, 0, -1, 0, 0, 0, 0, 0, -1]
-    params = ExploreParams(min_frontier_size=1, min_frontier_dist=0.0)
+    params = ExploreParams(
+        min_frontier_size=1, min_frontier_dist=0.0, frontier_buffer_cells=1
+    )
     ctx = make_ctx(data, info, params=params)
     result = algo.next_goal(ctx)
     assert result is not None
@@ -167,7 +172,8 @@ def test_blacklist_causes_none_when_only_frontier_blocked():
     blacklist = {(2.5, 0.5)}
     ctx = make_ctx(data, info, blacklist=blacklist,
                    params=ExploreParams(min_frontier_size=1, min_frontier_dist=0.0,
-                                        blacklist_radius=1.0))
+                                        blacklist_radius=1.0,
+                                        frontier_buffer_cells=1))
     result = algo.next_goal(ctx)
     assert result is None
 
@@ -183,7 +189,8 @@ def test_nudge_applied_goal_closer_than_raw_cell():
     inset = 0.3
     ctx = make_ctx(data, info, robot_xy=robot_xy,
                    params=ExploreParams(min_frontier_size=1, min_frontier_dist=0.0,
-                                        goal_inset_m=inset))
+                                        goal_inset_m=inset,
+                                        frontier_buffer_cells=1))
     result = algo.next_goal(ctx)
     assert result is not None
     # The raw frontier cell is at x=4.5 (or nearby). The nudged result
@@ -204,7 +211,8 @@ def test_nudge_amount_correct():
     inset = 0.3
     ctx = make_ctx(data, info, robot_xy=robot_xy,
                    params=ExploreParams(min_frontier_size=1, min_frontier_dist=0.0,
-                                        goal_inset_m=inset))
+                                        goal_inset_m=inset,
+                                        frontier_buffer_cells=1))
     result = algo.next_goal(ctx)
     assert result is not None
     # After nudge toward (0,0) by 0.3m, the distance should be reduced by

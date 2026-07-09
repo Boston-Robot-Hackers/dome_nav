@@ -82,7 +82,11 @@ controller_server:
       plugin: nav2_mppi_controller::MPPIController
       time_steps: 56
       model_dt: 0.05
-      batch_size: 2000
+      # 2026-07-09: was 2000. Halved to raise MPPI's control-loop rate on this
+      # CPU-bound VM -- the loop was logging 1.7-6.6 Hz vs a 20 Hz target, which
+      # starved controller_server's executor (goal-ack timeouts) and produced
+      # hesitant velocity commands. Fewer rollouts = faster solve.
+      batch_size: 1000
       ax_max: 3.0
       ax_min: -3.0
       ay_max: 3.0
@@ -101,7 +105,9 @@ controller_server:
       temperature: 0.3
       gamma: 0.015
       motion_model: DiffDrive
-      visualize: true
+      # was true -- publishing every rollout each cycle added executor load on a
+      # VM already missing its control-loop rate. Off for production/perf.
+      visualize: false
       regenerate_noises: true
       TrajectoryVisualizer:
         trajectory_step: 5
@@ -394,10 +400,15 @@ velocity_smoother:
     - -3.2
     odom_topic: odom
     odom_duration: 0.1
+    # 2026-07-09: reset to upstream [0,0,0]. The 0.05 m/s / 0.1 rad/s deadband
+    # zeroed the small, hesitant velocity commands a CPU-starved MPPI produces,
+    # freezing the robot in sim (3cm in 25s) where stock config (no deadband)
+    # crawled to goals. Deadband exists to protect real motors from sub-stiction
+    # commands -- pointless in sim, harmful here. Keep it in nav2_explore_real.yaml.
     deadband_velocity:  # upstream: [0.0, 0.0, 0.0]
-    - 0.05
     - 0.0
-    - 0.1
+    - 0.0
+    - 0.0
     velocity_timeout: 1.0
 collision_monitor:
   ros__parameters:
@@ -420,7 +431,12 @@ collision_monitor:
       simulation_time_step: 0.1
       min_points: 6
       visualize: false
-      enabled: true
+      # DIAGNOSTIC 2026-07-09: disabled to test whether collision_monitor's
+      # FootprintApproach was zeroing cmd_vel and pinning the robot (25s with
+      # only 3cm of motion while the controller kept receiving fresh paths).
+      # Matches the isolation already done on the real robot. Restore to true
+      # once the no-motion cause is confirmed.
+      enabled: false
     observation_sources:
     - scan
     scan:

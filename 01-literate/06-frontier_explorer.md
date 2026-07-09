@@ -1,6 +1,6 @@
 ---
-version: "1.5"
-generated: "2026-07-08"
+version: "1.6"
+generated: "2026-07-09"
 ---
 
 # frontier_explorer.py — Frontier Detection from an Occupancy Grid
@@ -40,36 +40,55 @@ def cell_to_world(idx, info):
     return (x, y)
 ```
 
-## What counts as a frontier (the buffer-cell definition)
+## What counts as a frontier (the buffer-ring definition)
 
 The classic definition of a frontier is "a free cell adjacent to unknown." This
-module uses a deliberately stricter one: a frontier cell is free, does **not
-itself** touch unknown, but has at least one 4-neighbor that does. In other
-words, there is always one known "buffer" cell between the goal and the unknown
-region it borders.
+module uses a deliberately stricter one, and it is now *tunable* by depth. First
+we find the **boundary ring**: free cells that directly touch unknown. Then we
+walk `buffer_cells` rings of free cells *inward* from that boundary, each ring
+being the free cells 4-adjacent to the previous one that no shallower ring has
+already claimed. The last ring reached is the frontier — so every candidate goal
+sits exactly `buffer_cells` confirmed-known cells away from the ragged edge.
 
 ```python
-touches_unknown: set[int] = set()
+boundary: set[int] = set()
 for idx in range(width * height):
     if data[idx] != 0:
         continue
     for nb in neighbors4(idx):
         if data[nb] == -1:
-            touches_unknown.add(idx)
+            boundary.add(idx)
             break
 
+claimed: set[int] = set(boundary)
+ring: set[int] = boundary
 is_frontier: set[int] = set()
-for idx in touches_unknown:
-    for nb in neighbors4(idx):
-        if data[nb] == 0 and nb not in touches_unknown:
-            is_frontier.add(nb)
+for _ in range(max(1, buffer_cells)):
+    next_ring = set()
+    for idx in ring:
+        for nb in neighbors4(idx):
+            if data[nb] == 0 and nb not in claimed:
+                next_ring.add(nb)
+    claimed |= next_ring
+    ring = next_ring
+    is_frontier = next_ring
 ```
 
 Why the extra step? Goals sitting *directly* on the ragged known/unknown boundary
 are exactly where Nav2's planners were historically unreliable (the NavFn "legal
 potential" bug) and where costmap geometry is most ambiguous. Keeping every
-candidate one cell deeper into confirmed-known space made goals more reliably
-plannable. This is a real, hard-won design choice, not a cosmetic one.
+candidate deeper into confirmed-known space made goals more reliably plannable —
+a real, hard-won design choice, not a cosmetic one.
+
+The default is now **`buffer_cells=2`** (was hard-coded to 1). The reason is
+concrete: the frontier detector reads the SLAM `/map`, but the goal is ultimately
+handed to Nav2's *global costmap*, which can lag the map by a cell or more at the
+growing edge. A goal one cell inside the map could still map *outside* the
+costmap, and the planner rejects it (`worldToMap` failure → `PLAN/NO_VALID_PATH`).
+A 2-cell buffer keeps goals further inside that seam. The tradeoff: a free region
+narrower than `2*buffer_cells+1` cells has no cell far enough from unknown and
+yields no frontier there — acceptable for a robot that can't fit such gaps
+anyway. `buffer_cells=1` reproduces the original single-ring behaviour.
 
 Adjacent frontier cells are then grouped into clusters by an 8-connectivity
 flood-fill, so a long wall-opening becomes one cluster rather than dozens of
@@ -173,15 +192,16 @@ also used implicitly by the picker's own filters.)
 
 ## Observations / possible improvements
 
-- **Two full grid scans per call** (`touches_unknown`, then its neighbors). At
-  current map sizes and 2 Hz this is fine; for large maps a single pass that
-  records both sets would halve the work.
+- **A full grid scan plus `buffer_cells` ring passes per call.** At current map
+  sizes and 2 Hz this is fine; for large maps a single pass that records the
+  boundary set would trim the work.
 - **`pick_best_frontier` has grown to eleven parameters.** They all matter, but
   it's at the edge of readability — bundling the filter params (they already
   travel together as `ExploreParams`) would tighten the signature.
-- **The buffer-cell definition assumes 1 cell of margin is enough.** On coarser
-  resolutions or noisier maps a configurable buffer depth might be worth it; for
-  now one cell has been the reliable sweet spot.
+- **Buffer depth is now configurable** (`buffer_cells`, default 2). This closed a
+  real failure mode — goals landing in the seam between the SLAM map and the
+  smaller global costmap. A deeper buffer trades reach into narrow passages for
+  robustness; 2 has been the sweet spot in sim.
 - **`frontier_diag` recomputes `cell_to_world` for every cell of every large
   cluster.** Only on the failure path, so acceptable, but it duplicates work the
   picker just did.

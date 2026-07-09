@@ -7,24 +7,44 @@ Concise cold-start orientation. Detailed history lives in git log and the
 
 ## Status
 
-Sim exploration works: goals are sent and reached, the map fills in. Full sim
-stack (Gazebo + slam_toolbox + Nav2 + explore) comes up healthy. Real-robot
-Modes A/B/E have **not** been live-run — treat them as unverified.
+Sim exploration works and the robot **drives and covers the map** (observed ~16
+goals over a ~9×9 m area in one run). Full sim stack (Gazebo + slam_toolbox +
+Nav2 + explore) comes up healthy. Real-robot Modes A/B/E have **not** been
+live-run — treat them as unverified.
 
-Recent changes (2026-07-09):
-- `prefer_farthest` changed to `True` in `robot_explore.launch.py` (real-robot)
-- Telemetry now uses sequential run numbers (`exp-0001.json`) instead of date+map_name
-- Added nav failure diagnostics: `dump_failure_diagnostics` dumps costmap heatmap,
-  blacklist, frontier clusters on NAV2 abort; `dump_frontier_exhaustion` on patience expiry
-- Added `paused_on_failure` state: exploration pauses on abort and resumes via `exploration_resume` intent
-- Subscribed to `/global_costmap/costmap` and `/local_costmap/costmap` for diagnostics
-- Added `NAV2_ERROR_CODES` lookup table (100/200 range)
+**Performance ceiling — the dev VM has only 1 core** (`nproc` = 1, on an M2 Mac).
+Nav2 is multi-process and MPPI parallelizes across cores, so a single core (however
+fast) serializes everything: MPPI/NavFn solves block the action-server ACK
+callbacks → intermittent `Timed out while waiting for action server to acknowledge`
+aborts. **Highest-impact fix is to give the VM more vCPUs (→4–6), not more YAML.**
 
-Known-but-unfixed nav tuning issues (candidates for a Nav2 discussion, none
-block basic exploration):
-- ~0.11 m/s crawl on short (~1 m) goals — stock MPPI `GoalCritic.threshold_to_consider: 1.4`.
-- Near-wall stalls — planner "Start occupied" when the robot center sits in an inflated/lethal cell.
+Recent changes (2026-07-09, this session):
+- **Frontier buffer 1→2 cells**, parameterized as `frontier_buffer_cells` (ROS param,
+  default 2). `find_frontier_clusters` now walks N known-cell rings inward from the
+  unknown boundary. Guards goals against the SLAM-map vs. global-costmap seam.
+- **Costmap-bounds goal reject**: `explore_tick` now skips any candidate goal that maps
+  outside `/global_costmap` (`goal_in_global_costmap`) and re-asks for the next-best
+  frontier, up to `MAX_GOAL_ATTEMPTS` (8). Fixes `worldToMap`→`PLAN/NO_VALID_PATH`.
+- **MPPI/motion fixes in `nav2_explore_sim.yaml`** — diagnosed "robot receives paths
+  for 25 s but moves 3 cm": (a) `velocity_smoother.deadband_velocity` reset to
+  `[0,0,0]` (the 0.05/0.1 deadband zeroed the small hesitant commands a CPU-starved
+  MPPI emits — froze the robot in sim; kept in real config); (b) `batch_size 2000→1000`;
+  (c) `visualize true→false`. (d) `FootprintApproach` collision_monitor `enabled: false`
+  (diagnostic — restore when done).
+- New experimental `launch/sim_nav_default.launch.py` (loads **stock** nav2_params to
+  bisect config vs. sim wiring — proved the sim/robot wiring is fine). Delete when done.
+- `expresume.bash` helper (publishes `exploration_resume`).
+
+Earlier 2026-07-09 changes: `prefer_farthest=True` (real), sequential telemetry
+(`exp-0001.json`), `dump_failure_diagnostics`/`dump_frontier_exhaustion`,
+`paused_on_failure` + `exploration_resume`, costmap subscriptions, `NAV2_ERROR_CODES`.
+
+Known-but-unfixed nav tuning issues (none block basic exploration):
+- Intermittent action-ACK timeouts under load — **root cause is the 1-core VM** (above).
 - Planner choice unsettled: explore configs use NavFn, `nav2_real.yaml` uses SmacPlanner2D.
+  Candidate: switch sim to `SmacPlanner2D` + `use_astar` (faster replan, fewer ACK timeouts).
+- `prefer_farthest=True` in sim aims at the farthest frontier (most likely across
+  unmapped space); `False` (nearest-first) may explore more robustly.
 
 ## Architecture essentials
 
@@ -51,8 +71,9 @@ block basic exploration):
 - `max_frontier_dist`: 0.0 (unlimited) / **15.0** m
 - `min_frontier_size`: 10 / **5** cells
 - `prefer_farthest`: **True** (real and sim)
+- `frontier_buffer_cells`: 2 (known-cell rings between a frontier goal and unknown)
 - `max_explore_radius`: 0.0 (unlimited); `goal_inset_m`: 0.3; `blacklist_radius`: 0.5 m
-- Constants: `EXPLORE_HZ` 2, `NO_FRONTIER_PATIENCE` 14 ticks (must exceed slam's 5 s `map_update_interval`), `GOAL_TIMEOUT_S` 25 s
+- Constants: `EXPLORE_HZ` 2, `NO_FRONTIER_PATIENCE` 14 ticks (must exceed slam's 5 s `map_update_interval`), `GOAL_TIMEOUT_S` 25 s, `MAX_GOAL_ATTEMPTS` 8
 - Sim goal checker: `yaw_goal_tolerance` ~π (goals sent with identity orientation; exploration doesn't care about final heading)
 
 ## Launch
@@ -86,11 +107,15 @@ Intent contract: `nav go <label>`→`navigation_go {label}`, `nav cancel`→`nav
 
 ## Next steps
 
-1. **F13 T05/T06** — call the sim exploration demo done; move F13 feature/task to done.
-2. **Nav2 tuning pass** (optional) — the three issues under Status above.
-3. **Real-robot verification (F10 T07)** — Modes A/B/E have never run on hardware;
-   `nav2_real.yaml`/`nav2_localization_real.yaml` are behavior-preserving copies of the
-   old merges but unproven.
+1. **Give the dev VM 4–6 vCPUs** (currently 1) — the single biggest reliability win;
+   should clear most intermittent action-ACK timeout aborts. Then re-run and confirm
+   MPPI control-loop rate recovers toward 20 Hz.
+2. **Restore `FootprintApproach` `enabled: true`** in `nav2_explore_sim.yaml` once the
+   no-motion investigation is fully closed (currently disabled for diagnostics).
+3. **Delete `launch/sim_nav_default.launch.py`** (experimental bisect) when done.
+4. **F13 T05/T06** — call the sim exploration demo done; move F13 feature/task to done.
+5. **Optional Nav2 tuning** — SmacPlanner2D+`use_astar` for sim; revisit `prefer_farthest`.
+6. **Real-robot verification (F10 T07)** — Modes A/B/E have never run on hardware.
 
 ## Open issues
 

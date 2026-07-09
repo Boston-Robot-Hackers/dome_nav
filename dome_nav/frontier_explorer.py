@@ -16,20 +16,28 @@ class MapInfo:
     origin_y: float
 
 
-def find_frontier_clusters(data: list[int], info: MapInfo) -> list[list[int]]:
+def find_frontier_clusters(
+    data: list[int], info: MapInfo, buffer_cells: int = 2
+) -> list[list[int]]:
     # Returns list[list[int]]: each inner list is a cluster of cell indices (flat
     # offsets into data). row = idx // width, col = idx % width. Convert to world
     # coords via cell_to_world(idx, info).
     #
-    # A frontier cell is free (data[idx]==0), does NOT itself touch an unknown
-    # cell, but has at least one 4-neighbor that does — i.e. there is always one
-    # known "buffer" cell between a frontier goal and the unknown region it
-    # borders. Goals sitting directly on the ragged known/unknown boundary are
-    # where Nav2's planners have historically been unreliable (the NavFn "legal
-    # potential" bug, TF13 T04m) and where costmap geometry is most ambiguous;
-    # requiring a buffer cell keeps every candidate goal one step further into
-    # confirmed-known space. Adjacent frontier cells are grouped into clusters
-    # by 8-connectivity flood-fill.
+    # A frontier cell is free (data[idx]==0) sitting exactly `buffer_cells` known
+    # cells inside the boundary with the unknown region. The boundary ring is the
+    # free cells that directly touch an unknown 4-neighbor; each successive ring
+    # is the free cells 4-adjacent to the previous one. The last ring is the
+    # frontier, so every candidate goal is `buffer_cells` confirmed-known cells
+    # away from the ragged known/unknown edge — where Nav2's planners have
+    # historically been unreliable (the NavFn "legal potential" bug, TF13 T04m),
+    # where costmap geometry is most ambiguous, and (buffer_cells>=2) far enough
+    # inside the mapped area to survive the multi-cell seam between the SLAM /map
+    # the frontier detector reads and the smaller global costmap the planner uses
+    # — the worldToMap "goal outside map" failure. buffer_cells=1 reproduces the
+    # original single-buffer-ring behaviour. Note: a free region narrower than
+    # 2*buffer_cells+1 cells has no cell far enough from unknown and yields no
+    # frontier there. Adjacent frontier cells are grouped into clusters by
+    # 8-connectivity flood-fill.
     width, height = info.width, info.height
 
     def neighbors4(idx: int):
@@ -49,20 +57,32 @@ def find_frontier_clusters(data: list[int], info: MapInfo) -> list[list[int]]:
                 if 0 <= nr < height and 0 <= nc < width:
                     yield nr * width + nc
 
-    touches_unknown: set[int] = set()
+    # Boundary ring (depth 0): free cells directly adjacent to unknown.
+    boundary: set[int] = set()
     for idx in range(width * height):
         if data[idx] != 0:
             continue
         for nb in neighbors4(idx):
             if data[nb] == -1:
-                touches_unknown.add(idx)
+                boundary.add(idx)
                 break
 
+    # Walk `buffer_cells` rings of free cells inward from the boundary. Each new
+    # ring is the free cells 4-adjacent to the previous ring that no shallower
+    # ring already claimed; the last ring reached is the frontier. If a ring runs
+    # out of room (narrow free strip) the frontier set is empty there.
+    claimed: set[int] = set(boundary)
+    ring: set[int] = boundary
     is_frontier: set[int] = set()
-    for idx in touches_unknown:
-        for nb in neighbors4(idx):
-            if data[nb] == 0 and nb not in touches_unknown:
-                is_frontier.add(nb)
+    for _ in range(max(1, buffer_cells)):
+        next_ring: set[int] = set()
+        for idx in ring:
+            for nb in neighbors4(idx):
+                if data[nb] == 0 and nb not in claimed:
+                    next_ring.add(nb)
+        claimed |= next_ring
+        ring = next_ring
+        is_frontier = next_ring
 
     visited: set[int] = set()
     clusters: list[list[int]] = []

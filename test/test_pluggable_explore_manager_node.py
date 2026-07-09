@@ -347,3 +347,46 @@ def test_min_frontier_dist_default_matches_explore_params(node):
 
 def test_min_frontier_dist_plumbed_into_params(node):
     assert node.params.min_frontier_dist == node.min_frontier_dist
+
+
+# --- frontier_buffer_cells ROS parameter wiring ---
+
+def test_frontier_buffer_cells_default_matches_explore_params(node):
+    assert node.frontier_buffer_cells == ExploreParams().frontier_buffer_cells
+
+
+def test_frontier_buffer_cells_plumbed_into_params(node):
+    assert node.params.frontier_buffer_cells == node.frontier_buffer_cells
+
+
+# --- goal_in_global_costmap bounds check (worldToMap guard) ---
+
+def costmap_2m(resolution=0.05):
+    # 40x40 cell costmap (2m x 2m) with origin at (0,0), all free.
+    cm = OccupancyGrid()
+    cm.info.resolution = resolution
+    cm.info.width = 40
+    cm.info.height = 40
+    cm.info.origin.position.x = 0.0
+    cm.info.origin.position.y = 0.0
+    cm.data = [0] * (40 * 40)
+    return cm
+
+
+def test_goal_in_costmap_true_when_no_costmap_yet(node):
+    # Startup must not be blocked before the first costmap arrives.
+    node.latest_global_costmap = None
+    assert node.goal_in_global_costmap((5.0, 5.0)) is True
+
+
+def test_goal_in_costmap_true_for_interior_goal(node):
+    node.latest_global_costmap = costmap_2m()
+    assert node.goal_in_global_costmap((1.0, 1.0)) is True
+
+
+def test_goal_in_costmap_false_for_goal_past_edge(node):
+    # 2m-wide costmap; a goal at x=2.05m maps one cell past the east edge, the
+    # exact worldToMap failure that aborted planning with PLAN/NO_VALID_PATH.
+    node.latest_global_costmap = costmap_2m()
+    assert node.goal_in_global_costmap((2.05, 1.0)) is False
+    assert node.goal_in_global_costmap((1.0, -0.1)) is False

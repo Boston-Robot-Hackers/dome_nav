@@ -23,7 +23,9 @@ class FrontierAlgorithm:
     def next_goal(
         self, ctx: ExplorationContext
     ) -> tuple[float, float] | None:
-        clusters = find_frontier_clusters(ctx.map_data, ctx.map_info)
+        clusters = find_frontier_clusters(
+            ctx.map_data, ctx.map_info, ctx.params.frontier_buffer_cells
+        )
         self.latest_clusters = clusters
         target = pick_best_frontier(
             clusters,

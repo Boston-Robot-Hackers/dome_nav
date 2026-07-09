@@ -1,6 +1,6 @@
 ---
-version: "1.3"
-generated: "2026-07-08"
+version: "1.4"
+generated: "2026-07-09"
 ---
 
 # frontier_algorithm.py — The Default Exploration Strategy
@@ -37,7 +37,9 @@ nudge-the-success:
 
 ```python
 def next_goal(self, ctx):
-    clusters = find_frontier_clusters(ctx.map_data, ctx.map_info)
+    clusters = find_frontier_clusters(
+        ctx.map_data, ctx.map_info, ctx.params.frontier_buffer_cells
+    )
     self.latest_clusters = clusters
     target = pick_best_frontier(
         clusters, ctx.map_info, ctx.robot_xy,
@@ -67,7 +69,8 @@ Three things worth noticing:
 1. **Every knob comes from `ctx.params`.** The algorithm has no hardcoded tuning
    — it is fully driven by the `ExploreParams` the node built from ROS
    parameters. That's what lets sim and real behave differently through the same
-   code.
+   code. Even the frontier-detection depth (`frontier_buffer_cells`) is passed
+   straight through to `find_frontier_clusters`.
 2. **The diagnostic pass only runs on failure.** `frontier_diag` is computed only
    when `target is None`, so the normal (goal-found) path pays nothing for the
    introspection. On success `latest_diag` is reset to `None` so stale

@@ -1,5 +1,5 @@
 ---
-version: "1.7"
+version: "1.8"
 generated: "2026-07-09"
 ---
 
@@ -153,15 +153,37 @@ a `/map` and a valid `map→base_footprint` TF (robot pose). Either absence is
 recorded as a `no_frontier` telemetry event with a reason, and the tick simply
 retries next time.
 
-With both present it builds the context and asks the algorithm:
+With both present it builds the context and asks the algorithm — but wraps the
+call in a short retry loop that **rejects goals falling outside the global
+costmap**. A frontier can sit one cell inside the SLAM map yet still map *outside*
+the (smaller, lagging) global costmap, and the planner rejects such a goal with a
+`worldToMap` failure (`PLAN/NO_VALID_PATH`). So each rejected candidate is added
+to a per-tick exclusion set and `next_goal` is re-asked for the next-best
+frontier:
 
 ```python
-ctx = ExplorationContext(
-    map_data=list(m.data), map_info=info, robot_xy=robot_xy,
-    blacklist=self.blacklist, start_xy=self.start_xy, params=self.params,
-)
-goal_xy = self.algorithm.next_goal(ctx)
+rejected: set[XY] = set()
+goal_xy = None
+for _ in range(self.MAX_GOAL_ATTEMPTS):
+    ctx = ExplorationContext(
+        map_data=map_data, map_info=info, robot_xy=robot_xy,
+        blacklist=self.blacklist | rejected, start_xy=self.start_xy,
+        params=self.params,
+    )
+    candidate = self.algorithm.next_goal(ctx)
+    if candidate is None:
+        break
+    if self.goal_in_global_costmap(candidate):
+        goal_xy = candidate
+        break
+    rejected.add(candidate)
 ```
+
+`goal_in_global_costmap` reuses the same `costmap_cell_cost` helper the
+diagnostics use (it returns `None` for an out-of-bounds cell), and passes when no
+costmap has arrived yet so startup is never blocked. The exclusion is *per-tick*,
+not a permanent blacklist entry — a goal becomes eligible again the moment the
+costmap grows to cover it.
 
 ### When nothing qualifies: patience
 

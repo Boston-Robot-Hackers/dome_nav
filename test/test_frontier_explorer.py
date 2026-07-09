@@ -51,7 +51,7 @@ def test_single_frontier_cell():
     # frontier candidate.
     info = make_info(5, 1)
     data = [-1, 0, 0, 0, -1]
-    clusters = find_frontier_clusters(data, info)
+    clusters = find_frontier_clusters(data, info, buffer_cells=1)
     assert len(clusters) == 1
     assert clusters[0] == [2]
 
@@ -63,7 +63,7 @@ def test_two_separate_clusters():
     # in separate clusters.
     info = make_info(10, 1)
     data = [-1, 0, 0, 0, -1, -1, 0, 0, 0, -1]
-    clusters = find_frontier_clusters(data, info)
+    clusters = find_frontier_clusters(data, info, buffer_cells=1)
     assert len(clusters) == 2
     total_cells = sum(len(c) for c in clusters)
     assert total_cells == 2
@@ -76,7 +76,7 @@ def test_occupied_cell_not_frontier():
     # appear in any cluster.
     info = make_info(6, 1)
     data = [100, -1, 0, 0, 0, -1]
-    clusters = find_frontier_clusters(data, info)
+    clusters = find_frontier_clusters(data, info, buffer_cells=1)
     assert len(clusters) == 1
     assert clusters[0] == [3]
     assert 0 not in clusters[0]
@@ -89,7 +89,7 @@ def test_cell_touching_unknown_directly_excluded_from_frontier():
     # unknown) qualify.
     info = make_info(6, 1)
     data = [-1, 0, 0, 0, 0, -1]
-    clusters = find_frontier_clusters(data, info)
+    clusters = find_frontier_clusters(data, info, buffer_cells=1)
     all_frontier_cells = {cell for cluster in clusters for cell in cluster}
     assert all_frontier_cells == {2, 3}
     assert 1 not in all_frontier_cells
@@ -108,9 +108,30 @@ def test_adjacent_frontiers_form_one_cluster():
         -1 if (r in (0, height - 1) or c in (0, width - 1)) else 0
         for r in range(height) for c in range(width)
     ]
-    clusters = find_frontier_clusters(data, info)
+    clusters = find_frontier_clusters(data, info, buffer_cells=1)
     assert len(clusters) == 1
     assert len(clusters[0]) == 2
+
+
+def test_default_buffer_is_two_cells():
+    # 1x7: [-1, 0, 0, 0, 0, 0, -1]. Cells 1,5 touch unknown (depth 0); cells 2,4
+    # are the first known ring (depth 1); only cell 3 is two known cells back from
+    # unknown. The default buffer_cells=2 must return exactly cell 3.
+    info = make_info(7, 1)
+    data = [-1, 0, 0, 0, 0, 0, -1]
+    assert find_frontier_clusters(data, info) == [[3]]
+    # buffer_cells=1 on the same map keeps the shallower ring (cells 2 and 4).
+    one = {c for cl in find_frontier_clusters(data, info, buffer_cells=1) for c in cl}
+    assert one == {2, 4}
+
+
+def test_two_cell_buffer_yields_no_frontier_in_narrow_strip():
+    # 1x5: [-1, 0, 0, 0, -1]. Only 3 free cells — none is 2 known cells away from
+    # unknown, so the default 2-cell buffer produces no frontier at all (a free
+    # region must be at least 2*buffer_cells+1 = 5 cells wide to host one).
+    info = make_info(5, 1)
+    data = [-1, 0, 0, 0, -1]
+    assert find_frontier_clusters(data, info) == []
 
 
 # --- cell_to_world ---
@@ -327,7 +348,7 @@ def test_diagonal_frontier_cells_form_one_cluster():
         0 if (r, c) in free_cells else -1
         for r in range(height) for c in range(width)
     ]
-    clusters = find_frontier_clusters(data, info)
+    clusters = find_frontier_clusters(data, info, buffer_cells=1)
     assert len(clusters) == 1
     assert len(clusters[0]) == 2
 

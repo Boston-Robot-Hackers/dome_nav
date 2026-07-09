@@ -67,6 +67,11 @@ class PluggableExploreManagerNode(Node):
     # on long traversals. Cancelled goal is blacklisted so the same spot is not retried.
     GOAL_TIMEOUT_S = 25.0
 
+    # Max frontiers to try in one tick when a candidate goal maps outside the
+    # global costmap. Each rejected goal is excluded and next_goal is re-asked, so
+    # a run of edge goals near the growing map boundary can't wedge the tick.
+    MAX_GOAL_ATTEMPTS = 8
+
     def __init__(self, algorithm: ExplorationAlgorithm | None = None):
         super().__init__("explore_manager_node")
         self.nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
@@ -95,12 +100,16 @@ class PluggableExploreManagerNode(Node):
         self.declare_parameter("min_frontier_dist", 1.3)
         self.declare_parameter("prefer_farthest", False)
         self.declare_parameter("min_frontier_size", 10)
+        self.declare_parameter("frontier_buffer_cells", 2)
         self.declare_parameter("map_name", "unknown")
         self.max_explore_radius: float = self.get_parameter("max_explore_radius").value
         self.max_frontier_dist: float = self.get_parameter("max_frontier_dist").value
         self.min_frontier_dist: float = self.get_parameter("min_frontier_dist").value
         self.prefer_farthest: bool = self.get_parameter("prefer_farthest").value
         self.min_frontier_size: int = self.get_parameter("min_frontier_size").value
+        self.frontier_buffer_cells: int = self.get_parameter(
+            "frontier_buffer_cells"
+        ).value
         self.map_name: str = self.get_parameter("map_name").value
         self.telemetry = TelemetryWriter(self.get_logger().info)
 
@@ -110,6 +119,7 @@ class PluggableExploreManagerNode(Node):
             min_frontier_dist=self.min_frontier_dist,
             prefer_farthest=self.prefer_farthest,
             min_frontier_size=self.min_frontier_size,
+            frontier_buffer_cells=self.frontier_buffer_cells,
         )
         self.algorithm = algorithm or FrontierAlgorithm()
 
@@ -140,6 +150,16 @@ class PluggableExploreManagerNode(Node):
         if col < 0 or col >= info.width or row < 0 or row >= info.height:
             return None
         return costmap.data[row * info.width + col]
+
+    def goal_in_global_costmap(self, xy: XY) -> bool:
+        # True if xy maps inside the current global costmap extent. When no
+        # global costmap has been received yet, returns True so startup is not
+        # blocked. Guards against dispatching frontier goals outside the costmap,
+        # which the planner rejects with a worldToMap failure -> PLAN/NO_VALID_PATH
+        # (the SLAM /map the frontier detector reads can extend past the costmap).
+        if self.latest_global_costmap is None:
+            return True
+        return self.costmap_cell_cost(self.latest_global_costmap, xy) is not None
 
     def dump_frontier_exhaustion(self, robot_xy: XY | None):
         sep = "=" * 60
@@ -392,15 +412,33 @@ class PluggableExploreManagerNode(Node):
             origin_x=m.info.origin.position.x, origin_y=m.info.origin.position.y,
         )
         self.latest_map_info = info
-        ctx = ExplorationContext(
-            map_data=list(m.data),
-            map_info=info,
-            robot_xy=robot_xy,
-            blacklist=self.blacklist,
-            start_xy=self.start_xy,
-            params=self.params,
-        )
-        goal_xy = self.algorithm.next_goal(ctx)
+        map_data = list(m.data)
+        # Ask the algorithm for a goal; if the candidate maps outside the global
+        # costmap the planner would reject it (worldToMap failure), so exclude it
+        # and re-ask for the next-best frontier. rejected is local to this tick —
+        # next tick re-evaluates fresh in case the costmap has since grown.
+        rejected: set[XY] = set()
+        goal_xy = None
+        for _ in range(self.MAX_GOAL_ATTEMPTS):
+            ctx = ExplorationContext(
+                map_data=map_data,
+                map_info=info,
+                robot_xy=robot_xy,
+                blacklist=self.blacklist | rejected,
+                start_xy=self.start_xy,
+                params=self.params,
+            )
+            candidate = self.algorithm.next_goal(ctx)
+            if candidate is None:
+                break
+            if self.goal_in_global_costmap(candidate):
+                goal_xy = candidate
+                break
+            self.get_logger().warning(
+                f"Frontier goal ({candidate[0]:.3f}, {candidate[1]:.3f}) is "
+                "outside the global costmap — skipping to next frontier."
+            )
+            rejected.add(candidate)
         if goal_xy is None:
             self.no_frontier_count += 1
             self.get_logger().info(
