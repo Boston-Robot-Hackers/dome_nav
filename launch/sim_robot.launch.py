@@ -27,7 +27,7 @@ from dome_nav.utils import require_world_name, world_spawn_xy, write_config
 
 
 @launch_this(ui=True)
-def sim_robot_launch(world_name: str = "", urdf_name: str = "dome3_sim.urdf"):
+def sim_robot_launch(world_name: str = "", urdf_name: str = "minimal_sim.urdf"):
     bl = BetterLaunch()
 
     pkg = get_package_share_directory("dome_nav")

@@ -52,7 +52,7 @@ def wait_for_map_odom_tf(bl: BetterLaunch, timeout_s: float = 30.0) -> None:
     while time.time() - start < timeout_s:
         if buffer.can_transform("map", "odom", rclpy.time.Time()):
             elapsed = time.time() - start
-            bl.logger.info(f"map->odom transform available after {elapsed:.1f}s")
+            bl.logger.info(f"*********** Map->odom transform available after {elapsed:.1f}s")
             return
         time.sleep(0.2)
 
@@ -72,7 +72,7 @@ def wait_for_map_odom_tf(bl: BetterLaunch, timeout_s: float = 30.0) -> None:
 def sim_nav_full_launch(
     map_name: str = "",
     world_name: str = "",
-    urdf_name: str = "dome3_sim.urdf",
+    urdf_name: str = "minimal_sim.urdf",
     max_explore_radius: float = 0.0,
     max_frontier_dist: float = 15.0,
     min_frontier_dist: float = 0.9,

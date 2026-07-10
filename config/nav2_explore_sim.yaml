@@ -206,7 +206,7 @@ local_costmap:
         # speed ~0.15 m/s against a configured 0.45 m/s cruise speed). 0.17 clears
         # the 0.164142 floor with a small margin.
         cost_scaling_factor: 30.0  # upstream: 3.0
-        inflation_radius: 0.17  # upstream: 0.7
+        inflation_radius: 0.7  # upstream: 0.7
       voxel_layer:
         plugin: nav2_costmap_2d::VoxelLayer
         enabled: true
@@ -275,8 +275,8 @@ global_costmap:
         subscribe_to_updates: true  # new (not in upstream)
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
-        cost_scaling_factor: 15.0  # upstream: 3.0
-        inflation_radius: 0.3  # upstream: 0.7; was 0.5 -- reduced to cut PLAN/GOAL_OCCUPIED near walls
+        cost_scaling_factor: 3.0  # upstream: 3.0
+        inflation_radius: 0.7  # upstream: 0.7; was 0.5 -- reduced to cut PLAN/GOAL_OCCUPIED near walls
       always_send_full_costmap: true
 planner_server:
   ros__parameters:
