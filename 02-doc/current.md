@@ -3,7 +3,7 @@
 Concise cold-start orientation. Detailed history lives in git log and the
 `04-tasks/` files — do **not** re-narrate it here.
 
-**Date:** 2026-07-09 · **Branch:** main
+**Date:** 2026-07-10 · **Branch:** main
 
 ## Status
 
@@ -18,33 +18,31 @@ fast) serializes everything: MPPI/NavFn solves block the action-server ACK
 callbacks → intermittent `Timed out while waiting for action server to acknowledge`
 aborts. **Highest-impact fix is to give the VM more vCPUs (→4–6), not more YAML.**
 
-Recent changes (2026-07-09, this session):
-- **Frontier buffer 1→2 cells**, parameterized as `frontier_buffer_cells` (ROS param,
-  default 2). `find_frontier_clusters` now walks N known-cell rings inward from the
-  unknown boundary. Guards goals against the SLAM-map vs. global-costmap seam.
-- **Costmap-bounds goal reject**: `explore_tick` now skips any candidate goal that maps
-  outside `/global_costmap` (`goal_in_global_costmap`) and re-asks for the next-best
-  frontier, up to `MAX_GOAL_ATTEMPTS` (8). Fixes `worldToMap`→`PLAN/NO_VALID_PATH`.
-- **MPPI/motion fixes in `nav2_explore_sim.yaml`** — diagnosed "robot receives paths
-  for 25 s but moves 3 cm": (a) `velocity_smoother.deadband_velocity` reset to
-  `[0,0,0]` (the 0.05/0.1 deadband zeroed the small hesitant commands a CPU-starved
-  MPPI emits — froze the robot in sim; kept in real config); (b) `batch_size 2000→1000`;
-  (c) `visualize true→false`. (d) `FootprintApproach` collision_monitor `enabled: false`
-  (diagnostic — restore when done).
-- New experimental `launch/sim_nav_default.launch.py` (loads **stock** nav2_params to
-  bisect config vs. sim wiring — proved the sim/robot wiring is fine). Delete when done.
-- `expresume.bash` helper (publishes `exploration_resume`).
+Recent changes (2026-07-10, this session):
+- **Feature files F14–F17 added** (no code changes):
+  - F14: `preferred_goal_distance` param replaces binary `prefer_farthest`; ranks
+    frontiers by `|d - preferred_dist|` instead of nearest/farthest.
+  - F15: path novelty scoring — Bresenham unknown-cell count on straight line to each
+    candidate; opt-in via `use_novelty_scoring` param.
+  - F16: periodic map save every 2 min (change default) + legacy PNG/YAML export via
+    `/slam_toolbox/save_map` service after each save.
+  - F17: telemetry filename rename — `e<map_name><dd-mmm>.json` replaces `exp-NNNN.json`;
+    dome_control CSV rename (`t<dd-mmm>.csv`) also documented here (change lives in dome_control).
+- **Real-robot telemetry analysis (`exp-0004.json`)**: identified that y≈0.7 corridor
+  is physically blocked on the real map; blacklist over-accumulation (radius 0.5 m)
+  caused premature "done". `controller_server` 70% CPU = MPPI `batch_size 2000`
+  (expected on Pi). Candidate fix: lower `batch_size` to 500 and `controller_frequency`
+  to 10 Hz for real-robot explore config.
 
-Earlier 2026-07-09 changes: `prefer_farthest=True` (real), sequential telemetry
-(`exp-0001.json`), `dump_failure_diagnostics`/`dump_frontier_exhaustion`,
-`paused_on_failure` + `exploration_resume`, costmap subscriptions, `NAV2_ERROR_CODES`.
+Earlier 2026-07-09 changes: frontier buffer 1→2 cells, costmap-bounds goal reject,
+`prefer_farthest=True` (real), sequential telemetry, `dump_failure_diagnostics`,
+`paused_on_failure` + `exploration_resume`, MPPI/motion fixes.
 
 Known-but-unfixed nav tuning issues (none block basic exploration):
 - Intermittent action-ACK timeouts under load — **root cause is the 1-core VM** (above).
 - Planner choice unsettled: explore configs use NavFn, `nav2_real.yaml` uses SmacPlanner2D.
-  Candidate: switch sim to `SmacPlanner2D` + `use_astar` (faster replan, fewer ACK timeouts).
-- `prefer_farthest=True` in sim aims at the farthest frontier (most likely across
-  unmapped space); `False` (nearest-first) may explore more robustly.
+- `prefer_farthest=True` in sim; F14 will replace this with `preferred_goal_distance`.
+- Real-robot MPPI CPU load high (70%); candidate: `batch_size` 2000→500, freq 20→10 Hz.
 
 ## Architecture essentials
 
@@ -98,7 +96,7 @@ bl dome_nav sim_nav_full.launch.py --map_name <name> --world_name multi_room
 ros2 topic pub --once /intent std_msgs/msg/String 'data: "{\"name\": \"exploration_start\", \"source\": \"cli\", \"slots\": {}}"'
 ros2 topic pub --once /intent std_msgs/msg/String 'data: "{\"name\": \"exploration_stop\",  \"source\": \"cli\", \"slots\": {}}"'
 ros2 topic echo /explore/status          # {"state","reached","failed",... goal_xy,dist_m,elapsed_s}
-tail -f ~/.dome/telemetry/exp-*.json    # session_start/goal_sent/goal_result/no_frontier/session_end
+tail -f ~/.dome/telemetry/exp-*.json    # current naming; F17 will change to e<mapname><dd-mmm>.json
 ```
 
 Intent contract: `nav go <label>`→`navigation_go {label}`, `nav cancel`→`navigation_cancel`,
@@ -107,15 +105,19 @@ Intent contract: `nav go <label>`→`navigation_go {label}`, `nav cancel`→`nav
 
 ## Next steps
 
-1. **Give the dev VM 4–6 vCPUs** (currently 1) — the single biggest reliability win;
-   should clear most intermittent action-ACK timeout aborts. Then re-run and confirm
-   MPPI control-loop rate recovers toward 20 Hz.
-2. **Restore `FootprintApproach` `enabled: true`** in `nav2_explore_sim.yaml` once the
-   no-motion investigation is fully closed (currently disabled for diagnostics).
-3. **Delete `launch/sim_nav_default.launch.py`** (experimental bisect) when done.
-4. **F13 T05/T06** — call the sim exploration demo done; move F13 feature/task to done.
-5. **Optional Nav2 tuning** — SmacPlanner2D+`use_astar` for sim; revisit `prefer_farthest`.
-6. **Real-robot verification (F10 T07)** — Modes A/B/E have never run on hardware.
+1. **Give the dev VM 4–6 vCPUs** (currently 1) — single biggest reliability win.
+2. **Restore `FootprintApproach` `enabled: true`** in `nav2_explore_sim.yaml` (currently
+   disabled for diagnostics).
+3. **Delete `launch/sim_nav_default.launch.py`** (experimental bisect artifact).
+4. **F13 T05/T06** — run end-to-end sim smoke test; declare F13 done.
+5. **F17** — implement telemetry filename rename in `explore_telemetry.py`; coordinate
+   dome_control CSV rename separately.
+6. **F14** — implement `preferred_goal_distance`; deprecate `prefer_farthest`.
+7. **F16** — implement periodic map save default + legacy PNG/YAML export.
+8. **F15** — implement path novelty scoring (opt-in, after F14 landed).
+9. **Reduce MPPI CPU on real robot** — try `batch_size` 2000→500, `controller_frequency`
+   20→10 Hz in `nav2_explore_real.yaml`.
+10. **Real-robot verification (F10 T07)** — Modes A/B/E never run on hardware.
 
 ## Open issues
 
