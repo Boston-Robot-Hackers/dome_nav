@@ -30,9 +30,10 @@ Recent changes (2026-07-10, this session):
     dome_control CSV rename (`t<dd-mmm>.csv`) also documented here (change lives in dome_control).
 - **Real-robot telemetry analysis (`exp-0004.json`)**: identified that y≈0.7 corridor
   is physically blocked on the real map; blacklist over-accumulation (radius 0.5 m)
-  caused premature "done". `controller_server` 70% CPU = MPPI `batch_size 2000`
-  (expected on Pi). Candidate fix: lower `batch_size` to 500 and `controller_frequency`
-  to 10 Hz for real-robot explore config.
+  caused premature "done". `controller_server` 70% CPU from MPPI (expected on Pi).
+  `nav2_explore_real.yaml` already runs `batch_size 1000` (halved from 2000 on
+  2026-07-09); remaining candidate fix: lower `controller_frequency` 20→10 Hz (and,
+  if still CPU-bound, `batch_size` 1000→500) for the real-robot explore config.
 
 Earlier 2026-07-09 changes: frontier buffer 1→2 cells, costmap-bounds goal reject,
 `prefer_farthest=True` (real), sequential telemetry, `dump_failure_diagnostics`,
@@ -40,7 +41,8 @@ Earlier 2026-07-09 changes: frontier buffer 1→2 cells, costmap-bounds goal rej
 
 Known-but-unfixed nav tuning issues (none block basic exploration):
 - Intermittent action-ACK timeouts under load — **root cause is the 1-core VM** (above).
-- Planner choice unsettled: explore configs use NavFn, `nav2_real.yaml` uses SmacPlanner2D.
+- Planner choice unsettled: `nav2_explore_real.yaml` and `nav2_real.yaml` use
+  SmacPlanner2D; `nav2_explore_sim.yaml` uses NavFn.
 - `prefer_farthest=True` in sim; F14 will replace this with `preferred_goal_distance`.
 - Real-robot MPPI CPU load high (70%); candidate: `batch_size` 2000→500, freq 20→10 Hz.
 
@@ -106,8 +108,8 @@ Intent contract: `nav go <label>`→`navigation_go {label}`, `nav cancel`→`nav
 ## Next steps
 
 1. **Give the dev VM 4–6 vCPUs** (currently 1) — single biggest reliability win.
-2. **Restore `FootprintApproach` `enabled: true`** in `nav2_explore_sim.yaml` (currently
-   disabled for diagnostics).
+2. **Restore `FootprintApproach` `enabled: true`** in both `nav2_explore_sim.yaml`
+   and `nav2_explore_real.yaml` (currently disabled for diagnostics in both).
 3. **Delete `launch/sim_nav_default.launch.py`** (experimental bisect artifact).
 4. **F13 T05/T06** — run end-to-end sim smoke test; declare F13 done.
 5. **F17** — implement telemetry filename rename in `explore_telemetry.py`; coordinate
