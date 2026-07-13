@@ -25,26 +25,17 @@ from dome_nav.explore_context import (
 )
 from dome_nav.explore_telemetry import TelemetryWriter
 from dome_nav.explore_markers import build_explore_markers
+from dome_nav.explore_diagnostics import (
+    costmap_cell_cost,
+    format_failure_diagnostics,
+    format_frontier_exhaustion,
+)
 from dome_nav.frontier_algorithm import FrontierAlgorithm
-from dome_nav.frontier_explorer import MapInfo, cell_to_world
+from dome_nav.frontier_explorer import MapInfo
 
 XY = tuple[float, float]
 
 GOAL_STATUS_NAMES = {4: "succeeded", 5: "canceled", 6: "aborted"}
-
-# ComputePathToPose error codes (200 range)
-# FollowPath error codes (100 range)
-NAV2_ERROR_CODES = {
-    0: "NONE",
-    100: "FOLLOW/UNKNOWN", 101: "FOLLOW/INVALID_CONTROLLER", 102: "FOLLOW/TF_ERROR",
-    103: "FOLLOW/INVALID_PATH", 104: "FOLLOW/PATIENCE_EXCEEDED",
-    105: "FOLLOW/FAILED_TO_MAKE_PROGRESS", 106: "FOLLOW/NO_VALID_CONTROL",
-    107: "FOLLOW/CONTROLLER_TIMED_OUT",
-    200: "PLAN/UNKNOWN", 201: "PLAN/INVALID_PLANNER", 202: "PLAN/TF_ERROR",
-    203: "PLAN/START_OUTSIDE_MAP", 204: "PLAN/GOAL_OUTSIDE_MAP",
-    205: "PLAN/START_OCCUPIED", 206: "PLAN/GOAL_OCCUPIED",
-    207: "PLAN/TIMEOUT", 208: "PLAN/NO_VALID_PATH",
-}
 
 
 class PluggableExploreManagerNode(Node):
@@ -98,26 +89,38 @@ class PluggableExploreManagerNode(Node):
         # Default matches ExploreParams.min_frontier_dist (real-robot 1.0 m sent-goal
         # floor after the 0.3 m goal_inset); sim launch files lower it.
         self.declare_parameter("min_frontier_dist", 1.3)
-        self.declare_parameter("prefer_farthest", False)
+        self.declare_parameter("preferred_goal_distance", 1.0)
+        self.declare_parameter("prefer_farthest", False)  # deprecated
         self.declare_parameter("min_frontier_size", 10)
         self.declare_parameter("frontier_buffer_cells", 2)
         self.declare_parameter("map_name", "unknown")
         self.max_explore_radius: float = self.get_parameter("max_explore_radius").value
         self.max_frontier_dist: float = self.get_parameter("max_frontier_dist").value
         self.min_frontier_dist: float = self.get_parameter("min_frontier_dist").value
-        self.prefer_farthest: bool = self.get_parameter("prefer_farthest").value
         self.min_frontier_size: int = self.get_parameter("min_frontier_size").value
         self.frontier_buffer_cells: int = self.get_parameter(
             "frontier_buffer_cells"
         ).value
         self.map_name: str = self.get_parameter("map_name").value
-        self.telemetry = TelemetryWriter(self.get_logger().info)
+
+        preferred_goal_distance: float = self.get_parameter("preferred_goal_distance").value
+        prefer_farthest_val: bool = self.get_parameter("prefer_farthest").value
+        if prefer_farthest_val:
+            effective_max = self.max_frontier_dist if self.max_frontier_dist > 0.0 else 1000.0
+            preferred_goal_distance = effective_max
+            self.get_logger().warning(
+                "prefer_farthest is deprecated; use preferred_goal_distance instead. "
+                f"Mapping prefer_farthest=True to preferred_goal_distance={effective_max}"
+            )
+        self.preferred_goal_distance: float = preferred_goal_distance
+
+        self.telemetry = TelemetryWriter(self.get_logger().info, map_name=self.map_name)
 
         self.params = ExploreParams(
             max_explore_radius=self.max_explore_radius,
             max_frontier_dist=self.max_frontier_dist,
             min_frontier_dist=self.min_frontier_dist,
-            prefer_farthest=self.prefer_farthest,
+            preferred_goal_distance=self.preferred_goal_distance,
             min_frontier_size=self.min_frontier_size,
             frontier_buffer_cells=self.frontier_buffer_cells,
         )
@@ -141,16 +144,6 @@ class PluggableExploreManagerNode(Node):
     def on_local_costmap(self, msg: OccupancyGrid):
         self.latest_local_costmap = msg
 
-    def costmap_cell_cost(self, costmap: OccupancyGrid | None, xy: XY) -> int | None:
-        if costmap is None:
-            return None
-        info = costmap.info
-        col = int((xy[0] - info.origin.position.x) / info.resolution)
-        row = int((xy[1] - info.origin.position.y) / info.resolution)
-        if col < 0 or col >= info.width or row < 0 or row >= info.height:
-            return None
-        return costmap.data[row * info.width + col]
-
     def goal_in_global_costmap(self, xy: XY) -> bool:
         # True if xy maps inside the current global costmap extent. When no
         # global costmap has been received yet, returns True so startup is not
@@ -159,166 +152,24 @@ class PluggableExploreManagerNode(Node):
         # (the SLAM /map the frontier detector reads can extend past the costmap).
         if self.latest_global_costmap is None:
             return True
-        return self.costmap_cell_cost(self.latest_global_costmap, xy) is not None
+        return costmap_cell_cost(self.latest_global_costmap, xy) is not None
 
-    def dump_frontier_exhaustion(self, robot_xy: XY | None):
-        sep = "=" * 60
-        clusters = self.algorithm.latest_clusters
-        info = self.latest_map_info
-        lines = [
-            sep,
-            f"FRONTIER EXHAUSTION — {len(clusters)} raw clusters,"
-            f" patience={self.NO_FRONTIER_PATIENCE}",
-            f"  filters: min_size={self.params.min_frontier_size}"
-            f"  min_dist={self.params.min_frontier_dist}m"
-            f"  max_dist={self.params.max_frontier_dist}m"
-            f"  blacklisted={len(self.blacklist)}",
-            f"  robot_xy: {robot_xy}",
-            "",
-        ]
-        if info is None or not clusters:
-            lines.append("  (no map info or no clusters)")
-        else:
-            rx, ry = robot_xy if robot_xy else (0.0, 0.0)
-            bl = self.blacklist
-            br = self.params.blacklist_radius
-            for i, cl in enumerate(clusters):
-                cx = sum(cell_to_world(idx, info)[0] for idx in cl) / len(cl)
-                cy = sum(cell_to_world(idx, info)[1] for idx in cl) / len(cl)
-                centroid_dist = (
-                    math.sqrt((cx - rx)**2 + (cy - ry)**2) if robot_xy else -1.0
-                )
-                too_small = len(cl) < self.params.min_frontier_size
-                # nearest non-blacklisted cell distance
-                min_cell_dist = float("inf")
-                for cell_idx in cl:
-                    wx, wy = cell_to_world(cell_idx, info)
-                    if any(math.sqrt((wx-bx)**2+(wy-by)**2) < br for bx, by in bl):
-                        continue
-                    d = math.sqrt((wx-rx)**2+(wy-ry)**2) if robot_xy else 0.0
-                    min_cell_dist = min(min_cell_dist, d)
-                min_dist = self.params.min_frontier_dist
-                max_dist = self.params.max_frontier_dist
-                min_size = self.params.min_frontier_size
-                reasons = []
-                if too_small:
-                    reasons.append(f"too_small({len(cl)}<{min_size})")
-                if min_cell_dist == float("inf"):
-                    reasons.append("all_blacklisted")
-                elif min_dist > 0 and min_cell_dist < min_dist:
-                    reasons.append(f"too_close({min_cell_dist:.2f}<{min_dist})")
-                elif max_dist > 0 and min_cell_dist > max_dist:
-                    reasons.append(f"too_far({min_cell_dist:.2f}>{max_dist})")
-                status = "SKIP:" + ",".join(reasons) if reasons else "OK"
-                min_str = (
-                    "inf" if min_cell_dist == float("inf") else f"{min_cell_dist:.2f}m"
-                )
-                lines.append(
-                    f"  [{i:2d}] centroid=({cx:.2f},{cy:.2f})"
-                    f"  size={len(cl):4d}"
-                    f"  centroid_dist={centroid_dist:.2f}m"
-                    f"  nearest_cell={min_str}"
-                    f"  {status}"
-                )
-        lines.append(sep)
-        print("\n".join(lines), flush=True)
-
-    def costmap_radius_costs(
-        self, costmap: OccupancyGrid | None, xy: XY, radius_cells: int = 4
-    ) -> str:
-        if costmap is None:
-            return "n/a"
-        info = costmap.info
-        cx = int((xy[0] - info.origin.position.x) / info.resolution)
-        cy = int((xy[1] - info.origin.position.y) / info.resolution)
-        costs = []
-        for dr in range(-radius_cells, radius_cells + 1):
-            row = []
-            for dc in range(-radius_cells, radius_cells + 1):
-                col, r = cx + dc, cy + dr
-                if 0 <= col < info.width and 0 <= r < info.height:
-                    v = costmap.data[r * info.width + col]
-                    if v == 254:
-                        row.append("XXX")
-                    elif v == 255:
-                        row.append("???")
-                    elif v < 0:
-                        row.append("???")
-                    elif dc == 0 and dr == 0:
-                        row.append(f"[{v:3d}]")
-                    else:
-                        row.append(f"{v:4d}")
-                else:
-                    row.append("    ")
-            costs.append(" ".join(row))
-        return "\n      ".join(costs)
+    def dump_frontier_exhaustion(self, robot_xy: XY):
+        self.get_logger().info(format_frontier_exhaustion(
+            self.algorithm.latest_clusters, self.latest_map_info, robot_xy,
+            self.params, self.blacklist, self.NO_FRONTIER_PATIENCE,
+        ))
 
     def dump_failure_diagnostics(
         self, goal_xy: XY, robot_xy: XY | None, status: str, elapsed: float,
         nav2_error_code: int = 0, nav2_error_msg: str = "",
     ):
-        sep = "=" * 60
-        error_name = NAV2_ERROR_CODES.get(nav2_error_code, f"code={nav2_error_code}")
-        lines = [
-            sep,
-            f"NAV FAILURE: goal #{self.goal_count}  status={status}  elapsed={elapsed}s",
-            (
-                f"  nav2 error: {error_name}  ({nav2_error_msg})"
-                if nav2_error_msg else f"  nav2 error: {error_name}"
-            ),
-            f"  goal_xy  : ({goal_xy[0]:.3f}, {goal_xy[1]:.3f})",
-        ]
-        if robot_xy:
-            dist = math.sqrt((goal_xy[0]-robot_xy[0])**2 + (goal_xy[1]-robot_xy[1])**2)
-            lines.append(f"  robot_xy : ({robot_xy[0]:.3f}, {robot_xy[1]:.3f})  dist={dist:.2f}m")
-        else:
-            lines.append("  robot_xy : unavailable")
-
-        costmaps = [
-            ("global", self.latest_global_costmap),
-            ("local", self.latest_local_costmap),
-        ]
-        for label, cm in costmaps:
-            gc = self.costmap_cell_cost(cm, goal_xy)
-            rc = self.costmap_cell_cost(cm, robot_xy) if robot_xy else None
-            lines.append(
-                f"  {label:6s} costmap @ goal={gc!s:>4}  @ robot={rc!s:>4}"
-                f"  (lethal=254 inscribed=253 unknown=255)"
-            )
-            lines.append(f"  {label:6s} costmap 4-cell radius around GOAL (XXX=lethal ???=unknown):")
-            lines.append(f"      {self.costmap_radius_costs(cm, goal_xy, 4)}")
-            if robot_xy:
-                lines.append(f"  {label:6s} costmap 4-cell radius around ROBOT:")
-                lines.append(f"      {self.costmap_radius_costs(cm, robot_xy, 4)}")
-
-        lines.append(f"  blacklist: {len(self.blacklist)} entries")
-        if self.blacklist:
-            entries = "  ".join(f"({x:.2f},{y:.2f})" for x, y in sorted(self.blacklist))
-            lines.append(f"    {entries}")
-
-        clusters = getattr(self.algorithm, "latest_clusters", [])
-        lines.append(f"  frontiers: {len(clusters)} clusters available")
-        info = self.latest_map_info
-        for i, cl in enumerate(clusters[:10]):
-            if info is not None and cl:
-                xs = [cell_to_world(idx, info)[0] for idx in cl]
-                ys = [cell_to_world(idx, info)[1] for idx in cl]
-                cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
-                lines.append(f"    [{i}] centroid=({cx:.2f},{cy:.2f}) size={len(cl)}")
-            else:
-                lines.append(f"    [{i}] size={len(cl)} (no map info)")
-        if len(clusters) > 10:
-            lines.append(f"    ... and {len(clusters)-10} more")
-
-        lines.append(sep)
-        resume_cmd = (
-            "To resume: ros2 topic pub --once /intent "
-            "std_msgs/msg/String "
-            "'{data: \"{\\\"name\\\": \\\"exploration_resume\\\"}\"}'"
-        )
-        lines.append(resume_cmd)
-        lines.append(sep)
-        print("\n".join(lines), flush=True)
+        self.get_logger().warning(format_failure_diagnostics(
+            goal_xy, robot_xy, status, elapsed, self.goal_count,
+            self.latest_global_costmap, self.latest_local_costmap, self.blacklist,
+            self.algorithm.latest_clusters, self.latest_map_info,
+            nav2_error_code, nav2_error_msg,
+        ))
         self.paused_on_failure = True
 
     def on_intent(self, msg: String):
@@ -349,7 +200,7 @@ class PluggableExploreManagerNode(Node):
                     "goal_inset": self.params.goal_inset_m,
                     "timeout_s": self.GOAL_TIMEOUT_S,
                     "max_radius": self.params.max_explore_radius,
-                    "prefer_farthest": self.params.prefer_farthest,
+                    "preferred_goal_distance": self.params.preferred_goal_distance,
                     "min_frontier_size": self.params.min_frontier_size,
                 },
             )
@@ -393,8 +244,8 @@ class PluggableExploreManagerNode(Node):
         )
         if self.goal_handle is not None:
             self.goal_handle.cancel_goal_async()
-        if self.current_goal_centroid is not None:
-            self.blacklist.add(self.current_goal_centroid)
+        if self.current_goal_xy is not None:
+            self.blacklist.add(self.current_goal_xy)
         self.clear_active_goal()
 
     def find_and_send_frontier(self):
@@ -440,36 +291,30 @@ class PluggableExploreManagerNode(Node):
             )
             rejected.add(candidate)
         if goal_xy is None:
-            self.no_frontier_count += 1
-            self.get_logger().info(
-                f"No frontiers found "
-                f"(tick {self.no_frontier_count}/{self.NO_FRONTIER_PATIENCE})."
-            )
-            diag = self.algorithm.latest_diag or {}
-            self.telemetry.write(
-                "no_frontier", reason="filtered",
-                tick=self.no_frontier_count,
-                patience=self.NO_FRONTIER_PATIENCE,
-                raw_clusters=len(self.algorithm.latest_clusters),
-                blacklisted=len(self.blacklist),
-                **diag,
-            )
-            if self.no_frontier_count >= self.NO_FRONTIER_PATIENCE:
-                self.get_logger().info(
-                    "Frontier patience exhausted — exploration done."
-                )
-                self.dump_frontier_exhaustion(robot_xy)
-                self.stop_exploring("done")
+            self.handle_no_frontier(robot_xy)
             return
         self.no_frontier_count = 0
-        # The algorithm already nudges; centroid is the pre-nudge cluster cell.
-        # For blacklisting we need the raw frontier cell, not the nudged goal.
-        # FrontierAlgorithm stores that as the pick_best_frontier return value
-        # before nudging; we recover it from the clusters for blacklist consistency.
-        # However, the original node passed centroid=target (the raw pick_best_frontier
-        # result) separately. Here we pass goal_xy as both — the blacklist comparison
-        # still works because the same nudged point is stored and checked each time.
-        self.send_nav_goal(goal_xy, centroid=goal_xy)
+        self.send_nav_goal(goal_xy)
+
+    def handle_no_frontier(self, robot_xy: XY):
+        self.no_frontier_count += 1
+        self.get_logger().info(
+            f"No frontiers found "
+            f"(tick {self.no_frontier_count}/{self.NO_FRONTIER_PATIENCE})."
+        )
+        diag = self.algorithm.latest_diag or {}
+        self.telemetry.write(
+            "no_frontier", reason="filtered",
+            tick=self.no_frontier_count,
+            patience=self.NO_FRONTIER_PATIENCE,
+            raw_clusters=len(self.algorithm.latest_clusters),
+            blacklisted=len(self.blacklist),
+            **diag,
+        )
+        if self.no_frontier_count >= self.NO_FRONTIER_PATIENCE:
+            self.get_logger().info("Frontier patience exhausted — exploration done.")
+            self.dump_frontier_exhaustion(robot_xy)
+            self.stop_exploring("done")
 
     def reset_session(self):
         self.state = "idle"
@@ -484,10 +329,9 @@ class PluggableExploreManagerNode(Node):
         self.goal_handle = None
         self.has_active_goal = False
         self.goal_start_time = None
-        self.current_goal_centroid = None
         self.current_goal_xy = None
 
-    def send_nav_goal(self, xy: XY, centroid: XY):
+    def send_nav_goal(self, xy: XY):
         if not self.nav_client.server_is_ready():
             self.get_logger().warning("NavigateToPose server not ready — will retry.")
             return
@@ -500,7 +344,6 @@ class PluggableExploreManagerNode(Node):
         goal.pose.pose.orientation.w = 1.0
         self.has_active_goal = True
         self.goal_start_time = time.monotonic()
-        self.current_goal_centroid = centroid
         self.current_goal_xy = xy
         self.goal_count += 1
         robot_xy = self.robot_xy_in_map()
@@ -515,33 +358,32 @@ class PluggableExploreManagerNode(Node):
         self.telemetry.write(
             "goal_sent", goal_num=self.goal_count,
             goal_xy=[round(xy[0], 3), round(xy[1], 3)],
-            frontier_xy=[round(centroid[0], 3), round(centroid[1], 3)],
             dist_m=round(dist, 3),
             robot_xy=[round(v, 3) for v in robot_xy] if robot_xy else None,
             blacklisted=len(self.blacklist),
         )
         future = self.nav_client.send_goal_async(goal)
         future.add_done_callback(
-            functools.partial(self.on_goal_accepted, xy=xy, centroid=centroid)
+            functools.partial(self.on_goal_accepted, xy=xy)
         )
 
-    def on_goal_accepted(self, future, xy: XY, centroid: XY):
+    def on_goal_accepted(self, future, xy: XY):
         handle = future.result()
         if not handle.accepted:
             self.get_logger().warning(
-                f"Goal rejected at ({xy[0]:.2f}, {xy[1]:.2f}) — blacklisting centroid."
+                f"Goal rejected at ({xy[0]:.2f}, {xy[1]:.2f}) — blacklisting."
             )
-            self.blacklist.add(centroid)
+            self.blacklist.add(xy)
             self.has_active_goal = False
             self.dump_failure_diagnostics(xy, self.robot_xy_in_map(), "rejected", 0.0)
             return
         self.goal_handle = handle
         result_future = handle.get_result_async()
         result_future.add_done_callback(
-            functools.partial(self.on_goal_result, xy=xy, centroid=centroid)
+            functools.partial(self.on_goal_result, xy=xy)
         )
 
-    def on_goal_result(self, future, xy: XY, centroid: XY):
+    def on_goal_result(self, future, xy: XY):
         elapsed = (
             round(time.monotonic() - self.goal_start_time, 1)
             if self.goal_start_time else 0.0
@@ -576,7 +418,7 @@ class PluggableExploreManagerNode(Node):
             robot_xy=[round(v, 3) for v in robot_xy] if robot_xy else None,
             blacklisted=len(self.blacklist),
         )
-        self.blacklist.add(centroid)
+        self.blacklist.add(xy)
 
     def stop_exploring(self, new_state: str):
         if self.goal_handle is not None:

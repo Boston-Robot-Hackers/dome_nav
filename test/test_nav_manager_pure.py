@@ -41,6 +41,33 @@ def test_on_targets_scalar_json_rejected(mgr):
     assert mgr.confirmed_targets == []
 
 
+def test_on_targets_drops_target_missing_xyz_world(mgr):
+    payload = json.dumps([
+        {"label": "chair", "xyz_world": [1.0, 2.0, 0.0]},
+        {"label": "ghost"},  # no xyz_world → dropped
+    ])
+    assert mgr.on_targets(payload) is True
+    assert [t["label"] for t in mgr.confirmed_targets] == ["chair"]
+
+
+def test_on_targets_drops_target_with_short_xyz(mgr):
+    payload = json.dumps([{"label": "bad", "xyz_world": [1.0]}])
+    assert mgr.on_targets(payload) is True
+    assert mgr.confirmed_targets == []
+
+
+def test_on_targets_drops_target_with_nonnumeric_xyz(mgr):
+    payload = json.dumps([{"label": "bad", "xyz_world": ["x", "y"]}])
+    assert mgr.on_targets(payload) is True
+    assert mgr.confirmed_targets == []
+
+
+def test_on_targets_drops_non_dict_entries(mgr):
+    payload = json.dumps([[1.0, 2.0], "chair", {"label": "ok", "xyz_world": [1.0, 2.0]}])
+    assert mgr.on_targets(payload) is True
+    assert [t["label"] for t in mgr.confirmed_targets] == ["ok"]
+
+
 # --- parse_intent ---
 
 def test_parse_intent_navigation_go(mgr):

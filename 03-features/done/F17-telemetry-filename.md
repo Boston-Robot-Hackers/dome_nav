@@ -1,10 +1,10 @@
 # F17 — Telemetry File Naming: session name + day/month
 
 **Priority**: Low
-**Done:** no
-**Tasks File Created:** no
-**Tests Written:** no
-**Test Passing:** no
+**Done:** yes
+**Tasks File Created:** yes
+**Tests Written:** yes
+**Test Passing:** yes
 **Description**: Rename telemetry files from the sequential `exp-NNNN.json` scheme
 to `e<map_name><dd-mmm>.json` (e.g. `efri010-jul.json`). Makes files human-readable
 at a glance without opening them. When the same map name is used more than once on

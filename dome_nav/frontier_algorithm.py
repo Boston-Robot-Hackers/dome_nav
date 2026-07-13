@@ -28,17 +28,8 @@ class FrontierAlgorithm:
         )
         self.latest_clusters = clusters
         target = pick_best_frontier(
-            clusters,
-            ctx.map_info,
-            ctx.robot_xy,
-            min_size=ctx.params.min_frontier_size,
-            blacklist=ctx.blacklist,
-            blacklist_radius=ctx.params.blacklist_radius,
-            max_radius=ctx.params.max_explore_radius,
-            start_xy=ctx.start_xy,
-            min_dist=ctx.params.min_frontier_dist,
-            max_dist=ctx.params.max_frontier_dist,
-            prefer_farthest=ctx.params.prefer_farthest,
+            clusters, ctx.map_info, ctx.robot_xy, ctx.params,
+            blacklist=ctx.blacklist, start_xy=ctx.start_xy,
         )
         if target is None:
             self.latest_diag = frontier_diag(

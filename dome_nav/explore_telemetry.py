@@ -7,14 +7,14 @@ import json
 import os
 import re
 import time
+from datetime import datetime
 
 
 class TelemetryWriter:
-    def __init__(self, log_fn):
+    def __init__(self, log_fn, map_name: str = "session"):
         telemetry_dir = os.path.join(os.path.expanduser("~"), ".dome", "telemetry")
         os.makedirs(telemetry_dir, exist_ok=True)
-        next_n = next_run_number(telemetry_dir)
-        path = os.path.join(telemetry_dir, f"exp-{next_n:04d}.json")
+        path = os.path.join(telemetry_dir, build_telemetry_filename(map_name))
         self.file = open(path, "w")
         log_fn(f"Telemetry: {path}")
 
@@ -27,11 +27,18 @@ class TelemetryWriter:
         self.file.close()
 
 
-def next_run_number(telemetry_dir: str) -> int:
-    pattern = re.compile(r"^exp-(\d{4})\.json$")
-    nums = [
-        int(m.group(1))
-        for f in os.listdir(telemetry_dir)
-        if (m := pattern.match(f))
-    ]
-    return (max(nums) + 1) if nums else 1
+def build_telemetry_filename(map_name: str, now: datetime | None = None) -> str:
+    if now is None:
+        now = datetime.now()
+    date_str = now.strftime("%d-%b").lower()
+    safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", map_name)[:32]
+    base = f"e{safe_name}{date_str}.json"
+    telemetry_dir = os.path.join(os.path.expanduser("~"), ".dome", "telemetry")
+    if not os.path.exists(os.path.join(telemetry_dir, base)):
+        return base
+    n = 2
+    while True:
+        candidate = f"e{safe_name}{date_str}-{n}.json"
+        if not os.path.exists(os.path.join(telemetry_dir, candidate)):
+            return candidate
+        n += 1

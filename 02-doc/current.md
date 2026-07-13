@@ -3,7 +3,7 @@
 Concise cold-start orientation. Detailed history lives in git log and the
 `04-tasks/` files — do **not** re-narrate it here.
 
-**Date:** 2026-07-10 · **Branch:** main
+**Date:** 2026-07-13 · **Branch:** main
 
 ## Status
 
@@ -70,7 +70,7 @@ Known-but-unfixed nav tuning issues (none block basic exploration):
 - `min_frontier_dist`: 0.5 / **0.9** m (raw frontier-cell floor; `goal_inset` 0.3 pulls the sent goal 0.3 m closer)
 - `max_frontier_dist`: 0.0 (unlimited) / **15.0** m
 - `min_frontier_size`: 10 / **5** cells
-- `prefer_farthest`: **True** (real and sim)
+- `preferred_goal_distance`: **1.0 m** (real) / **2.0 m** (sim) — selects frontier cell with `min |d - preferred_dist|`; `prefer_farthest` deprecated
 - `frontier_buffer_cells`: 2 (known-cell rings between a frontier goal and unknown)
 - `max_explore_radius`: 0.0 (unlimited); `goal_inset_m`: 0.3; `blacklist_radius`: 0.5 m
 - Constants: `EXPLORE_HZ` 2, `NO_FRONTIER_PATIENCE` 14 ticks (must exceed slam's 5 s `map_update_interval`), `GOAL_TIMEOUT_S` 25 s, `MAX_GOAL_ATTEMPTS` 8
@@ -85,8 +85,7 @@ bl dome_nav robot_map.launch.py --map_name <name>      # Mode A: mapping (slam)
 bl dome_nav robot_nav.launch.py                        # Mode B: AMCL nav (uses saved basement1 map)
 bl dome_nav robot_explore.launch.py --map_name <name>  # Mode E: autonomous explore
 
-# Sim — two steps (Gazebo started separately, then the stack):
-gz sim -r ~/ros2_ws/install/dome_nav/share/dome_nav/worlds/multi_room.world
+# Sim — single command (Gazebo launched inside sim_robot.launch.py):
 bl dome_nav sim_nav_full.launch.py --map_name <name> --world_name multi_room
 # sim_rviz.launch.py is a separate optional window.
 ```
@@ -98,7 +97,7 @@ bl dome_nav sim_nav_full.launch.py --map_name <name> --world_name multi_room
 ros2 topic pub --once /intent std_msgs/msg/String 'data: "{\"name\": \"exploration_start\", \"source\": \"cli\", \"slots\": {}}"'
 ros2 topic pub --once /intent std_msgs/msg/String 'data: "{\"name\": \"exploration_stop\",  \"source\": \"cli\", \"slots\": {}}"'
 ros2 topic echo /explore/status          # {"state","reached","failed",... goal_xy,dist_m,elapsed_s}
-tail -f ~/.dome/telemetry/exp-*.json    # current naming; F17 will change to e<mapname><dd-mmm>.json
+tail -f ~/.dome/telemetry/e*.json       # e<mapname><dd-mmm>.json (F17); old exp-NNNN.json also present
 ```
 
 Intent contract: `nav go <label>`→`navigation_go {label}`, `nav cancel`→`navigation_cancel`,
@@ -111,15 +110,13 @@ Intent contract: `nav go <label>`→`navigation_go {label}`, `nav cancel`→`nav
 2. **Restore `FootprintApproach` `enabled: true`** in both `nav2_explore_sim.yaml`
    and `nav2_explore_real.yaml` (currently disabled for diagnostics in both).
 3. **Delete `launch/sim_nav_default.launch.py`** (experimental bisect artifact).
-4. **F13 T05/T06** — run end-to-end sim smoke test; declare F13 done.
-5. **F17** — implement telemetry filename rename in `explore_telemetry.py`; coordinate
-   dome_control CSV rename separately.
-6. **F14** — implement `preferred_goal_distance`; deprecate `prefer_farthest`.
-7. **F16** — implement periodic map save default + legacy PNG/YAML export.
-8. **F15** — implement path novelty scoring (opt-in, after F14 landed).
-9. **Reduce MPPI CPU on real robot** — try `batch_size` 2000→500, `controller_frequency`
+4. **F17 done** — telemetry files now named `e<map_name><dd-mmm>.json`; old `exp-NNNN.json` files coexist untouched. dome_control CSV rename (`t<dd-mmm>.csv`) still pending in dome_control.
+5. **F14 done** — `preferred_goal_distance` param replaces `prefer_farthest`; selection is `min |d - preferred_dist|`. `prefer_farthest` kept as deprecated alias (logs warning, maps True→max_frontier_dist). Sim default 2.0 m, real 1.0 m.
+6. **F16 done** — `save_period_sec` default 60→120 s; `export_legacy_map: bool = True` param; `/slam_toolbox/save_map` called after each posegraph save (best-effort).
+7. **F15** — implement path novelty scoring (opt-in, after F14 landed).
+8. **Reduce MPPI CPU on real robot** — try `batch_size` 2000→500, `controller_frequency`
    20→10 Hz in `nav2_explore_real.yaml`.
-10. **Real-robot verification (F10 T07)** — Modes A/B/E never run on hardware.
+9. **Real-robot verification (F10 T07)** — Modes A/B/E never run on hardware.
 
 ## Open issues
 

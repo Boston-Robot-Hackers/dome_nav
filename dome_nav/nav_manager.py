@@ -7,6 +7,18 @@ import json
 import math
 
 
+def is_valid_target(target) -> bool:
+    # A target is usable if it is a dict carrying an xyz_world with at least two
+    # numeric coordinates (x, y). bool is excluded — it is a subclass of int.
+    if not isinstance(target, dict):
+        return False
+    xyz = target.get("xyz_world")
+    return (
+        isinstance(xyz, (list, tuple)) and len(xyz) >= 2
+        and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in xyz[:2])
+    )
+
+
 class NavManager:
     MAX_COV = 1.0
     CONVERGED_THRESHOLD = 0.9
@@ -21,7 +33,9 @@ class NavManager:
             return False
         if not isinstance(result, list):
             return False
-        self.confirmed_targets = result
+        # Validate once, here at the boundary: keep only targets with a usable
+        # xyz_world. Downstream code then trusts every stored target.
+        self.confirmed_targets = [t for t in result if is_valid_target(t)]
         return True
 
     def parse_intent(self, json_str: str) -> tuple[str, dict] | None:
@@ -36,7 +50,8 @@ class NavManager:
             return None
         return (action, intent)
 
-    # target dicts: {"label": str, "xyz_world": [x, y, z], ...}
+    # target dicts: {"label": str, "xyz_world": [x, y, z], ...} — every stored
+    # target has a valid xyz_world (validated in on_targets).
     # robot_xy None = no pose available; fall back to first match rather than blocking navigation
     def find_nearest_confirmed(self, label: str, robot_xy: tuple[float, float] | None) -> dict | None:
         matches = [t for t in self.confirmed_targets if t.get("label") == label]
@@ -47,7 +62,7 @@ class NavManager:
         rx, ry = robot_xy
 
         def dist(target: dict) -> float:
-            xyz = target.get("xyz_world", [0.0, 0.0, 0.0])
+            xyz = target["xyz_world"]
             return math.sqrt((xyz[0] - rx) ** 2 + (xyz[1] - ry) ** 2)
 
         return min(matches, key=dist)

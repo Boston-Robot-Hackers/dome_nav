@@ -72,18 +72,14 @@ class NavManagerNode(Node):
             self.publish_status(self.manager.navigate_status(label, None))
             return
 
-        xyz = target.get("xyz_world")
-        if xyz is None:
-            self.get_logger().warning(f"Target {label!r} missing xyz_world — skipping.")
-            self.publish_status(self.manager.navigate_status(label, None))
-            return
+        xyz = target["xyz_world"]  # validated at ingest in on_targets
         goal_pose = PoseStamped()
         goal_pose.header.frame_id = "map"
         goal_pose.header.stamp = self.get_clock().now().to_msg()
-        goal_pose.pose.position.x = float(xyz[0])
-        goal_pose.pose.position.y = float(xyz[1])
+        goal_pose.pose.position.x = xyz[0]
+        goal_pose.pose.position.y = xyz[1]
         goal_pose.pose.position.z = 0.0
-        yaw = float(target.get("yaw_world", 0.0))
+        yaw = target.get("yaw_world", 0.0)
         goal_pose.pose.orientation.z = math.sin(yaw / 2.0)
         goal_pose.pose.orientation.w = math.cos(yaw / 2.0)
 
@@ -96,7 +92,7 @@ class NavManagerNode(Node):
         goal.pose = goal_pose
         self.get_logger().info(f"Navigating to {label} at {xyz}.")
         self.publish_status(self.manager.navigate_status(label, target))
-        future = self.nav_client.send_goal_async(goal, feedback_callback=self.on_nav_feedback)
+        future = self.nav_client.send_goal_async(goal)
         future.add_done_callback(functools.partial(self.on_goal_accepted, label=label))
 
     def on_goal_accepted(self, future, label: str):
@@ -136,9 +132,6 @@ class NavManagerNode(Node):
         f_msg = Float32()
         f_msg.data = float(self.last_loc_score)
         self.loc_score_pub.publish(f_msg)
-
-    def on_nav_feedback(self, feedback_msg):
-        pass
 
     def robot_xy_in_map(self) -> tuple[float, float] | None:
         try:

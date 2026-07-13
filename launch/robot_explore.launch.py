@@ -54,7 +54,7 @@ def robot_explore_launch(
     # real-robot values (they match ExploreParams' own defaults except max_frontier_dist,
     # which the node declares as a sim-oriented 15.0 and is set back to 0.0 = unlimited
     # here). The sim launch files override min_frontier_dist/max_frontier_dist/
-    # prefer_farthest/min_frontier_size for the simulated worlds.
+    # preferred_goal_distance/min_frontier_size for the simulated worlds.
     bl.node(
         "dome_nav",
         "pluggable_explore_manager_node",
@@ -63,7 +63,7 @@ def robot_explore_launch(
             "max_explore_radius": max_explore_radius,
             "max_frontier_dist": 0.0,
             "min_frontier_dist": 0.5,
-            "prefer_farthest": True,
+            "preferred_goal_distance": 1.0,
             "min_frontier_size": 10,
             "map_name": map_name,
             "use_sim_time": use_sim_time == "true",

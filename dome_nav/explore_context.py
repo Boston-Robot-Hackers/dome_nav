@@ -21,7 +21,8 @@ class ExploreParams:
     max_frontier_dist: float = 0.0
     goal_inset_m: float = 0.3
     max_explore_radius: float = 0.0
-    prefer_farthest: bool = False
+    preferred_goal_distance: float = 1.0
+    prefer_farthest: bool = False  # deprecated: use preferred_goal_distance
     # Known-cell rings between a frontier goal and the unknown boundary. 2 keeps
     # goals two confirmed-known cells inside the mapped edge (see
     # find_frontier_clusters); 1 is the original single-buffer behaviour.

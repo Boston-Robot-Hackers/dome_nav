@@ -1,10 +1,10 @@
 # F13 — Gazebo Simulation for Exploration Development
 
 **Priority**: High
-**Done:** no
+**Done:** yes
 **Tasks File Created:** yes
-**Tests Written:** no
-**Test Passing:** no
+**Tests Written:** yes
+**Test Passing:** yes
 **Description**: Add a simulation launch mode that runs the full dome_nav exploration
 stack (slam_toolbox + Nav2 + explore or pluggable explore node) inside Gazebo Harmonic
 on a development machine, without physical hardware. Uses `ros_gz_sim` + `ros_gz_bridge`

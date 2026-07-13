@@ -1,10 +1,10 @@
 # F16 — Periodic Map Save with Legacy Format Export
 
 **Priority**: Medium
-**Done:** no
-**Tasks File Created:** no
-**Tests Written:** no
-**Test Passing:** no
+**Done:** yes
+**Tasks File Created:** yes
+**Tests Written:** yes
+**Test Passing:** yes
 **Description**: Save the slam_toolbox map automatically every 2 minutes during
 exploration, and additionally export a legacy-format map (PNG occupancy image +
 YAML metadata) compatible with Nav2's `map_server` / `nav2_map_server`. The

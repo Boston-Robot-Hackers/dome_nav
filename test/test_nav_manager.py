@@ -126,8 +126,11 @@ def test_navigate_no_target_publishes_no_target(node):
     node.publish_status.assert_called_once_with("no_target:ghost")
 
 
-def test_navigate_target_missing_xyz_world_publishes_no_target(node):
-    node.manager.confirmed_targets = [{"label": "chair"}]
+def test_navigate_target_missing_xyz_world_dropped_at_ingest(node):
+    # Target missing xyz_world is dropped by on_targets, so the label has no
+    # confirmed match and navigate reports no_target.
+    node.manager.on_targets(json.dumps([{"label": "chair"}]))
+    assert node.manager.confirmed_targets == []
     node.publish_status = MagicMock()
     node.navigate_to_object("chair")
     node.publish_status.assert_called_once_with("no_target:chair")

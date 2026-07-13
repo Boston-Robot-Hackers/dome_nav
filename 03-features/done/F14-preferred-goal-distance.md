@@ -1,10 +1,10 @@
 # F14 — Preferred Goal Distance Frontier Ranking
 
 **Priority**: Medium
-**Done:** no
-**Tasks File Created:** no
-**Tests Written:** no
-**Test Passing:** no
+**Done:** yes
+**Tasks File Created:** yes
+**Tests Written:** yes
+**Test Passing:** yes
 **Description**: Replace the binary `prefer_farthest` flag with a continuous ranking
 that scores each frontier candidate by how close its distance is to a configurable
 `preferred_goal_distance` parameter (default 1.0 m). The best candidate is the one

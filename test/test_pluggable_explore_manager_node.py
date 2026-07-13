@@ -193,7 +193,6 @@ def test_timeout_not_expired_does_nothing(node):
     node.has_active_goal = True
     node.goal_start_time = time.monotonic()
     node.goal_handle = MagicMock()
-    node.current_goal_centroid = (1.0, 0.0)
     node.current_goal_xy = (0.7, 0.0)
     node.check_goal_timeout()
     node.goal_handle.cancel_goal_async.assert_not_called()
@@ -205,33 +204,29 @@ def test_timeout_expired_cancels_goal(node):
     node.goal_start_time = 0.0  # ancient → always expired
     mock_handle = MagicMock()
     node.goal_handle = mock_handle
-    node.current_goal_centroid = (5.0, 5.0)
     node.current_goal_xy = (4.7, 5.0)
     node.check_goal_timeout()
     mock_handle.cancel_goal_async.assert_called_once()
 
 
-def test_timeout_expired_blacklists_centroid(node):
+def test_timeout_expired_blacklists_goal(node):
     node.has_active_goal = True
     node.goal_start_time = 0.0
     node.goal_handle = MagicMock()
-    node.current_goal_centroid = (5.0, 5.0)
     node.current_goal_xy = (4.7, 5.0)
     node.blacklist = set()
     node.check_goal_timeout()
-    assert (5.0, 5.0) in node.blacklist
+    assert (4.7, 5.0) in node.blacklist
 
 
 def test_timeout_expired_clears_active_state(node):
     node.has_active_goal = True
     node.goal_start_time = 0.0
     node.goal_handle = MagicMock()
-    node.current_goal_centroid = (1.0, 0.0)
     node.current_goal_xy = (0.7, 0.0)
     node.check_goal_timeout()
     assert node.has_active_goal is False
     assert node.goal_start_time is None
-    assert node.current_goal_centroid is None
     assert node.current_goal_xy is None
 
 

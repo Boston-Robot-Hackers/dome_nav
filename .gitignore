@@ -7,3 +7,6 @@ log/
 
 # stray screenshots / scratch images (not repo assets)
 /rviz.png
+
+# macOS AppleDouble metadata files
+._*

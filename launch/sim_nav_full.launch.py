@@ -76,7 +76,7 @@ def sim_nav_full_launch(
     max_explore_radius: float = 0.0,
     max_frontier_dist: float = 15.0,
     min_frontier_dist: float = 0.9,
-    prefer_farthest: bool = True,
+    preferred_goal_distance: float = 2.0,
     min_frontier_size: int = 5,
 ):
     if not map_name:

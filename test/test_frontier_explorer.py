@@ -5,6 +5,7 @@
 
 import math
 import pytest
+from dome_nav.explore_context import ExploreParams
 from dome_nav.frontier_explorer import (
     MapInfo,
     frontier_diag,
@@ -18,6 +19,16 @@ from dome_nav.frontier_explorer import (
 def make_info(width: int, height: int, resolution: float = 1.0) -> MapInfo:
     return MapInfo(width=width, height=height, resolution=resolution, origin_x=0.0,
                    origin_y=0.0)
+
+
+# pick_best_frontier now takes an ExploreParams. These pure geometry tests want
+# no-op distance filters by default (min_frontier_dist=0.0), unlike the operational
+# ExploreParams default of 1.3 m — so build filters here with geometry-friendly
+# defaults and override per test.
+def filters(min_frontier_size: int = 1, min_frontier_dist: float = 0.0, **kw):
+    return ExploreParams(
+        min_frontier_size=min_frontier_size, min_frontier_dist=min_frontier_dist, **kw
+    )
 
 
 def flat_map(width: int, height: int, value: int) -> list[int]:
@@ -161,13 +172,15 @@ def test_cell_to_world_second_row():
 
 def test_pick_returns_none_when_no_clusters():
     info = make_info(5, 5)
-    assert pick_best_frontier([], info, (0.0, 0.0)) is None
+    assert pick_best_frontier([], info, (0.0, 0.0), filters()) is None
 
 
 def test_pick_skips_clusters_below_min_size():
     info = make_info(5, 1)
     cluster = [0, 1]  # size 2
-    assert pick_best_frontier([cluster], info, (0.0, 0.0), min_size=10) is None
+    assert pick_best_frontier(
+        [cluster], info, (0.0, 0.0), filters(min_frontier_size=10)
+    ) is None
 
 
 def test_pick_returns_nearest_centroid():
@@ -175,51 +188,76 @@ def test_pick_returns_nearest_centroid():
     near = [1]   # world x=1.5
     far = [8]    # world x=8.5
     # robot at x=0, nearest is near cluster
-    result = pick_best_frontier([near, far], info, (0.0, 0.0), min_size=1)
+    result = pick_best_frontier([near, far], info, (0.0, 0.0), filters())
     assert result is not None
     assert abs(result[0] - 1.5) < 1e-6
 
 
-# --- prefer_farthest ---
+# --- preferred_dist ---
 
-def test_pick_prefer_farthest_returns_farthest_across_clusters():
+def test_pick_preferred_dist_large_returns_farthest_across_clusters():
+    info = make_info(10, 1, resolution=1.0)
+    near = [1]   # world x=1.5, dist=1.5
+    far = [8]    # world x=8.5, dist=8.5
+    result = pick_best_frontier(
+        [near, far], info, (0.0, 0.0), filters(preferred_goal_distance=1000.0)
+    )
+    assert result is not None
+    assert abs(result[0] - 8.5) < 1e-6
+
+
+def test_pick_preferred_dist_large_within_single_cluster():
+    info = make_info(10, 1, resolution=1.0)
+    cluster = [1, 5, 8]  # world x=1.5, 5.5, 8.5
+    result = pick_best_frontier(
+        [cluster], info, (0.0, 0.0), filters(preferred_goal_distance=1000.0)
+    )
+    assert result is not None
+    assert abs(result[0] - 8.5) < 1e-6
+
+
+def test_pick_preferred_dist_nearest_returns_nearest():
     info = make_info(10, 1, resolution=1.0)
     near = [1]   # world x=1.5
     far = [8]    # world x=8.5
     result = pick_best_frontier(
-        [near, far], info, (0.0, 0.0), min_size=1, prefer_farthest=True
+        [near, far], info, (0.0, 0.0), filters(preferred_goal_distance=0.0)
     )
     assert result is not None
-    assert abs(result[0] - 8.5) < 1e-6
+    assert abs(result[0] - 1.5) < 1e-6
 
 
-def test_pick_prefer_farthest_within_single_cluster():
+def test_pick_preferred_dist_intermediate_picks_closest_to_target():
     info = make_info(10, 1, resolution=1.0)
-    cluster = [1, 5, 8]  # world x=1.5, 5.5, 8.5
+    cluster = [1, 5, 8]  # distances 1.5, 5.5, 8.5
+    # preferred_dist=5.0 → cell at x=5.5 (dist=5.5, score=0.5) wins over
+    # x=1.5 (score=3.5) and x=8.5 (score=3.5)
     result = pick_best_frontier(
-        [cluster], info, (0.0, 0.0), min_size=1, prefer_farthest=True
-    )
-    assert result is not None
-    assert abs(result[0] - 8.5) < 1e-6
-
-
-def test_pick_prefer_farthest_respects_blacklist():
-    info = make_info(10, 1, resolution=1.0)
-    cluster = [1, 5, 8]  # world x=1.5, 5.5, 8.5
-    blacklist = {(8.5, 0.5)}
-    result = pick_best_frontier(
-        [cluster], info, (0.0, 0.0),
-        min_size=1, blacklist=blacklist, blacklist_radius=0.5, prefer_farthest=True,
+        [cluster], info, (0.0, 0.0), filters(preferred_goal_distance=5.0)
     )
     assert result is not None
     assert abs(result[0] - 5.5) < 1e-6
 
 
-def test_pick_prefer_farthest_respects_max_dist():
+def test_pick_preferred_dist_respects_blacklist():
+    info = make_info(10, 1, resolution=1.0)
+    cluster = [1, 5, 8]  # world x=1.5, 5.5, 8.5
+    blacklist = {(8.5, 0.5)}
+    result = pick_best_frontier(
+        [cluster], info, (0.0, 0.0),
+        filters(blacklist_radius=0.5, preferred_goal_distance=1000.0),
+        blacklist=blacklist,
+    )
+    assert result is not None
+    assert abs(result[0] - 5.5) < 1e-6
+
+
+def test_pick_preferred_dist_respects_max_dist():
     info = make_info(10, 1, resolution=1.0)
     cluster = [1, 5, 8]  # world x=1.5, 5.5, 8.5 — distances 1.5, 5.5, 8.5
     result = pick_best_frontier(
-        [cluster], info, (0.0, 0.0), min_size=1, max_dist=6.0, prefer_farthest=True,
+        [cluster], info, (0.0, 0.0),
+        filters(max_frontier_dist=6.0, preferred_goal_distance=1000.0),
     )
     assert result is not None
     assert abs(result[0] - 5.5) < 1e-6
@@ -232,7 +270,7 @@ def test_pick_skips_blacklisted_centroid():
     blacklist = {(1.5, 0.5)}
     result = pick_best_frontier(
         [near, far], info, (0.0, 0.0),
-        min_size=1, blacklist=blacklist, blacklist_radius=0.6
+        filters(blacklist_radius=0.6), blacklist=blacklist,
     )
     assert result is not None
     assert abs(result[0] - 8.5) < 1e-6
@@ -244,7 +282,7 @@ def test_pick_returns_none_when_all_blacklisted():
     blacklist = {(2.5, 0.5)}
     result = pick_best_frontier(
         [cluster], info, (0.0, 0.0),
-        min_size=1, blacklist=blacklist, blacklist_radius=0.6
+        filters(blacklist_radius=0.6), blacklist=blacklist,
     )
     assert result is None
 
@@ -255,7 +293,7 @@ def test_pick_blacklist_radius_respected():
     blacklist = {(2.1, 0.5)}  # 0.4m away — inside radius 0.5
     result = pick_best_frontier(
         [cluster], info, (0.0, 0.0),
-        min_size=1, blacklist=blacklist, blacklist_radius=0.5
+        filters(blacklist_radius=0.5), blacklist=blacklist,
     )
     assert result is None
 
@@ -266,7 +304,7 @@ def test_pick_blacklist_outside_radius_not_skipped():
     blacklist = {(1.9, 0.5)}  # 0.6m away — outside radius 0.5
     result = pick_best_frontier(
         [cluster], info, (0.0, 0.0),
-        min_size=1, blacklist=blacklist, blacklist_radius=0.5
+        filters(blacklist_radius=0.5), blacklist=blacklist,
     )
     assert result is not None
 
@@ -277,7 +315,8 @@ def test_max_radius_zero_disables_filter():
     info = make_info(20, 1, resolution=1.0)
     far_cluster = [15]  # centroid x=15.5, far from start (0,0)
     result = pick_best_frontier(
-        [far_cluster], info, (0.0, 0.0), min_size=1, max_radius=0.0, start_xy=(0.5, 0.5)
+        [far_cluster], info, (0.0, 0.0),
+        filters(max_explore_radius=0.0), start_xy=(0.5, 0.5),
     )
     assert result is not None
 
@@ -286,7 +325,8 @@ def test_max_radius_excludes_distant_frontier():
     info = make_info(20, 1, resolution=1.0)
     far_cluster = [15]  # centroid x=15.5
     result = pick_best_frontier(
-        [far_cluster], info, (0.0, 0.0), min_size=1, max_radius=5.0, start_xy=(0.5, 0.5)
+        [far_cluster], info, (0.0, 0.0),
+        filters(max_explore_radius=5.0), start_xy=(0.5, 0.5),
     )
     assert result is None
 
@@ -296,7 +336,7 @@ def test_max_radius_includes_near_frontier():
     near_cluster = [2]  # centroid x=2.5, ~2m from start (0.5, 0.5)
     result = pick_best_frontier(
         [near_cluster], info, (0.0, 0.0),
-        min_size=1, max_radius=5.0, start_xy=(0.5, 0.5)
+        filters(max_explore_radius=5.0), start_xy=(0.5, 0.5),
     )
     assert result is not None
 
@@ -307,7 +347,7 @@ def test_max_radius_picks_near_over_far():
     far_cluster = [15]   # centroid x=15.5
     result = pick_best_frontier(
         [far_cluster, near_cluster], info, (0.0, 0.0),
-        min_size=1, max_radius=5.0, start_xy=(0.5, 0.5)
+        filters(max_explore_radius=5.0), start_xy=(0.5, 0.5),
     )
     assert result is not None
     assert abs(result[0] - 2.5) < 1e-6
@@ -318,7 +358,8 @@ def test_max_radius_no_start_xy_disables_filter():
     info = make_info(20, 1, resolution=1.0)
     far_cluster = [15]
     result = pick_best_frontier(
-        [far_cluster], info, (0.0, 0.0), min_size=1, max_radius=3.0, start_xy=None
+        [far_cluster], info, (0.0, 0.0),
+        filters(max_explore_radius=3.0), start_xy=None,
     )
     assert result is not None
 
@@ -386,7 +427,7 @@ def test_pick_returns_nearest_cell_not_centroid():
     # Verifies nearest-cell logic: if code returned centroid, result would be ~4.2.
     info = make_info(10, 1, resolution=1.0)
     cluster = [1, 2, 8]
-    result = pick_best_frontier([cluster], info, (0.0, 0.0), min_size=1)
+    result = pick_best_frontier([cluster], info, (0.0, 0.0), filters())
     assert result is not None
     assert abs(result[0] - 1.5) < 1e-6
 
@@ -395,7 +436,9 @@ def test_pick_all_cells_under_min_dist_skips_cluster():
     # All cells in cluster are within min_dist of robot → whole cluster skipped.
     info = make_info(10, 1, resolution=1.0)
     cluster = [0, 1, 2]  # world x: 0.5, 1.5, 2.5 — all < 5.0 from robot at x=0
-    result = pick_best_frontier([cluster], info, (0.0, 0.0), min_size=1, min_dist=5.0)
+    result = pick_best_frontier(
+        [cluster], info, (0.0, 0.0), filters(min_frontier_dist=5.0)
+    )
     assert result is None
 
 
@@ -409,7 +452,9 @@ def test_pick_ring_cluster_centroid_near_robot():
     # cells (1,1),(1,3),(3,1),(3,3) = indices 6,8,16,18 — equidistant from center
     ring = [6, 8, 16, 18]
     robot_xy = (2.5, 2.5)  # center of 5x5 grid at resolution 1.0
-    result = pick_best_frontier([ring], info, robot_xy, min_size=1, min_dist=0.5)
+    result = pick_best_frontier(
+        [ring], info, robot_xy, filters(min_frontier_dist=0.5)
+    )
     assert result is not None
     # nearest cell in ring to robot: all at distance sqrt(2) ≈ 1.414, all > 0.5 min_dist
     dist = math.sqrt((result[0] - robot_xy[0]) ** 2 + (result[1] - robot_xy[1]) ** 2)
@@ -420,7 +465,9 @@ def test_pick_all_cells_over_max_dist_skips_cluster():
     # All cells farther than max_dist → cluster skipped entirely.
     info = make_info(10, 1, resolution=1.0)
     cluster = [8]  # world x=8.5, dist=8.5
-    result = pick_best_frontier([cluster], info, (0.0, 0.0), min_size=1, max_dist=1.0)
+    result = pick_best_frontier(
+        [cluster], info, (0.0, 0.0), filters(max_frontier_dist=1.0)
+    )
     assert result is None
 
 
@@ -442,6 +489,8 @@ def test_pick_returns_cell_within_max_dist():
     # Nearest in-range cell is returned when max_dist excludes farther cells.
     info = make_info(10, 1, resolution=1.0)
     cluster = [0, 5]  # world x: 0.5 (dist 0.5), 5.5 (dist 5.5)
-    result = pick_best_frontier([cluster], info, (0.0, 0.0), min_size=1, max_dist=1.0)
+    result = pick_best_frontier(
+        [cluster], info, (0.0, 0.0), filters(max_frontier_dist=1.0)
+    )
     assert result is not None
     assert abs(result[0] - 0.5) < 1e-6

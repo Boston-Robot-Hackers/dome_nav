@@ -8,7 +8,7 @@ import rclpy
 from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
 from std_msgs.msg import String
 from nav_msgs.msg import OccupancyGrid
-from slam_toolbox.srv import SerializePoseGraph
+from slam_toolbox.srv import SerializePoseGraph, SaveMap
 from dome_nav.utils import dome_home
 
 
@@ -17,7 +17,7 @@ def default_map_path() -> str:
 
 
 class SlamManagerNode(LifecycleNode):
-    DEFAULT_SAVE_PERIOD_SEC = 60.0
+    DEFAULT_SAVE_PERIOD_SEC = 120.0
 
     def __init__(self):
         super().__init__("slam_manager_node")
@@ -29,10 +29,15 @@ class SlamManagerNode(LifecycleNode):
         self.save_period_sec = (
             self.get_parameter("save_period_sec").get_parameter_value().double_value
         )
+        self.declare_parameter("export_legacy_map", True)
+        self.export_legacy_map: bool = (
+            self.get_parameter("export_legacy_map").get_parameter_value().bool_value
+        )
         self.map_ready = False
         self.map_sub = None
         self.status_pub = None
         self.serialize_client = None
+        self.save_map_client = None
         self.save_timer = None
 
     def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
@@ -42,6 +47,9 @@ class SlamManagerNode(LifecycleNode):
         )
         self.serialize_client = self.create_client(
             SerializePoseGraph, "/slam_toolbox/serialize_map"
+        )
+        self.save_map_client = self.create_client(
+            SaveMap, "/slam_toolbox/save_map"
         )
         self.get_logger().info(f"Configured. path={self.map_persist_path}")
         return TransitionCallbackReturn.SUCCESS
@@ -79,6 +87,9 @@ class SlamManagerNode(LifecycleNode):
         if self.status_pub is not None:
             self.destroy_lifecycle_publisher(self.status_pub)
             self.status_pub = None
+        if self.save_map_client is not None:
+            self.destroy_client(self.save_map_client)
+            self.save_map_client = None
 
     def ensure_map_dir(self):
         parent = os.path.dirname(self.map_persist_path)
@@ -126,10 +137,34 @@ class SlamManagerNode(LifecycleNode):
         return req
 
     def on_save_done(self, future):
-        if future.result() is not None:
-            self.get_logger().info(f"Pose graph saved to {self.map_persist_path}")
-        else:
+        if future.result() is None:
             self.get_logger().error("Failed to serialize pose graph.")
+            return
+        self.get_logger().info(f"Pose graph saved to {self.map_persist_path}")
+        if self.export_legacy_map:
+            self.export_legacy_map_async()
+
+    def export_legacy_map_async(self):
+        if not self.save_map_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warning(
+                "save_map service unavailable — legacy PNG/YAML not exported."
+            )
+            return
+        req = SaveMap.Request()
+        req.name.data = self.map_persist_path
+        future = self.save_map_client.call_async(req)
+        future.add_done_callback(self.on_legacy_save_done)
+
+    def on_legacy_save_done(self, future):
+        result = future.result()
+        if result is None or result.result != SaveMap.Response.RESULT_SUCCESS:
+            self.get_logger().warning(
+                f"Legacy map export failed (result={result.result if result else None})."
+            )
+        else:
+            self.get_logger().info(
+                f"Exported legacy map to {self.map_persist_path}.pgm/.yaml"
+            )
 
 
 def main():

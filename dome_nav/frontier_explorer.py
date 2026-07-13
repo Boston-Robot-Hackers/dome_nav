@@ -5,6 +5,10 @@
 
 import math
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from dome_nav.explore_context import ExploreParams
 
 
 @dataclass
@@ -122,56 +126,65 @@ def pick_best_frontier(
     clusters: list[list[int]],
     info: MapInfo,
     robot_xy: tuple[float, float],
-    min_size: int = 10,
+    params: "ExploreParams",
     blacklist: set[tuple[float, float]] | None = None,
-    blacklist_radius: float = 0.5,
-    max_radius: float = 0.0,
     start_xy: tuple[float, float] | None = None,
-    min_dist: float = 0.0,
-    max_dist: float = 0.0,
-    prefer_farthest: bool = False,
 ) -> tuple[float, float] | None:
+    # Selects the frontier cell whose distance from the robot is closest to
+    # params.preferred_goal_distance (0.0 → nearest-first; large → farthest-first).
+    # All filters (size, blacklist, min/max dist, max_radius) come off params.
     rx, ry = robot_xy
     bl = blacklist or set()
     best: tuple[float, float] | None = None
-    best_dist = -1.0 if prefer_farthest else float("inf")
+    best_score = float("inf")
 
     for cluster in clusters:
-        if len(cluster) < min_size:
+        if len(cluster) < params.min_frontier_size:
             continue
-        if max_radius > 0.0 and start_xy is not None:
-            cx = sum(cell_to_world(i, info)[0] for i in cluster) / len(cluster)
-            cy = sum(cell_to_world(i, info)[1] for i in cluster) / len(cluster)
-            sx, sy = start_xy
-            if math.sqrt((cx - sx) ** 2 + (cy - sy) ** 2) > max_radius:
-                continue
-        goal: tuple[float, float] | None = None
-        goal_dist = -1.0 if prefer_farthest else float("inf")
-        for cell_idx in cluster:
-            wx, wy = cell_to_world(cell_idx, info)
-            too_close = any(
-                math.sqrt((wx - bx) ** 2 + (wy - by) ** 2) < blacklist_radius
-                for bx, by in bl
-            )
-            if too_close:
-                continue
-            d = math.sqrt((wx - rx) ** 2 + (wy - ry) ** 2)
-            if min_dist > 0.0 and d < min_dist:
-                continue
-            if max_dist > 0.0 and d > max_dist:
-                continue
-            is_better = d > goal_dist if prefer_farthest else d < goal_dist
-            if is_better:
-                goal_dist = d
-                goal = (wx, wy)
-        if goal is None:
+        if cluster_outside_radius(cluster, info, start_xy, params.max_explore_radius):
             continue
-        is_better = goal_dist > best_dist if prefer_farthest else goal_dist < best_dist
-        if is_better:
-            best_dist = goal_dist
+        goal, goal_score = best_cell_in_cluster(cluster, info, robot_xy, bl, params)
+        if goal is not None and goal_score < best_score:
+            best_score = goal_score
             best = goal
 
     return best
+
+
+def cluster_outside_radius(
+    cluster: list[int], info: MapInfo, start_xy: tuple[float, float] | None,
+    max_radius: float,
+) -> bool:
+    if max_radius <= 0.0 or start_xy is None:
+        return False
+    cx = sum(cell_to_world(i, info)[0] for i in cluster) / len(cluster)
+    cy = sum(cell_to_world(i, info)[1] for i in cluster) / len(cluster)
+    return math.sqrt((cx - start_xy[0]) ** 2 + (cy - start_xy[1]) ** 2) > max_radius
+
+
+def best_cell_in_cluster(
+    cluster: list[int], info: MapInfo, robot_xy: tuple[float, float],
+    blacklist: set[tuple[float, float]], params: "ExploreParams",
+) -> tuple[tuple[float, float] | None, float]:
+    rx, ry = robot_xy
+    br = params.blacklist_radius
+    preferred = params.preferred_goal_distance
+    goal: tuple[float, float] | None = None
+    goal_score = float("inf")
+    for cell_idx in cluster:
+        wx, wy = cell_to_world(cell_idx, info)
+        if any(math.sqrt((wx - bx) ** 2 + (wy - by) ** 2) < br for bx, by in blacklist):
+            continue
+        d = math.sqrt((wx - rx) ** 2 + (wy - ry) ** 2)
+        if params.min_frontier_dist > 0.0 and d < params.min_frontier_dist:
+            continue
+        if params.max_frontier_dist > 0.0 and d > params.max_frontier_dist:
+            continue
+        score = abs(d - preferred)
+        if score < goal_score:
+            goal_score = score
+            goal = (wx, wy)
+    return goal, goal_score
 
 
 def frontier_diag(
