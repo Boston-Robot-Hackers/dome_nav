@@ -67,6 +67,16 @@ def test_single_frontier_cell():
     assert clusters[0] == [2]
 
 
+def test_buffer_cells_zero_returns_boundary_cells():
+    # buffer_cells=0 → frontier is the boundary itself (cells touching unknown).
+    # 1x5: [-1, 0, 0, 0, -1] — cells 1 and 3 touch unknown, cell 2 does not.
+    # Cells 1 and 3 are two apart (not 8-adjacent) so they form two clusters.
+    info = make_info(5, 1)
+    data = [-1, 0, 0, 0, -1]
+    clusters = find_frontier_clusters(data, info, buffer_cells=0)
+    assert sorted(c[0] for c in clusters) == [1, 3]
+
+
 def test_two_separate_clusters():
     # Two independent 5-cell "single frontier cell" patterns (see above)
     # concatenated with a 1-cell unknown gap between them, giving two

@@ -37,8 +37,9 @@ def find_frontier_clusters(
     # where costmap geometry is most ambiguous, and (buffer_cells>=2) far enough
     # inside the mapped area to survive the multi-cell seam between the SLAM /map
     # the frontier detector reads and the smaller global costmap the planner uses
-    # — the worldToMap "goal outside map" failure. buffer_cells=1 reproduces the
-    # original single-buffer-ring behaviour. Note: a free region narrower than
+    # — the worldToMap "goal outside map" failure. buffer_cells=1 is the original
+    # single-buffer-ring behaviour; buffer_cells=0 is the boundary cells themselves
+    # (free cells directly touching unknown). Note: a free region narrower than
     # 2*buffer_cells+1 cells has no cell far enough from unknown and yields no
     # frontier there. Adjacent frontier cells are grouped into clusters by
     # 8-connectivity flood-fill.
@@ -73,12 +74,13 @@ def find_frontier_clusters(
 
     # Walk `buffer_cells` rings of free cells inward from the boundary. Each new
     # ring is the free cells 4-adjacent to the previous ring that no shallower
-    # ring already claimed; the last ring reached is the frontier. If a ring runs
-    # out of room (narrow free strip) the frontier set is empty there.
+    # ring already claimed; the last ring reached is the frontier. buffer_cells=0
+    # leaves the frontier at the boundary itself (cells touching unknown). If a
+    # ring runs out of room (narrow free strip) the frontier set is empty there.
     claimed: set[int] = set(boundary)
     ring: set[int] = boundary
-    is_frontier: set[int] = set()
-    for _ in range(max(1, buffer_cells)):
+    is_frontier: set[int] = boundary
+    for _ in range(buffer_cells):
         next_ring: set[int] = set()
         for idx in ring:
             for nb in neighbors4(idx):
