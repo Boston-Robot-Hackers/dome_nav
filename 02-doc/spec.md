@@ -15,6 +15,27 @@ Other packages (dome_control, dome_vision) are not required for dome_nav to func
 
 ---
 
+## Real robot velocity limits (hardware spec)
+
+These are the true, measured velocity capabilities of the physical DOME robot.
+They are the source of truth for the velocity limits and deadbands in the
+`nav2_params_*_real.yaml` configs (MPPI `vx_max`/`vx_min`/`wz_max`,
+`velocity_smoother` `max_velocity`/`min_velocity`/`deadband_velocity`, and
+`behavior_server` rotational limits). Keep those configs in sync with this table.
+
+| Axis | Min (motor floor) | Max |
+|------|-------------------|-----|
+| Linear (forward/backward) | 0.1 m/s | 0.6 m/s |
+| Angular (turning)         | 0.3 rad/s | 1.4 rad/s |
+
+- **Min** = the slowest speed the robot can actually execute; commands below this
+  are below the motor/static-friction threshold and produce no motion (they must
+  be zeroed via the velocity_smoother `deadband_velocity`, not sent to the base).
+- **Max** = the hardware ceiling; MPPI and the velocity_smoother caps must agree
+  and must not exceed these.
+
+---
+
 ## Mode A — Map Build (`robot_map.launch.py`)
 
 Run once (or when house layout changes significantly).

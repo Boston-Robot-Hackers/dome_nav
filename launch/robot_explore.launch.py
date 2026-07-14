@@ -50,11 +50,14 @@ def robot_explore_launch(
     )
 
     # Same explorer node as the sim stack (pluggable_explore_manager_node), differing
-    # only by parameter values -- sim and real now share one code path. These are the
-    # real-robot values (they match ExploreParams' own defaults except max_frontier_dist,
-    # which the node declares as a sim-oriented 15.0 and is set back to 0.0 = unlimited
-    # here). The sim launch files override min_frontier_dist/max_frontier_dist/
-    # preferred_goal_distance/min_frontier_size for the simulated worlds.
+    # only by parameter values -- sim and real share one code path. The values below
+    # are the explicit real-robot explore settings; several intentionally differ from
+    # ExploreParams' dataclass defaults (min_frontier_dist 0.5 vs 1.3,
+    # preferred_goal_distance 2.0 vs 1.0, min_frontier_size 10 vs 15,
+    # frontier_buffer_cells 0 vs 2). max_frontier_dist 0.0 = unlimited. Note
+    # blacklist_radius (0.5) and goal_inset_m (0.3) are not exposed here -- they use
+    # ExploreParams defaults and can only be changed in code. Sim launch files set
+    # their own values for the simulated worlds.
     bl.node(
         "dome_nav",
         "pluggable_explore_manager_node",

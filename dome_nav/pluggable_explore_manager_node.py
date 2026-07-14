@@ -76,8 +76,6 @@ class PluggableExploreManagerNode(Node):
 
         self.declare_parameter("max_explore_radius", 0.0)
         self.declare_parameter("max_frontier_dist", 15.0)
-        # Default matches ExploreParams.min_frontier_dist (real-robot 1.0 m sent-goal
-        # floor after the 0.3 m goal_inset); sim launch files lower it.
         self.declare_parameter("min_frontier_dist", 1.3)
         self.declare_parameter("preferred_goal_distance", 1.0)
         self.declare_parameter("prefer_farthest", False)  # deprecated
