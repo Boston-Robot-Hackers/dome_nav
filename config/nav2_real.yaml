@@ -122,10 +122,10 @@ controller_server:
       vx_std: 0.2
       vy_std: 0.2
       wz_std: 0.4
-      vx_max: 0.5
-      vx_min: -0.35
+      vx_max: 0.6  # real robot spec max fwd
+      vx_min: -0.6  # real robot spec max reverse
       vy_max: 0.5
-      wz_max: 1.9
+      wz_max: 1.4  # real robot spec max turn
       iteration_count: 1
       prune_distance: 1.7
       transform_tolerance: 0.1
@@ -347,8 +347,8 @@ behavior_server:
     robot_base_frame: base_link
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0
-    max_rotational_vel: 1.0
-    min_rotational_vel: 0.4
+    max_rotational_vel: 1.4  # real robot spec max turn
+    min_rotational_vel: 0.3  # real robot spec min turn
     rotational_acc_lim: 3.2
 waypoint_follower:
   ros__parameters:
@@ -389,14 +389,14 @@ velocity_smoother:
     stamp_smoothed_velocity_with_smoothing_time: false
     scale_velocities: false
     feedback: OPEN_LOOP
-    max_velocity:
-    - 0.4
+    max_velocity:  # real robot spec: fwd 0.6, turn 1.4
+    - 0.6
     - 0.0
-    - 1.9
-    min_velocity:
-    - -0.4
+    - 1.4
+    min_velocity:  # real robot spec: rev -0.6, turn -1.4
+    - -0.6
     - 0.0
-    - -1.9
+    - -1.4
     max_accel:
     - 1.5
     - 0.0
@@ -407,10 +407,10 @@ velocity_smoother:
     - -3.2
     odom_topic: odom
     odom_duration: 0.1
-    deadband_velocity:
+    deadband_velocity:  # real robot min move speeds: fwd 0.1, turn 0.3
+    - 0.1
     - 0.0
-    - 0.0
-    - 0.0
+    - 0.3
     velocity_timeout: 1.0
 collision_monitor:
   ros__parameters:

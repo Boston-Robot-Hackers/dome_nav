@@ -12,7 +12,7 @@
 #
 # See nav2_explore_sim.yaml for the sim counterpart -- the only intentional
 # differences are FollowPath.vx_max/vx_min and the velocity_smoother caps
-# (0.12 m/s real, protecting slam_toolbox scan-matching, vs 0.45 m/s sim).
+# (real robot now runs its full velocity spec: fwd 0.6 m/s, turn 1.4 rad/s; sim differs).
 # Re-sync both files by hand from upstream nav2_bringup after a ROS distro
 # upgrade; this project's own tuning lives directly in these files.
 #
@@ -77,10 +77,10 @@ controller_server:
       vx_std: 0.2
       vy_std: 0.2
       wz_std: 0.4
-      vx_max: 0.5  # upstream: 0.5
-      vx_min: -0.5  # upstream: -0.35
+      vx_max: 0.6  # upstream: 0.5; real robot spec max fwd
+      vx_min: -0.6  # upstream: -0.35; real robot spec max reverse
       vy_max: 0.5
-      wz_max: 1.9
+      wz_max: 1.4  # real robot spec max turn (was 1.9)
       iteration_count: 1
       prune_distance: 1.7
       transform_tolerance: 0.3  # Pi TF is stale >0.1s under MPPI load -> FOLLOW/TF_ERROR
@@ -314,8 +314,8 @@ behavior_server:
     robot_base_frame: base_link
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0
-    max_rotational_vel: 1.0
-    min_rotational_vel: 0.4
+    max_rotational_vel: 1.4  # real robot spec max turn
+    min_rotational_vel: 0.3  # real robot spec min turn
     rotational_acc_lim: 3.2
 waypoint_follower:
   ros__parameters:
@@ -356,14 +356,14 @@ velocity_smoother:
     stamp_smoothed_velocity_with_smoothing_time: false
     scale_velocities: false
     feedback: OPEN_LOOP
-    max_velocity:  # upstream: [0.5, 0.0, 2.0]
-    - 0.15
+    max_velocity:  # upstream: [0.5, 0.0, 2.0]; real robot spec: fwd 0.6, turn 1.4
+    - 0.6
     - 0.0
-    - 1.0
-    min_velocity:  # upstream: [-0.5, 0.0, -2.0]
-    - -0.15
+    - 1.4
+    min_velocity:  # upstream: [-0.5, 0.0, -2.0]; real robot spec: rev -0.6, turn -1.4
+    - -0.6
     - 0.0
-    - -1.0
+    - -1.4
     max_accel:  # upstream: [2.5, 0.0, 3.2]
     - 0.8
     - 0.0
@@ -374,10 +374,10 @@ velocity_smoother:
     - -2.0
     odom_topic: odom
     odom_duration: 0.1
-    deadband_velocity:  # upstream: [0.0, 0.0, 0.0]
-    - 0.05
-    - 0.0
+    deadband_velocity:  # upstream: [0.0, 0.0, 0.0]; real robot min move speeds: fwd 0.1, turn 0.3
     - 0.1
+    - 0.0
+    - 0.3
     velocity_timeout: 1.0
 collision_monitor:
   ros__parameters:
