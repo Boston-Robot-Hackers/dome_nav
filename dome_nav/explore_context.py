@@ -11,12 +11,8 @@ from dome_nav.frontier_explorer import MapInfo
 
 @dataclass
 class ExploreParams:
-    min_frontier_size: int = 10
+    min_frontier_size: int = 15
     blacklist_radius: float = 0.5
-    # Checked on the raw frontier cell, before goal_inset_m pulls the actual Nav2
-    # goal closer to the robot — so the real floor on the sent goal's distance is
-    # min_frontier_dist - goal_inset_m. 1.3 - 0.3 = 1.0 m: the actual Nav2 goal is
-    # never closer than 1.0 m from the robot.
     min_frontier_dist: float = 1.3
     max_frontier_dist: float = 0.0
     goal_inset_m: float = 0.3
