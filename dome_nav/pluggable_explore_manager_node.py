@@ -42,7 +42,7 @@ class PluggableExploreManagerNode(Node):
     # Timer frequency for the exploration loop. 2 Hz is responsive without
     # flooding the action server. Lower values (1 Hz) add latency between goals;
     # higher values (5 Hz) are unnecessary since Nav2 goals are async.
-    EXPLORE_HZ = 2.0
+    EXPLORE_HZ = 1.0
 
     # How many consecutive ticks with no valid frontier before declaring done.
     # At 2 Hz this is 7 s of patience. Too low → quits while map is still updating.
