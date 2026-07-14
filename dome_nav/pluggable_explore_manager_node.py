@@ -39,23 +39,13 @@ GOAL_STATUS_NAMES = {4: "succeeded", 5: "canceled", 6: "aborted"}
 
 
 class PluggableExploreManagerNode(Node):
-    # Timer frequency for the exploration loop. 2 Hz is responsive without
-    # flooding the action server. Lower values (1 Hz) add latency between goals;
-    # higher values (5 Hz) are unnecessary since Nav2 goals are async.
+    # Timer frequency for the exploration loop.
     EXPLORE_HZ = 1.0
 
     # How many consecutive ticks with no valid frontier before declaring done.
-    # At 2 Hz this is 7 s of patience. Too low → quits while map is still updating.
-    # Too high → long wait at end of a complete map. Must exceed slam_toolbox's own
-    # map_update_interval (5 s default, not overridden) -- 8 ticks (4 s) was shorter
-    # than that, so patience could run out before /map had refreshed even once.
-    # 14 ticks (7 s) gives one full 5 s interval plus margin.
     NO_FRONTIER_PATIENCE = 14
 
     # Cancel active goal after this many seconds to break Nav2 BT recovery loops.
-    # Nav2's default BT runs spin + retry before aborting, which can take 60+ s.
-    # 25 s is enough for Nav2 to reach most goals; shorter values cause false timeouts
-    # on long traversals. Cancelled goal is blacklisted so the same spot is not retried.
     GOAL_TIMEOUT_S = 25.0
 
     # Max frontiers to try in one tick when a candidate goal maps outside the
