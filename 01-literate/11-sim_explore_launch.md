@@ -95,8 +95,8 @@ Since the 2026-07-08 refactor there is no runtime patching. slam and Nav2 each
 get a complete committed file:
 
 ```python
-slam_config = os.path.join(pkg, "config", "slam_sim.yaml")
-nav2_config = os.path.join(pkg, "config", "nav2_explore_sim.yaml")
+slam_config = os.path.join(pkg, "config", "mapper_params_online_async_sim.yaml")
+nav2_config = os.path.join(pkg, "config", "nav2_params_explore_sim.yaml")
 bl.include("slam_toolbox", "online_async_launch.py",
     slam_params_file=slam_config, use_sim_time="true")
 bl.include("nav2_bringup", "navigation_launch.py",

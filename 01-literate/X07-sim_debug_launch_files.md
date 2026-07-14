@@ -32,10 +32,10 @@ flowchart LR
   running — Gazebo is started by hand so the sim layer can be confirmed with
   native `gz topic` tools independent of ROS.)
 - **`sim_slam.launch.py`** — slam_toolbox `online_async` alone, loading the
-  standalone `slam_sim.yaml`. Split out so you can confirm `/map` and the
+  standalone `mapper_params_online_async_sim.yaml`. Split out so you can confirm `/map` and the
   `map→odom` transform appear *before* starting Nav2.
 - **`sim_nav2.launch.py`** — the Nav2 stack alone (`navigation_launch.py` +
-  `nav2_explore_sim.yaml`). Requires slam already publishing `map→odom`, or its
+  `nav2_params_explore_sim.yaml`). Requires slam already publishing `map→odom`, or its
   `global_costmap` blocks on activation and `lifecycle_manager` aborts the whole
   bringup.
 - **`sim_explore_node.launch.py`** — just `pluggable_explore_manager_node` with

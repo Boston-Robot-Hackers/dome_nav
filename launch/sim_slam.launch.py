@@ -17,7 +17,7 @@ def sim_slam_launch():
     bl = BetterLaunch()
 
     pkg = get_package_share_directory("dome_nav")
-    slam_config = os.path.join(pkg, "config", "slam_sim.yaml")
+    slam_config = os.path.join(pkg, "config", "mapper_params_online_async_sim.yaml")
 
     bl.include("slam_toolbox", "online_async_launch.py",
         **{"slam_params_file": slam_config, "use_sim_time": "true"})

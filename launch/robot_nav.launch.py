@@ -23,13 +23,13 @@ def robot_nav_launch(use_sim_time: str = "false"):
     # Localization: map_server + AMCL (provides map→odom TF, replaces slam_toolbox).
     # localization_launch.py sets map_server's yaml_filename from its own map= arg,
     # so the per-map path stays a launch arg -- not baked into the config.
-    loc_config = os.path.join(pkg, "config", "nav2_localization_real.yaml")
+    loc_config = os.path.join(pkg, "config", "nav2_params_localization_real.yaml")
 
     bl.include("nav2_bringup", "localization_launch.py",
         map=map_path, params_file=loc_config, use_sim_time=use_sim_time)
 
     # Navigation: planner + controller + costmap (no AMCL, no map_server)
-    nav_config = os.path.join(pkg, "config", "nav2_real.yaml")
+    nav_config = os.path.join(pkg, "config", "nav2_params_real.yaml")
 
     bl.include("nav2_bringup", "navigation_launch.py",
         params_file=nav_config, use_sim_time=use_sim_time,

@@ -1,15 +1,19 @@
-# slam_sim.yaml — simulation slam_toolbox config for dome_nav.
+# mapper_params_online_async.yaml — real-robot slam_toolbox config for dome_nav.
 #
-# Copy of slam_real.yaml with sim-only overrides for faster/finer map updates.
-# The real robot keeps slam_toolbox's stock motion-gating to protect the Pi's
-# scan-matching under load; in sim those coarse gates make the map grow only in
-# large, laggy jumps (only the spawn scan exists until the robot drives 0.5 m,
-# and /map rebuilds just every 5 s), which starves early frontier exploration.
-# The three "# SIM" lines below are the only differences from slam_real.yaml.
-# Loaded verbatim via online_async_launch.py (slam_params_file=); use_sim_time
-# comes from that include. map_file_name omitted (slam_manager_node persists).
+# This is a copy of slam_toolbox's upstream mapper_params_online_async.yaml
+# (deliberately kept under the same filename) with the LEAST POSSIBLE changes
+# from that upstream version — no runtime patch chain. Every line that differs
+# from upstream is marked "# CHANGED" / "# ADDED" with the reason; everything
+# else is verbatim upstream, so re-syncing after a distro upgrade is a simple
+# diff against the installed mapper_params_online_async.yaml.
+# Loaded verbatim via the standard online_async_launch.py include
+# (slam_params_file=). use_sim_time is supplied by that include's own arg, not
+# baked here. map_file_name is intentionally omitted: slam_manager_node owns map
+# persistence (see its map_persist_path param), so each run starts a fresh map
+# and there is no auto-resume of a saved posegraph on startup.
 #
-# Used by: sim_slam.launch.py, sim_explore.launch.py.
+# Used by: robot_map.launch.py (Mode A), robot_explore.launch.py (Mode E real).
+# Sim uses mapper_params_online_async_sim.yaml (a copy of this with finer/faster map-update settings).
 # Author: Pito Salas and Claude Code
 # Open Source Under MIT license
 
@@ -41,8 +45,8 @@ slam_toolbox:
 
     debug_logging: false
     throttle_scans: 1
-    transform_publish_period: 0.02 #if 0 never publishes odometry
-    map_update_interval: 1.0  # SIM (real 5.0): rebuild /map every 1 s so it fills in smoothly
+    transform_publish_period: 0.05  # CHANGED from upstream 0.02: 50->20Hz map->odom TF, less TF load on the Pi (if 0, never publishes)
+    map_update_interval: 10.0  # CHANGED from upstream 5.0: halve the map-raster/publish spike frequency
     resolution: 0.05
     restamp_tf: false
     min_laser_range: 0.0 #for rastering images
@@ -50,15 +54,15 @@ slam_toolbox:
     minimum_time_interval: 0.5
     transform_timeout: 0.5  # CHANGED from upstream 0.2: more TF tolerance on the Pi
     tf_buffer_duration: 50.0  # CHANGED from upstream 30.0: larger buffer for slow systems
-    message_queue_size: 20  # ADDED (not in upstream): prevent dropped scans under load
+    message_queue_size: 40  # ADDED (not in upstream; was 20): larger buffer to further reduce dropped scans under load
     stack_size_to_use: 40000000 #// program needs a larger stack size to serialize large maps
     enable_interactive_mode: true
 
     # General Parameters
     use_scan_matching: true
     use_scan_barycenter: true
-    minimum_travel_distance: 0.1  # SIM (real 0.5): fold scans every 0.1 m so the map grows early
-    minimum_travel_heading: 0.1  # SIM (real 0.5): fold scans every ~6 deg of rotation
+    minimum_travel_distance: 0.5
+    minimum_travel_heading: 0.5
     check_min_dist_and_heading_precisely: false
     scan_buffer_size: 10
     scan_buffer_maximum_scan_distance: 10.0

@@ -13,11 +13,11 @@
 
 3. **Telemetry** switched from `explore-{map_name}-{date}.jsonl` (append) to sequential `exp-{NNNN}.json` (one file per run, write mode)
 
-4. **MPPI crawl fix** — `GoalCritic.threshold_to_consider` and `PathFollowCritic.threshold_to_consider` changed `1.4 → 0.5` in all 3 active configs: `nav2_explore_real.yaml`, `nav2_explore_sim.yaml`, `nav2_real.yaml`
+4. **MPPI crawl fix** — `GoalCritic.threshold_to_consider` and `PathFollowCritic.threshold_to_consider` changed `1.4 → 0.5` in all 3 active configs: `nav2_params_explore_real.yaml`, `nav2_params_explore_sim.yaml`, `nav2_params_real.yaml`
 
 5. **Costmap fixes** across all configs:
-   - `nav2_real.yaml`: moved `lethal_cost_threshold: 65` / `unknown_cost_value: -1` / `trinary_costmap: true` from under `static_layer` (dead/ignored) to top-level global_costmap (now effective)
-   - `nav2_localization_real.yaml` (Mode B, previously unaudited): `robot_radius 0.22→0.15`, local inflation `0.7/3.0→0.17/30.0`, global inflation `0.7/3.0→0.3/15.0`, added `lethal_cost_threshold: 65` / `unknown_cost_value: -1`
+   - `nav2_params_real.yaml`: moved `lethal_cost_threshold: 65` / `unknown_cost_value: -1` / `trinary_costmap: true` from under `static_layer` (dead/ignored) to top-level global_costmap (now effective)
+   - `nav2_params_localization_real.yaml` (Mode B, previously unaudited): `robot_radius 0.22→0.15`, local inflation `0.7/3.0→0.17/30.0`, global inflation `0.7/3.0→0.3/15.0`, added `lethal_cost_threshold: 65` / `unknown_cost_value: -1`
    - All configs: global `inflation_radius 0.5→0.3` to reduce `PLAN/GOAL_OCCUPIED` near walls
 
 ## Current git state
@@ -31,10 +31,10 @@ User tried to run sim and it "failed immediately." Screenshot was on Mac desktop
 ## Remaining tuning suggestions (not yet done)
 
 From the Nav2 tuning analysis:
-- Fix dead keys in `nav2_real.yaml` for `desired_linear_vel` / `max_angular_accel` (MPPI ignores them — cosmetic cleanup only)
+- Fix dead keys in `nav2_params_real.yaml` for `desired_linear_vel` / `max_angular_accel` (MPPI ignores them — cosmetic cleanup only)
 - `CostCritic.consider_footprint: false → true` (safer in tight spaces, more CPU)
 - `MPPI.batch_size: 2000 → 4000` (better trajectories, more CPU)
-- Re-enable `FootprintApproach` in `nav2_explore_real.yaml` (currently `enabled: false` for diagnostic isolation)
+- Re-enable `FootprintApproach` in `nav2_params_explore_real.yaml` (currently `enabled: false` for diagnostic isolation)
 - Add `obstacle_layer` to global_costmap in explore configs (currently only static+inflation)
 - `SmacPlanner2D.use_astar: false → true` (faster long-range planning)
 - `MPPI.visualize: true → false` for production
@@ -67,5 +67,5 @@ ros2 topic pub --once /intent std_msgs/msg/String 'data: "{\"name\": \"explorati
 
 - **Must `colcon build` after every source/YAML edit** before `bl` sees it
 - Stale nodes across runs → TF/clock collisions → `ps` audit + `kill -9`
-- `nav2_localization_real.yaml` changes (Mode B) need hardware verification — never live-run
+- `nav2_params_localization_real.yaml` changes (Mode B) need hardware verification — never live-run
 - `FootprintApproach` still disabled in explore config — restore when done with crawl isolation

@@ -1,36 +1,71 @@
-# nav2_explore_sim.yaml -- complete Nav2 config for Mode E (autonomous
-# exploration) in Gazebo simulation. This is a full copy, not a patch: it
-# starts from nav2_bringup's own nav2_params.yaml and bakes in every override
-# this project needs directly, rather than merging several small patch files
-# at launch time. Open this file to see exactly what Nav2 actually runs with
-# in Mode E -- no merge order to trace through.
+# nav2_params_real.yaml -- complete Nav2 config for the physical robot in Mode A
+# (mapping, robot_map.launch.py) and Mode B navigation (robot_nav.launch.py's
+# navigation_launch.py include). Full standalone copy: it starts from
+# nav2_bringup's own nav2_params.yaml and bakes in this project's overrides
+# directly, replacing the old runtime merge (nav2_bringup default +
+# nav2_param_patch.yaml). Open this file to see exactly what Nav2 runs with --
+# no patch order to trace.
 #
-# Only sections navigation_launch.py actually reads are included (amcl,
-# map_saver, and loopback_simulator belong to Mode B/localization_launch.py
-# or standalone tools Mode E never starts, so they are dropped rather than
-# carried along as unused noise).
+# This is a faithful copy of the prior default+nav2_param_patch merge, so
+# runtime behavior is unchanged. It is intentionally NOT re-audited the way
+# nav2_explore_*.yaml were (those fixed dead keys like general_goal_checker vs
+# goal_checker and MPPI-ignored FollowPath.desired_linear_vel); a clean-up pass
+# here is a separate, hardware-testable task.
 #
-# See nav2_explore_real.yaml for the real-hardware counterpart -- the only
-# intentional differences are FollowPath.vx_max/vx_min and the
-# velocity_smoother caps (0.12 m/s real, protecting slam_toolbox
-# scan-matching, vs 0.45 m/s sim). Re-sync both files by hand from upstream
-# nav2_bringup after a ROS distro upgrade; this project's own tuning lives
-# directly in these files.
-#
-# 2026-07-07: audited every overridden key against the live node's actual
-# `ros2 param list` output and found 5 that were silently dead the whole
-# time this project has existed -- MPPIController (the actual FollowPath
-# plugin, not RegulatedPurePursuitController/DWB) has no desired_linear_vel
-# or max_angular_accel parameter at all, so those two keys were accepted
-# into the YAML and then simply ignored; actual cruise speed has always
-# been governed by the untouched upstream vx_max/vx_min (0.5/-0.35) instead
-# of whatever this file intended. Similarly goal_checker.* should have been
-# general_goal_checker.* (the plugin ID nav2_bringup actually uses), and
-# global_costmap's lethal_cost_threshold/unknown_cost_value/trinary_costmap
-# were nested a level too deep under static_layer instead of being
-# top-level costmap parameters. Fixed below; verify any future override
-# here against `ros2 param list /<node>` before trusting it took effect.
+# Key project overrides vs upstream nav2_bringup (see git history of the former
+# config/nav2_param_patch.yaml for full rationale):
+#   - planner_server GridBased: nav2_smac_planner::SmacPlanner2D (upstream
+#     NavFn hit a known "legal potential" planning bug -- navigation2#4655)
+#   - local_costmap inflation_layer: inflation_radius 0.17, cost_scaling_factor
+#     30.0 (tight zone above the 0.164 footprint circumscribed radius so MPPI
+#     keeps the costmap fast path); global_costmap: 0.5 / 15.0
+#   - robot_radius 0.15 (matches dome3 footprint); global plugins limited to
+#     static_layer + inflation_layer
+#   - velocity_smoother caps [0.4, 0, 1.9]; controller goal tolerances 0.25 m /
+#     0.25 rad; FollowPath desired_linear_vel 0.3 (see audit note above)
+#   - Re-sync from upstream by hand after a ROS distro upgrade.
+# Author: Pito Salas and Claude Code
+# Open Source Under MIT license
 
+amcl:
+  ros__parameters:
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+    base_frame_id: base_footprint
+    beam_skip_distance: 0.5
+    beam_skip_error_threshold: 0.9
+    beam_skip_threshold: 0.3
+    do_beamskip: false
+    global_frame_id: map
+    lambda_short: 0.1
+    laser_likelihood_max_dist: 2.0
+    laser_max_range: 100.0
+    laser_min_range: -1.0
+    laser_model_type: likelihood_field
+    max_beams: 60
+    max_particles: 2000
+    min_particles: 500
+    odom_frame_id: odom
+    pf_err: 0.05
+    pf_z: 0.99
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+    resample_interval: 1
+    robot_model_type: nav2_amcl::DifferentialMotionModel
+    save_pose_rate: 0.5
+    sigma_hit: 0.2
+    tf_broadcast: true
+    transform_tolerance: 1.0
+    update_min_a: 0.2
+    update_min_d: 0.25
+    z_hit: 0.5
+    z_max: 0.05
+    z_rand: 0.5
+    z_short: 0.05
+    scan_topic: scan
 bt_navigator:
   ros__parameters:
     global_frame: map
@@ -67,47 +102,37 @@ controller_server:
     use_realtime_priority: false
     progress_checker:
       plugin: nav2_controller::SimpleProgressChecker
-      required_movement_radius: 0.3  # upstream: 0.5
-      movement_time_allowance: 30.0  # upstream: 10.0
+      required_movement_radius: 0.5
+      movement_time_allowance: 10.0
     general_goal_checker:
       stateful: true
       plugin: nav2_controller::SimpleGoalChecker
-      xy_goal_tolerance: 0.5  # upstream: 0.25
-      # ~pi: final heading unconstrained. Exploration goals carry a fixed
-      # identity orientation (yaw 0), but we don't care what way the robot ends
-      # up facing at a frontier -- a tight yaw tolerance just forces a wasteful
-      # in-place spin (and possible failure) at the end of every goal.
-      yaw_goal_tolerance: 3.15  # upstream: 0.25
+      xy_goal_tolerance: 0.25
+      yaw_goal_tolerance: 0.25
     FollowPath:
       plugin: nav2_mppi_controller::MPPIController
       time_steps: 56
       model_dt: 0.05
-      # 2026-07-09: was 2000. Halved to raise MPPI's control-loop rate on this
-      # CPU-bound VM -- the loop was logging 1.7-6.6 Hz vs a 20 Hz target, which
-      # starved controller_server's executor (goal-ack timeouts) and produced
-      # hesitant velocity commands. Fewer rollouts = faster solve.
-      batch_size: 1000
+      batch_size: 2000
       ax_max: 3.0
       ax_min: -3.0
       ay_max: 3.0
       ay_min: -3.0
-      az_max: 3.2  # upstream: 3.5
+      az_max: 3.5
       vx_std: 0.2
       vy_std: 0.2
       wz_std: 0.4
-      vx_max: 0.45  # upstream: 0.5
-      vx_min: -0.45  # upstream: -0.35
+      vx_max: 0.6  # real robot spec max fwd
+      vx_min: -0.6  # real robot spec max reverse
       vy_max: 0.5
-      wz_max: 1.9
+      wz_max: 1.4  # real robot spec max turn
       iteration_count: 1
       prune_distance: 1.7
       transform_tolerance: 0.1
       temperature: 0.3
       gamma: 0.015
       motion_model: DiffDrive
-      # was true -- publishing every rollout each cycle added executor load on a
-      # VM already missing its control-loop rate. Off for production/perf.
-      visualize: false
+      visualize: true
       regenerate_noises: true
       TrajectoryVisualizer:
         trajectory_step: 5
@@ -175,6 +200,11 @@ controller_server:
         threshold_to_consider: 0.5
         max_angle_to_furthest: 1.0
         mode: 0
+      desired_linear_vel: 0.3
+      max_angular_accel: 3.2
+    goal_checker:
+      xy_goal_tolerance: 0.25
+      yaw_goal_tolerance: 0.25
 local_costmap:
   local_costmap:
     ros__parameters:
@@ -183,30 +213,17 @@ local_costmap:
       global_frame: odom
       robot_base_frame: base_link
       rolling_window: true
-      width: 5  # upstream: 3
-      height: 5  # upstream: 3
+      width: 5
+      height: 5
       resolution: 0.05
-      robot_radius: 0.15  # upstream: 0.22
+      robot_radius: 0.15
       plugins:
       - voxel_layer
       - inflation_layer
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
-      # F13 T04r: lowered from 0.2 -> 0.16, just above Nav2's own safety floor
-        # (the footprint's computed inscribed radius, ~0.157 -- see T04h, which
-        # found Nav2 rejects 0.15 as unsafe). A smaller inflated zone reduces the
-        # chance a robot that stops slightly off-goal lands inside a lethal/
-        # inflated cell -- the "Start occupied" SmacPlanner2D failure found in
-        # T04r's telemetry analysis. cost_scaling_factor raised further (20 -> 30)
-        # for a steeper decay, keeping the elevated-cost region tight around the
-        # smaller radius. F13 T04t: raised again, 0.16 -> 0.17 -- controller_server
-        # logged "inflation radius (0.16) is smaller than the circumscribed radius
-        # (0.164142)" on every run, forcing MPPI into full-footprint collision
-        # checks instead of the costmap potential-field fast path (measured actual
-        # speed ~0.15 m/s against a configured 0.45 m/s cruise speed). 0.17 clears
-        # the 0.164142 floor with a small margin.
-        cost_scaling_factor: 30.0  # upstream: 3.0
-        inflation_radius: 0.7  # upstream: 0.7
+        cost_scaling_factor: 30.0
+        inflation_radius: 0.17
       voxel_layer:
         plugin: nav2_costmap_2d::VoxelLayer
         enabled: true
@@ -238,19 +255,15 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
-      robot_radius: 0.15  # upstream: 0.22
+      robot_radius: 0.15
       resolution: 0.05
       track_unknown_space: true
-      # These 3 were misnested under static_layer, where they're not declared
-      # params -- Costmap2DROS declares them at the top level. Genuine
-      # overrides, not defaults: live C++ defaults are lethal_cost_threshold
-      # 100, unknown_cost_value 255, trinary_costmap true (unchanged).
-      # unknown_cost_value -1 matches OccupancyGrid's own "-1 = unknown"
-      # convention, needed for correctly reading /map's unknown cells.
+      # These were previously misnested under static_layer (a StaticLayer param
+      # that does not declare them) -- moved to top-level where Costmap2DROS reads them.
       lethal_cost_threshold: 65  # upstream: 100
-      unknown_cost_value: -1  # upstream: 255
+      unknown_cost_value: -1     # upstream: 255 -- matches OccupancyGrid "-1 = unknown"
       trinary_costmap: true
-      plugins:  # upstream: ['static_layer', 'obstacle_layer', 'inflation_layer']
+      plugins:
       - static_layer
       - inflation_layer
       obstacle_layer:
@@ -270,14 +283,20 @@ global_costmap:
       static_layer:
         plugin: nav2_costmap_2d::StaticLayer
         map_subscribe_transient_local: true
-        enabled: true  # new (not in upstream)
-        map_topic: /map  # new (not in upstream)
-        subscribe_to_updates: true  # new (not in upstream)
+        enabled: true
+        map_topic: /map
+        subscribe_to_updates: true
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
-        cost_scaling_factor: 3.0  # upstream: 3.0
-        inflation_radius: 0.7  # upstream: 0.7; was 0.5 -- reduced to cut PLAN/GOAL_OCCUPIED near walls
+        cost_scaling_factor: 15.0
+        inflation_radius: 0.3  # was 0.5 (3.3x robot_radius); 0.3 reduces PLAN/GOAL_OCCUPIED near walls
       always_send_full_costmap: true
+map_saver:
+  ros__parameters:
+    save_map_timeout: 5.0
+    free_thresh_default: 0.25
+    occupied_thresh_default: 0.65
+    map_subscribe_transient_local: true
 planner_server:
   ros__parameters:
     expected_planner_frequency: 20.0
@@ -285,18 +304,12 @@ planner_server:
     - GridBased
     costmap_update_timeout: 1.0
     GridBased:
-      # F13 T04p: switched from the default nav2_navfn_planner::NavfnPlanner --
-      # see TF13 T04m/T04p for the "Failed to create a plan from potential when
-      # a legal potential was found" bug this works around (confirmed as a known
-      # unresolved upstream NavFn defect, not a config issue in this repo:
-      # ros-navigation/navigation2#4655). SmacPlanner2D uses a different search
-      # algorithm (A* on the costmap grid) with no shared code path.
-      plugin: nav2_navfn_planner::NavfnPlanner  # alternate: 'nav2_smac_planner::SmacPlanner2D'
+      plugin: nav2_smac_planner::SmacPlanner2D
       tolerance: 0.5
       use_astar: false
       allow_unknown: true
-      max_iterations: 1000000  # new (not in upstream)
-      max_planning_time: 2.0  # new (not in upstream)
+      max_iterations: 1000000
+      max_planning_time: 2.0
 smoother_server:
   ros__parameters:
     smoother_plugins:
@@ -334,14 +347,8 @@ behavior_server:
     robot_base_frame: base_link
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0
-    # Measured live: a full 2*pi initial exploration spin (F13 T04q) took
-    # 6.84s wall-clock at max_rotational_vel 1.0 -- user confirmed this looks
-    # too fast and asked for 2x the duration (~13.7s). Halved, since cruise
-    # time scales inversely with speed and the acceleration ramp is a small
-    # fraction of the total either way. Sim-only -- this behavior is not yet
-    # validated on real hardware, so nav2_explore_real.yaml is untouched.
-    max_rotational_vel: 0.5  # was 1.0
-    min_rotational_vel: 0.4
+    max_rotational_vel: 1.4  # real robot spec max turn
+    min_rotational_vel: 0.3  # real robot spec min turn
     rotational_acc_lim: 3.2
 waypoint_follower:
   ros__parameters:
@@ -382,33 +389,28 @@ velocity_smoother:
     stamp_smoothed_velocity_with_smoothing_time: false
     scale_velocities: false
     feedback: OPEN_LOOP
-    max_velocity:  # upstream: [0.5, 0.0, 2.0]
+    max_velocity:  # real robot spec: fwd 0.6, turn 1.4
     - 0.6
     - 0.0
-    - 1.9
-    min_velocity:  # upstream: [-0.5, 0.0, -2.0]
+    - 1.4
+    min_velocity:  # real robot spec: rev -0.6, turn -1.4
     - -0.6
     - 0.0
-    - -1.9
-    max_accel:  # upstream: [2.5, 0.0, 3.2]
+    - -1.4
+    max_accel:
     - 1.5
     - 0.0
     - 3.2
-    max_decel:  # upstream: [-2.5, 0.0, -3.2]
+    max_decel:
     - -1.5
     - 0.0
     - -3.2
     odom_topic: odom
     odom_duration: 0.1
-    # 2026-07-09: reset to upstream [0,0,0]. The 0.05 m/s / 0.1 rad/s deadband
-    # zeroed the small, hesitant velocity commands a CPU-starved MPPI produces,
-    # freezing the robot in sim (3cm in 25s) where stock config (no deadband)
-    # crawled to goals. Deadband exists to protect real motors from sub-stiction
-    # commands -- pointless in sim, harmful here. Keep it in nav2_explore_real.yaml.
-    deadband_velocity:  # upstream: [0.0, 0.0, 0.0]
+    deadband_velocity:  # real robot min move speeds: fwd 0.1, turn 0.3
+    - 0.1
     - 0.0
-    - 0.0
-    - 0.0
+    - 0.3
     velocity_timeout: 1.0
 collision_monitor:
   ros__parameters:
@@ -431,12 +433,7 @@ collision_monitor:
       simulation_time_step: 0.1
       min_points: 6
       visualize: false
-      # DIAGNOSTIC 2026-07-09: disabled to test whether collision_monitor's
-      # FootprintApproach was zeroing cmd_vel and pinning the robot (25s with
-      # only 3cm of motion while the controller kept receiving fresh paths).
-      # Matches the isolation already done on the real robot. Restore to true
-      # once the no-motion cause is confirmed.
-      enabled: false
+      enabled: true
     observation_sources:
     - scan
     scan:
@@ -486,9 +483,22 @@ docking_server:
       projection_time: 5.0
       simulation_step: 0.1
       dock_collision_threshold: 0.3
+loopback_simulator:
+  ros__parameters:
+    base_frame_id: base_footprint
+    odom_frame_id: odom
+    map_frame_id: map
+    scan_frame_id: base_scan
+    update_duration: 0.02
+    scan_range_min: 0.05
+    scan_range_max: 30.0
+    scan_angle_min: -3.1415
+    scan_angle_max: 3.1415
+    scan_angle_increment: 0.02617
+    scan_use_inf: true
 lifecycle_manager:
   ros__parameters:
-    node_names:  # new (not in upstream)
+    node_names:
     - planner_server
     - controller_server
     - smoother_server

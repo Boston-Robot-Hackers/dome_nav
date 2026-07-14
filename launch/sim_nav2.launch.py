@@ -18,7 +18,7 @@ def sim_nav2_launch():
 
     pkg = get_package_share_directory("dome_nav")
     # Full standalone config, loaded verbatim -- no patch chain.
-    nav2_config = os.path.join(pkg, "config", "nav2_explore_sim.yaml")
+    nav2_config = os.path.join(pkg, "config", "nav2_params_explore_sim.yaml")
 
     bl.include("nav2_bringup", "navigation_launch.py",
         **{"params_file": nav2_config, "use_sim_time": "true"})

@@ -50,10 +50,10 @@ def sim_explore_launch(
     with open(urdf_path) as f:
         robot_description = f.read()
 
-    slam_config = os.path.join(pkg, "config", "slam_sim.yaml")
+    slam_config = os.path.join(pkg, "config", "mapper_params_online_async_sim.yaml")
 
     # Full standalone config, loaded verbatim -- no patch chain.
-    nav2_config = os.path.join(pkg, "config", "nav2_explore_sim.yaml")
+    nav2_config = os.path.join(pkg, "config", "nav2_params_explore_sim.yaml")
 
     # Gazebo + robot spawn (GUI always on — needed to visually inspect costmap
     # inflation and robot behavior near obstacles during exploration debugging).

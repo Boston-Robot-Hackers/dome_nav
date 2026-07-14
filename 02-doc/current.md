@@ -31,7 +31,7 @@ Recent changes (2026-07-10, this session):
 - **Real-robot telemetry analysis (`exp-0004.json`)**: identified that y≈0.7 corridor
   is physically blocked on the real map; blacklist over-accumulation (radius 0.5 m)
   caused premature "done". `controller_server` 70% CPU from MPPI (expected on Pi).
-  `nav2_explore_real.yaml` already runs `batch_size 1000` (halved from 2000 on
+  `nav2_params_explore_real.yaml` already runs `batch_size 1000` (halved from 2000 on
   2026-07-09); remaining candidate fix: lower `controller_frequency` 20→10 Hz (and,
   if still CPU-bound, `batch_size` 1000→500) for the real-robot explore config.
 
@@ -41,8 +41,8 @@ Earlier 2026-07-09 changes: frontier buffer 1→2 cells, costmap-bounds goal rej
 
 Known-but-unfixed nav tuning issues (none block basic exploration):
 - Intermittent action-ACK timeouts under load — **root cause is the 1-core VM** (above).
-- Planner choice unsettled: `nav2_explore_real.yaml` and `nav2_real.yaml` use
-  SmacPlanner2D; `nav2_explore_sim.yaml` uses NavFn.
+- Planner choice unsettled: `nav2_params_explore_real.yaml` and `nav2_params_real.yaml` use
+  SmacPlanner2D; `nav2_params_explore_sim.yaml` uses NavFn.
 - `prefer_farthest=True` in sim; F14 will replace this with `preferred_goal_distance`.
 - Real-robot MPPI CPU load high (70%); candidate: `batch_size` 2000→500, freq 20→10 Hz.
 
@@ -52,9 +52,9 @@ Known-but-unfixed nav tuning issues (none block basic exploration):
   (injected `ExplorationAlgorithm`, default `FrontierAlgorithm`). The old
   `explore_manager_node.py` was deleted. Sim vs real differ only by ROS params.
 - **No YAML patching.** `config/` holds six standalone, commented copies of the
-  upstream defaults: `slam_real.yaml`, `slam_sim.yaml`, `nav2_real.yaml`
-  (Modes A/B nav), `nav2_localization_real.yaml` (Mode B AMCL),
-  `nav2_explore_real.yaml`, `nav2_explore_sim.yaml`. Launch files load these
+  upstream defaults: `mapper_params_online_async.yaml`, `mapper_params_online_async_sim.yaml`, `nav2_params_real.yaml`
+  (Modes A/B nav), `nav2_params_localization_real.yaml` (Mode B AMCL),
+  `nav2_params_explore_real.yaml`, `nav2_params_explore_sim.yaml`. Launch files load these
   verbatim via the standard `bl.include(...)`. `utils.py` config helpers are down
   to `write_config` (+ `dome_home`/world helpers).
 - **slam** runs via standard `online_async_launch.py`. No `map_file_name` — maps
@@ -107,15 +107,15 @@ Intent contract: `nav go <label>`→`navigation_go {label}`, `nav cancel`→`nav
 ## Next steps
 
 1. **Give the dev VM 4–6 vCPUs** (currently 1) — single biggest reliability win.
-2. **Restore `FootprintApproach` `enabled: true`** in both `nav2_explore_sim.yaml`
-   and `nav2_explore_real.yaml` (currently disabled for diagnostics in both).
+2. **Restore `FootprintApproach` `enabled: true`** in both `nav2_params_explore_sim.yaml`
+   and `nav2_params_explore_real.yaml` (currently disabled for diagnostics in both).
 3. **Delete `launch/sim_nav_default.launch.py`** (experimental bisect artifact).
 4. **F17 done** — telemetry files now named `e<map_name><dd-mmm>.json`; old `exp-NNNN.json` files coexist untouched. dome_control CSV rename (`t<dd-mmm>.csv`) still pending in dome_control.
 5. **F14 done** — `preferred_goal_distance` param replaces `prefer_farthest`; selection is `min |d - preferred_dist|`. `prefer_farthest` kept as deprecated alias (logs warning, maps True→max_frontier_dist). Sim default 2.0 m, real 1.0 m.
 6. **F16 done** — `save_period_sec` default 60→120 s; `export_legacy_map: bool = True` param; `/slam_toolbox/save_map` called after each posegraph save (best-effort).
 7. **F15** — implement path novelty scoring (opt-in, after F14 landed).
 8. **Reduce MPPI CPU on real robot** — try `batch_size` 2000→500, `controller_frequency`
-   20→10 Hz in `nav2_explore_real.yaml`.
+   20→10 Hz in `nav2_params_explore_real.yaml`.
 9. **Real-robot verification (F10 T07)** — Modes A/B/E never run on hardware.
 
 ## Open issues

@@ -29,10 +29,10 @@ def robot_explore_launch(
 
     pkg = get_package_share_directory("dome_nav")
 
-    slam_config = os.path.join(pkg, "config", "slam_real.yaml")
+    slam_config = os.path.join(pkg, "config", "mapper_params_online_async.yaml")
 
     # Full standalone config, loaded verbatim -- no patch chain.
-    nav2_config = os.path.join(pkg, "config", "nav2_explore_real.yaml")
+    nav2_config = os.path.join(pkg, "config", "nav2_params_explore_real.yaml")
 
     bl.include("slam_toolbox", "online_async_launch.py",
         **{"slam_params_file": slam_config, "use_sim_time": use_sim_time})
