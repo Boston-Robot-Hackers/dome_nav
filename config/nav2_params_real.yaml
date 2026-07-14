@@ -110,7 +110,20 @@ controller_server:
       xy_goal_tolerance: 0.25
       yaw_goal_tolerance: 0.25
     FollowPath:
-      plugin: nav2_mppi_controller::MPPIController
+      # RotationShim wraps MPPI: rotates in place to path heading at a fixed
+      # velocity (0.5 rad/s) BEFORE handing off to MPPI. Fixes the diff-drive
+      # no-move bug -- raw MPPI emitted <0.1 rad/s in-place turns, below the
+      # robot's ~0.3 rad/s stiction floor AND below velocity_smoother's 0.3
+      # deadband (which zeros anything smaller). 0.5 clears both.
+      plugin: nav2_rotation_shim_controller::RotationShimController
+      primary_controller: nav2_mppi_controller::MPPIController
+      angular_dist_threshold: 0.785        # rotate in place if heading err > 45deg
+      forward_sampling_distance: 0.5
+      rotate_to_heading_angular_vel: 0.5   # above 0.3 stiction/deadband floor
+      max_angular_accel: 3.2
+      rotate_to_goal_heading: true
+      rotate_to_heading_once: false
+      # --- primary controller (MPPI) params below ---
       time_steps: 56
       model_dt: 0.05
       batch_size: 2000
