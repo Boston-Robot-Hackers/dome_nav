@@ -42,8 +42,8 @@ slam_toolbox:
 
     debug_logging: false
     throttle_scans: 1
-    transform_publish_period: 0.02 #if 0 never publishes odometry
-    map_update_interval: 5.0
+    transform_publish_period: 0.05  # CHANGED from upstream 0.02: 50->20Hz map->odom TF, less TF load on the Pi (if 0, never publishes)
+    map_update_interval: 10.0  # CHANGED from upstream 5.0: halve the map-raster/publish spike frequency
     resolution: 0.05
     restamp_tf: false
     min_laser_range: 0.0 #for rastering images
@@ -51,7 +51,7 @@ slam_toolbox:
     minimum_time_interval: 0.5
     transform_timeout: 0.5  # CHANGED from upstream 0.2: more TF tolerance on the Pi
     tf_buffer_duration: 50.0  # CHANGED from upstream 30.0: larger buffer for slow systems
-    message_queue_size: 20  # ADDED (not in upstream): prevent dropped scans under load
+    message_queue_size: 40  # ADDED (not in upstream; was 20): larger buffer to further reduce dropped scans under load
     stack_size_to_use: 40000000 #// program needs a larger stack size to serialize large maps
     enable_interactive_mode: true
 
