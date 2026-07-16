@@ -12,17 +12,24 @@ import rclpy
 from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import String
 from dome_nav.explore_context import ExploreParams, GoalDecision, GoalOutcome
+from dome_nav.frontier_params import FrontierParams
+from dome_nav.frontier_algorithm import FrontierAlgorithm
 
 
 class MockAlgorithm:
-    # latest_clusters/latest_diag are still read by the node's telemetry path
-    # (removed from the protocol in F23 T02); kept here so the stub satisfies it.
-    latest_clusters = []
-    latest_diag = None
+    # Minimal stub: implements next_goal + declare_params only. It exposes NO
+    # clusters, no diag, and none of the optional render/diagnostics hooks —
+    # proving the node no longer requires latest_clusters/latest_diag or any
+    # visualization surface (F23 T02). frontier_params is None: it needs only the
+    # shared params and declares no frontier ROS params of its own (F23 T03).
+    frontier_params = None
 
     def __init__(self, decision=None):
         # Default: a benign block so no-op ticks debounce without crashing.
         self.decision = decision if decision is not None else GoalDecision.blocked()
+
+    def declare_params(self, node):
+        pass
 
     def next_goal(self, ctx):
         return self.decision
@@ -43,6 +50,20 @@ def node(ros):
          patch("dome_nav.explorer_manager_node.TelemetryWriter",
                return_value=MagicMock()):
         n = ExplorerManagerNode(algorithm=MockAlgorithm())
+    yield n
+    n.destroy_node()
+
+
+@pytest.fixture
+def frontier_node(ros):
+    # Node running the default FrontierAlgorithm, which self-declares its frontier
+    # ROS params in the node's namespace (F23 T03).
+    from dome_nav.explorer_manager_node import ExplorerManagerNode
+    with patch("tf2_ros.TransformListener"), \
+         patch("rclpy.action.ActionClient"), \
+         patch("dome_nav.explorer_manager_node.TelemetryWriter",
+               return_value=MagicMock()):
+        n = ExplorerManagerNode(algorithm=FrontierAlgorithm())
     yield n
     n.destroy_node()
 
@@ -226,6 +247,52 @@ def test_find_frontier_sends_algorithm_goal(node):
     assert sent_xy == (1.0, 2.0)
 
 
+# --- F23 T02: visualization + diagnostics off the protocol ---
+# The MockAlgorithm above exposes ONLY next_goal — no latest_clusters,
+# latest_diag, or any render/diagnostics hook. These assert the node runs its
+# visualization and telemetry paths against such a stub without error.
+
+def test_protocol_no_longer_requires_cluster_state():
+    # The required protocol surface must not mention frontier internals.
+    from dome_nav.explore_context import ExplorationAlgorithm
+    annotations = getattr(ExplorationAlgorithm, "__annotations__", {})
+    assert "latest_clusters" not in annotations
+    assert "latest_diag" not in annotations
+
+
+def test_publish_markers_no_hook_does_not_publish(node):
+    # Stub has no render_markers hook -> nothing published, no error.
+    node.marker_pub.publish = MagicMock()
+    node.publish_markers()
+    node.marker_pub.publish.assert_not_called()
+
+
+def test_handle_no_frontier_writes_telemetry_without_cluster_state(node):
+    # A stub exposing no clusters/diag still produces valid no_frontier telemetry.
+    node.state = "exploring"
+    node.no_frontier_count = 0
+    node.blacklist = set()
+    node.telemetry.write = MagicMock()
+    node.handle_no_frontier((0.0, 0.0))
+    assert node.no_frontier_count == 1
+    node.telemetry.write.assert_called_once()
+    kwargs = node.telemetry.write.call_args.kwargs
+    assert kwargs["reason"] == "filtered"
+    assert "raw_clusters" not in kwargs  # only present if the algorithm supplies it
+
+
+def test_marker_hook_payload_published_verbatim(node):
+    # When an algorithm supplies render_markers, the node publishes its opaque
+    # payload without inspecting it.
+    from unittest.mock import MagicMock as MM
+    sentinel = object()
+    node.algorithm = MockAlgorithm()
+    node.algorithm.render_markers = MM(return_value=sentinel)
+    node.marker_pub.publish = MM()
+    node.publish_markers()
+    node.marker_pub.publish.assert_called_once_with(sentinel)
+
+
 # --- check_goal_timeout ---
 
 def test_timeout_not_expired_does_nothing(node):
@@ -356,41 +423,56 @@ def test_publish_status_dist_correct(node):
     assert published[0]["dist_m"] == 3.0
 
 
-# --- default parameters must not form an empty [min, max] frontier-distance band ---
+# --- shared ExploreParams wiring (owned by the node) ---
 
-def test_default_max_frontier_dist_exceeds_min_frontier_dist(node):
-    assert node.max_frontier_dist > ExploreParams().min_frontier_dist
-
-
-# --- min_frontier_size ROS parameter wiring ---
-
-def test_min_frontier_size_default_matches_explore_params(node):
-    assert node.min_frontier_size == ExploreParams().min_frontier_size
+def test_shared_params_default_from_explore_params(node):
+    # The node's shared params default to the ExploreParams dataclass values.
+    assert node.params.preferred_goal_distance == ExploreParams().preferred_goal_distance
+    assert node.params.max_explore_radius == ExploreParams().max_explore_radius
 
 
-def test_min_frontier_size_plumbed_into_params(node):
-    assert node.params.min_frontier_size == node.min_frontier_size
+# --- FrontierAlgorithm self-declares its frontier ROS params (F23 T03) ---
+
+def test_frontier_params_defaults_match_dataclass(frontier_node):
+    # The frontier ROS params the algorithm declares default to the FrontierParams
+    # dataclass values, so yaml/launch overrides layer on a consistent baseline.
+    fp = frontier_node.algorithm.frontier_params
+    defaults = FrontierParams()
+    assert fp.min_frontier_size == defaults.min_frontier_size
+    assert fp.min_frontier_dist == defaults.min_frontier_dist
+    assert fp.max_frontier_dist == defaults.max_frontier_dist
+    assert fp.frontier_buffer_cells == defaults.frontier_buffer_cells
+    assert fp.goal_inset_m == defaults.goal_inset_m
 
 
-# --- min_frontier_dist ROS parameter wiring ---
-
-def test_min_frontier_dist_default_matches_explore_params(node):
-    # Default parameter must match the dataclass so real-robot behavior is unchanged.
-    assert node.min_frontier_dist == ExploreParams().min_frontier_dist
-
-
-def test_min_frontier_dist_plumbed_into_params(node):
-    assert node.params.min_frontier_dist == node.min_frontier_dist
+def test_frontier_params_declared_as_ros_params(frontier_node):
+    # Declared in the node's namespace so they stay yaml/launch settable.
+    for name in ("min_frontier_size", "min_frontier_dist", "max_frontier_dist",
+                 "frontier_buffer_cells", "goal_inset_m"):
+        assert frontier_node.has_parameter(name)
 
 
-# --- frontier_buffer_cells ROS parameter wiring ---
+# --- a shared-only plugin runs without the frontier params declared (F23 T03) ---
 
-def test_frontier_buffer_cells_default_matches_explore_params(node):
-    assert node.frontier_buffer_cells == ExploreParams().frontier_buffer_cells
+def test_shared_only_plugin_declares_no_frontier_params(node):
+    # MockAlgorithm needs only the shared params; the node must NOT have declared
+    # any frontier ROS param on its behalf.
+    for name in ("min_frontier_size", "min_frontier_dist", "max_frontier_dist",
+                 "frontier_buffer_cells", "goal_inset_m", "prefer_farthest"):
+        assert not node.has_parameter(name)
 
 
-def test_frontier_buffer_cells_plumbed_into_params(node):
-    assert node.params.frontier_buffer_cells == node.frontier_buffer_cells
+def test_shared_only_plugin_ticks_without_frontier_params(node):
+    # A find-and-send tick must run cleanly for a plugin carrying no frontier
+    # tuning (frontier_params is None) — no frontier param lookups blow up.
+    node.state = "exploring"
+    node.latest_map = make_map()
+    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
+    node.send_nav_goal = MagicMock()
+    node.algorithm = MockAlgorithm(GoalDecision.new_goal((1.0, 2.0)))
+    node.publish_markers()  # no render_markers hook -> must not raise
+    node.find_and_send_frontier()
+    node.send_nav_goal.assert_called_once()
 
 
 # --- goal_in_global_costmap bounds check (worldToMap guard) ---

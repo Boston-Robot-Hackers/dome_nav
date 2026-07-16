@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Protocol
 
+from builtin_interfaces.msg import Time
+
 from dome_nav.frontier_explorer import MapInfo
 
 
@@ -39,18 +41,14 @@ class GoalDecision:
 
 @dataclass
 class ExploreParams:
-    min_frontier_size: int = 15
-    blacklist_radius: float = 0.5
-    min_frontier_dist: float = 1.3
-    max_frontier_dist: float = 0.0
-    goal_inset_m: float = 0.3
+    # Shared/session tuning owned by the manager node — the small set meaningful to
+    # any exploration strategy, not just frontier. Frontier-only tuning moved to
+    # frontier_params.FrontierParams, which the frontier algorithm owns and
+    # self-declares (F23 T03). blacklist_radius stays here because the node's own
+    # blacklist/reselection policy uses it.
     max_explore_radius: float = 0.0
+    blacklist_radius: float = 0.5
     preferred_goal_distance: float = 1.0
-    prefer_farthest: bool = False  # deprecated: use preferred_goal_distance
-    # Known-cell rings between a frontier goal and the unknown boundary. 2 keeps
-    # goals two confirmed-known cells inside the mapped edge (see
-    # find_frontier_clusters); 1 is the original single-buffer behaviour.
-    frontier_buffer_cells: int = 2
 
 
 @dataclass
@@ -63,8 +61,37 @@ class ExplorationContext:
     params: ExploreParams
 
 
-class ExplorationAlgorithm(Protocol):
-    latest_clusters: list[list[int]]
-    latest_diag: dict | None
+@dataclass
+class RenderContext:
+    # Node-owned session state handed to an algorithm's optional visualization /
+    # diagnostics hooks. Everything here is general session state (no frontier
+    # concepts); the node fills it and treats whatever the hook returns — a
+    # MarkerArray, a report string, a telemetry dict — as opaque.
+    now: Time
+    is_exploring: bool
+    map_info: MapInfo | None
+    robot_xy: tuple[float, float] | None
+    blacklist: set[tuple[float, float]]
+    goal_xy: tuple[float, float] | None
+    params: ExploreParams
 
+
+class ExplorationAlgorithm(Protocol):
+    # Required surface: turn a context into a decision. Nothing else is mandatory.
+    #
+    # Visualization and diagnostics are OPTIONAL hooks the node calls via getattr
+    # and treats as opaque (see explorer_manager_node). An algorithm may implement
+    # any subset:
+    #   render_markers(rc: RenderContext) -> MarkerArray | None
+    #   exhaustion_report(rc: RenderContext) -> str | None
+    #   failure_report(rc: RenderContext) -> str | None
+    #   telemetry_extra() -> dict
+    # A plugin with no markers or diagnostics simply omits them.
     def next_goal(self, ctx: ExplorationContext) -> GoalDecision: ...
+
+    def declare_params(self, node) -> None:
+        # Optional hook the node calls once at construction so an algorithm can
+        # declare and read its own ROS parameters in the node's namespace (ROS
+        # params must be node-declared to be yaml/launch-settable). Algorithms
+        # with no tuning of their own leave this as a no-op.
+        ...

@@ -27,13 +27,12 @@ from dome_nav.explore_context import (
     ExplorationContext,
     ExploreParams,
     GoalOutcome,
+    RenderContext,
 )
 from dome_nav.explore_telemetry import TelemetryWriter
-from dome_nav.explore_markers import build_explore_markers
 from dome_nav.explore_diagnostics import (
     costmap_cell_cost,
     format_failure_diagnostics,
-    format_frontier_exhaustion,
 )
 from dome_nav.frontier_algorithm import FrontierAlgorithm
 from dome_nav.frontier_explorer import MapInfo
@@ -94,45 +93,25 @@ class ExplorerManagerNode(Node):
         self.tf_listener: tf2_ros.TransformListener | None = None
         self.create_timer(1.0 / self.EXPLORE_HZ, self.explore_tick)
 
+        # Shared/session params the node owns. Frontier tuning is declared by the
+        # algorithm itself (algorithm.declare_params below), so no frontier param
+        # name appears here (F23 T03/T04).
         self.declare_parameter("max_explore_radius", 0.0)
-        self.declare_parameter("max_frontier_dist", 15.0)
-        self.declare_parameter("min_frontier_dist", 1.3)
         self.declare_parameter("preferred_goal_distance", 1.0)
-        self.declare_parameter("prefer_farthest", False)  # deprecated
-        self.declare_parameter("min_frontier_size", 10)
-        self.declare_parameter("frontier_buffer_cells", 2)
         self.declare_parameter("map_name", "unknown")
-        self.max_explore_radius: float = self.get_parameter("max_explore_radius").value
-        self.max_frontier_dist: float = self.get_parameter("max_frontier_dist").value
-        self.min_frontier_dist: float = self.get_parameter("min_frontier_dist").value
-        self.min_frontier_size: int = self.get_parameter("min_frontier_size").value
-        self.frontier_buffer_cells: int = self.get_parameter(
-            "frontier_buffer_cells"
-        ).value
         self.map_name: str = self.get_parameter("map_name").value
-
-        preferred_goal_distance: float = self.get_parameter("preferred_goal_distance").value
-        prefer_farthest_val: bool = self.get_parameter("prefer_farthest").value
-        if prefer_farthest_val:
-            effective_max = self.max_frontier_dist if self.max_frontier_dist > 0.0 else 1000.0
-            preferred_goal_distance = effective_max
-            self.get_logger().warning(
-                "prefer_farthest is deprecated; use preferred_goal_distance instead. "
-                f"Mapping prefer_farthest=True to preferred_goal_distance={effective_max}"
-            )
-        self.preferred_goal_distance: float = preferred_goal_distance
 
         self.telemetry = TelemetryWriter(self.get_logger().info, map_name=self.map_name)
 
         self.params = ExploreParams(
-            max_explore_radius=self.max_explore_radius,
-            max_frontier_dist=self.max_frontier_dist,
-            min_frontier_dist=self.min_frontier_dist,
-            preferred_goal_distance=self.preferred_goal_distance,
-            min_frontier_size=self.min_frontier_size,
-            frontier_buffer_cells=self.frontier_buffer_cells,
+            max_explore_radius=self.get_parameter("max_explore_radius").value,
+            preferred_goal_distance=self.get_parameter("preferred_goal_distance").value,
         )
         self.algorithm = algorithm or FrontierAlgorithm()
+        # The algorithm declares and reads its own ROS params in this node's
+        # namespace (frontier tuning for FrontierAlgorithm; a no-op for plugins
+        # needing only the shared params above).
+        self.algorithm.declare_params(self)
 
         self.latest_map: OccupancyGrid | None = None
         self.latest_map_info: MapInfo | None = None
@@ -164,22 +143,61 @@ class ExplorerManagerNode(Node):
             return True
         return costmap_cell_cost(self.latest_global_costmap, xy) is not None
 
+    def render_context(self, robot_xy: XY | None = None) -> RenderContext:
+        # Node-owned session state for the algorithm's optional render/diagnostics
+        # hooks. Nothing here is algorithm-specific.
+        return RenderContext(
+            now=self.get_clock().now().to_msg(),
+            is_exploring=self.state == "exploring",
+            map_info=self.latest_map_info,
+            robot_xy=robot_xy if robot_xy is not None else self.robot_xy_in_map(),
+            blacklist=self.blacklist,
+            goal_xy=self.current_goal_xy,
+            params=self.params,
+        )
+
     def dump_frontier_exhaustion(self, robot_xy: XY):
-        self.get_logger().info(format_frontier_exhaustion(
-            self.algorithm.latest_clusters, self.latest_map_info, robot_xy,
-            self.params, self.blacklist, self.NO_FRONTIER_PATIENCE,
-        ))
+        # Fully opaque: the algorithm renders its own exhaustion report; the node
+        # reaches into no algorithm internals (F23 T02).
+        report = self.algorithm_report("exhaustion_report", self.render_context(robot_xy))
+        if report is not None:
+            self.get_logger().info(report)
+
+    def algorithm_report(self, hook: str, rc: RenderContext) -> str | None:
+        # Call an optional string-returning diagnostics hook, treating its return
+        # as opaque. Absent hook -> nothing to report.
+        fn = getattr(self.algorithm, hook, None)
+        return fn(rc) if fn is not None else None
+
+    def algorithm_telemetry(self) -> dict:
+        # Optional extra no_frontier telemetry fields, merged in blindly.
+        fn = getattr(self.algorithm, "telemetry_extra", None)
+        return fn() if fn is not None else {}
+
+    def session_start_params(self) -> dict:
+        # Session telemetry. The node logs only its own shared/session params; the
+        # algorithm contributes its own tuning via an optional opaque hook, so no
+        # algorithm-specific param names live here.
+        params: dict = {
+            "timeout_s": self.GOAL_TIMEOUT_S,
+            "max_radius": self.params.max_explore_radius,
+            "preferred_goal_distance": self.params.preferred_goal_distance,
+        }
+        fn = getattr(self.algorithm, "session_params", None)
+        if fn is not None:
+            params.update(fn())
+        return params
 
     def dump_failure_diagnostics(
         self, goal_xy: XY, robot_xy: XY | None, status: str, elapsed: float,
         nav2_error_code: int = 0, nav2_error_msg: str = "",
     ):
         self.latest_local_costmap = self.fetch_grid("/local_costmap/costmap")
+        report = self.algorithm_report("failure_report", self.render_context(robot_xy))
         self.get_logger().warning(format_failure_diagnostics(
             goal_xy, robot_xy, status, elapsed, self.goal_count,
             self.latest_global_costmap, self.latest_local_costmap, self.blacklist,
-            self.algorithm.latest_clusters, self.latest_map_info,
-            nav2_error_code, nav2_error_msg,
+            nav2_error_code, nav2_error_msg, algorithm_report=report,
         ))
         self.paused_on_failure = True
 
@@ -208,15 +226,7 @@ class ExplorerManagerNode(Node):
             self.telemetry.write(
                 "session_start", map_name=self.map_name,
                 start_xy=list(self.start_xy) if self.start_xy else None,
-                params={
-                    "min_frontier_dist": self.params.min_frontier_dist,
-                    "max_frontier_dist": self.params.max_frontier_dist,
-                    "goal_inset": self.params.goal_inset_m,
-                    "timeout_s": self.GOAL_TIMEOUT_S,
-                    "max_radius": self.params.max_explore_radius,
-                    "preferred_goal_distance": self.params.preferred_goal_distance,
-                    "min_frontier_size": self.params.min_frontier_size,
-                },
+                params=self.session_start_params(),
             )
         elif name == "exploration_stop":
             self.stop_exploring("idle")
@@ -374,14 +384,13 @@ class ExplorerManagerNode(Node):
             f"No frontiers found "
             f"(tick {self.no_frontier_count}/{self.NO_FRONTIER_PATIENCE})."
         )
-        diag = self.algorithm.latest_diag or {}
+        extra = self.algorithm_telemetry()
         self.telemetry.write(
             "no_frontier", reason="filtered",
             tick=self.no_frontier_count,
             patience=self.NO_FRONTIER_PATIENCE,
-            raw_clusters=len(self.algorithm.latest_clusters),
             blacklisted=len(self.blacklist),
-            **diag,
+            **extra,
         )
         if self.no_frontier_count >= self.NO_FRONTIER_PATIENCE:
             # We only reach here for a *block* (targets exist but none usable) —
@@ -566,16 +575,15 @@ class ExplorerManagerNode(Node):
             return None
 
     def publish_markers(self):
-        markers = build_explore_markers(
-            now=self.get_clock().now().to_msg(),
-            is_exploring=self.state == "exploring",
-            clusters=self.algorithm.latest_clusters,
-            min_frontier_size=self.params.min_frontier_size,
-            map_info=self.latest_map_info,
-            blacklist=self.blacklist,
-            goal_xy=self.current_goal_xy,
-        )
-        self.marker_pub.publish(markers)
+        # Visualization is an optional, opaque algorithm hook: the algorithm
+        # builds its own MarkerArray and the node publishes it verbatim. A plugin
+        # with nothing to show simply omits render_markers.
+        render = getattr(self.algorithm, "render_markers", None)
+        if render is None:
+            return
+        markers = render(self.render_context())
+        if markers is not None:
+            self.marker_pub.publish(markers)
 
     def publish_status(self, status: str):
         robot_xy = self.robot_xy_in_map()

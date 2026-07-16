@@ -6,7 +6,7 @@
 import math
 from nav_msgs.msg import OccupancyGrid
 
-from dome_nav.explore_context import ExploreParams
+from dome_nav.frontier_params import FrontierTuning
 from dome_nav.frontier_explorer import MapInfo, cell_to_world
 
 XY = tuple[float, float]
@@ -76,7 +76,7 @@ def format_frontier_exhaustion(
     clusters: list[list[int]],
     info: MapInfo,
     robot_xy: XY,
-    params: ExploreParams,
+    params: FrontierTuning,
     blacklist: set[XY],
     patience: int,
 ) -> str:
@@ -101,7 +101,7 @@ def format_frontier_exhaustion(
 
 def exhaustion_cluster_line(
     i: int, cl: list[int], info: MapInfo, robot_xy: XY,
-    params: ExploreParams, blacklist: set[XY],
+    params: FrontierTuning, blacklist: set[XY],
 ) -> str:
     br = params.blacklist_radius
     cx, cy = cluster_centroid(cl, info)
@@ -120,7 +120,7 @@ def exhaustion_cluster_line(
     )
 
 
-def exhaustion_reason(size: int, min_cell_dist: float, params: ExploreParams) -> str:
+def exhaustion_reason(size: int, min_cell_dist: float, params: FrontierTuning) -> str:
     reasons = []
     if size < params.min_frontier_size:
         reasons.append(f"too_small({size}<{params.min_frontier_size})")
@@ -136,9 +136,11 @@ def exhaustion_reason(size: int, min_cell_dist: float, params: ExploreParams) ->
 def format_failure_diagnostics(
     goal_xy: XY, robot_xy: XY | None, status: str, elapsed: float, goal_count: int,
     global_costmap: OccupancyGrid | None, local_costmap: OccupancyGrid | None,
-    blacklist: set[XY], clusters: list[list[int]], info: MapInfo | None,
-    nav2_error_code: int = 0, nav2_error_msg: str = "",
+    blacklist: set[XY], nav2_error_code: int = 0, nav2_error_msg: str = "",
+    algorithm_report: str | None = None,
 ) -> str:
+    # Node-general failure dump. Anything algorithm-specific (e.g. frontier
+    # clusters) arrives pre-rendered in algorithm_report and is appended blindly.
     error_name = NAV2_ERROR_CODES.get(nav2_error_code, f"code={nav2_error_code}")
     lines = [
         SEP,
@@ -163,7 +165,23 @@ def format_failure_diagnostics(
         entries = "  ".join(f"({x:.2f},{y:.2f})" for x, y in sorted(blacklist))
         lines.append(f"    {entries}")
 
-    lines.append(f"  frontiers: {len(clusters)} clusters available")
+    if algorithm_report:
+        lines.append(algorithm_report)
+
+    lines.append(SEP)
+    lines.append(
+        "To resume: ros2 topic pub --once /intent std_msgs/msg/String "
+        "'{data: \"{\\\"name\\\": \\\"exploration_resume\\\"}\"}'"
+    )
+    lines.append(SEP)
+    return "\n".join(lines)
+
+
+def format_cluster_summary(
+    clusters: list[list[int]], info: MapInfo | None
+) -> str:
+    # Frontier-owned block for the failure dump: the available raw clusters.
+    lines = [f"  frontiers: {len(clusters)} clusters available"]
     for i, cl in enumerate(clusters[:10]):
         if info is not None and cl:
             cx, cy = cluster_centroid(cl, info)
@@ -172,13 +190,6 @@ def format_failure_diagnostics(
             lines.append(f"    [{i}] size={len(cl)} (no map info)")
     if len(clusters) > 10:
         lines.append(f"    ... and {len(clusters) - 10} more")
-
-    lines.append(SEP)
-    lines.append(
-        "To resume: ros2 topic pub --once /intent std_msgs/msg/String "
-        "'{data: \"{\\\"name\\\": \\\"exploration_resume\\\"}\"}'"
-    )
-    lines.append(SEP)
     return "\n".join(lines)
 
 

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from dome_nav.explore_context import ExploreParams
+    from dome_nav.frontier_params import FrontierTuning
 
 
 @dataclass
@@ -128,7 +128,7 @@ def pick_best_frontier(
     clusters: list[list[int]],
     info: MapInfo,
     robot_xy: tuple[float, float],
-    params: "ExploreParams",
+    params: "FrontierTuning",
     blacklist: set[tuple[float, float]] | None = None,
     start_xy: tuple[float, float] | None = None,
 ) -> tuple[float, float] | None:
@@ -166,7 +166,7 @@ def cluster_outside_radius(
 
 def best_cell_in_cluster(
     cluster: list[int], info: MapInfo, robot_xy: tuple[float, float],
-    blacklist: set[tuple[float, float]], params: "ExploreParams",
+    blacklist: set[tuple[float, float]], params: "FrontierTuning",
 ) -> tuple[tuple[float, float] | None, float]:
     rx, ry = robot_xy
     br = params.blacklist_radius

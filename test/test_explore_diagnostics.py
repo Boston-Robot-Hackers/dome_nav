@@ -4,16 +4,37 @@
 # Open Source Under MIT license
 
 from nav_msgs.msg import OccupancyGrid
-from dome_nav.explore_context import ExploreParams
+from dome_nav.frontier_params import FrontierTuning
 from dome_nav.explore_diagnostics import (
     cluster_centroid,
     costmap_cell_cost,
     costmap_radius_costs,
     exhaustion_reason,
+    format_cluster_summary,
     format_failure_diagnostics,
     format_frontier_exhaustion,
 )
 from dome_nav.frontier_explorer import MapInfo
+
+
+# The diagnostics formatters take the combined FrontierTuning (F23 T03). Build one
+# with geometry-friendly filter defaults; override the frontier fields per test.
+def tuning(
+    min_frontier_size: int = 1,
+    min_frontier_dist: float = 0.0,
+    max_frontier_dist: float = 0.0,
+) -> FrontierTuning:
+    return FrontierTuning(
+        min_frontier_size=min_frontier_size,
+        blacklist_radius=0.5,
+        min_frontier_dist=min_frontier_dist,
+        max_frontier_dist=max_frontier_dist,
+        goal_inset_m=0.3,
+        max_explore_radius=0.0,
+        preferred_goal_distance=1.0,
+        frontier_buffer_cells=2,
+        prefer_farthest=False,
+    )
 
 
 def make_info(width=10, height=10, res=1.0):
@@ -65,33 +86,47 @@ def test_costmap_radius_negative_renders_unknown():
 
 
 def test_exhaustion_reason_too_small():
-    params = ExploreParams(min_frontier_size=10, min_frontier_dist=0.0)
+    params = tuning(min_frontier_size=10, min_frontier_dist=0.0)
     assert "too_small" in exhaustion_reason(3, 5.0, params)
 
 
 def test_exhaustion_reason_all_blacklisted():
-    params = ExploreParams(min_frontier_size=1)
+    params = tuning(min_frontier_size=1)
     assert "all_blacklisted" in exhaustion_reason(5, float("inf"), params)
 
 
 def test_exhaustion_reason_ok():
-    params = ExploreParams(min_frontier_size=1, min_frontier_dist=0.0, max_frontier_dist=0.0)
+    params = tuning(min_frontier_size=1, min_frontier_dist=0.0, max_frontier_dist=0.0)
     assert exhaustion_reason(5, 2.0, params) == "OK"
 
 
 def test_format_frontier_exhaustion_returns_string():
     info = make_info()
-    params = ExploreParams(min_frontier_size=1)
+    params = tuning(min_frontier_size=1)
     out = format_frontier_exhaustion([[0, 1, 2]], info, (0.0, 0.0), params, set(), 14)
     assert "FRONTIER EXHAUSTION" in out
     assert "patience=14" in out
 
 
 def test_format_failure_diagnostics_returns_string():
-    info = make_info()
     out = format_failure_diagnostics(
         (1.0, 1.0), (0.0, 0.0), "aborted", 12.0, 3,
-        None, None, set(), [], info, nav2_error_code=205,
+        None, None, set(), nav2_error_code=205,
     )
     assert "NAV FAILURE" in out
     assert "PLAN/START_OCCUPIED" in out
+
+
+def test_format_failure_diagnostics_appends_algorithm_report():
+    out = format_failure_diagnostics(
+        (1.0, 1.0), (0.0, 0.0), "aborted", 12.0, 3,
+        None, None, set(), algorithm_report="  frontiers: 2 clusters available",
+    )
+    assert "frontiers: 2 clusters available" in out
+
+
+def test_format_cluster_summary_lists_clusters():
+    info = make_info()
+    out = format_cluster_summary([[0, 1, 2]], info)
+    assert "frontiers: 1 clusters available" in out
+    assert "size=3" in out

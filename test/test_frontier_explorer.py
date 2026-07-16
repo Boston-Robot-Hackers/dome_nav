@@ -5,7 +5,7 @@
 
 import math
 import pytest
-from dome_nav.explore_context import ExploreParams
+from dome_nav.frontier_params import FrontierTuning
 from dome_nav.frontier_explorer import (
     MapInfo,
     frontier_diag,
@@ -21,13 +21,31 @@ def make_info(width: int, height: int, resolution: float = 1.0) -> MapInfo:
                    origin_y=0.0)
 
 
-# pick_best_frontier now takes an ExploreParams. These pure geometry tests want
-# no-op distance filters by default (min_frontier_dist=0.0), unlike the operational
-# ExploreParams default of 1.3 m — so build filters here with geometry-friendly
-# defaults and override per test.
-def filters(min_frontier_size: int = 1, min_frontier_dist: float = 0.0, **kw):
-    return ExploreParams(
-        min_frontier_size=min_frontier_size, min_frontier_dist=min_frontier_dist, **kw
+# pick_best_frontier takes the combined FrontierTuning (shared + frontier params,
+# F23 T03). These pure geometry tests want no-op distance filters by default
+# (min_frontier_dist=0.0), unlike the operational default of 1.3 m — so build a
+# tuning here with geometry-friendly defaults and override per test.
+def filters(
+    min_frontier_size: int = 1,
+    min_frontier_dist: float = 0.0,
+    max_frontier_dist: float = 0.0,
+    blacklist_radius: float = 0.5,
+    goal_inset_m: float = 0.3,
+    max_explore_radius: float = 0.0,
+    preferred_goal_distance: float = 1.0,
+    frontier_buffer_cells: int = 2,
+    prefer_farthest: bool = False,
+) -> FrontierTuning:
+    return FrontierTuning(
+        min_frontier_size=min_frontier_size,
+        blacklist_radius=blacklist_radius,
+        min_frontier_dist=min_frontier_dist,
+        max_frontier_dist=max_frontier_dist,
+        goal_inset_m=goal_inset_m,
+        max_explore_radius=max_explore_radius,
+        preferred_goal_distance=preferred_goal_distance,
+        frontier_buffer_cells=frontier_buffer_cells,
+        prefer_farthest=prefer_farthest,
     )
 
 
