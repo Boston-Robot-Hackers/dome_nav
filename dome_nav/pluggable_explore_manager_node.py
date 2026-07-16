@@ -10,6 +10,10 @@ import time
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
+from rclpy.qos import (
+    QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy, QoSHistoryPolicy,
+)
+from rclpy.wait_for_message import wait_for_message
 from action_msgs.msg import GoalStatus
 from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
@@ -61,17 +65,25 @@ class PluggableExploreManagerNode(Node):
         self.intent_sub = self.create_subscription(
             String, "/intent", self.on_intent, 10
         )
-        self.map_sub = self.create_subscription(
-            OccupancyGrid, "/map", self.on_map, 10
+        # Map + costmaps are fetched on demand (fetch_grid) only while exploring,
+        # not held as standing subscriptions. rclpy deserializes every message
+        # before the callback runs, so a standing sub to these large latched grids
+        # burned 10-20% CPU on the Pi even when idle. All three publishers are
+        # RELIABLE + TRANSIENT_LOCAL (latched), so wait_for_message returns the
+        # last grid immediately. This QoS must match the publishers to receive it.
+        self.map_qos = QoSProfile(
+            depth=1,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
         )
-        self.global_costmap_sub = self.create_subscription(
-            OccupancyGrid, "/global_costmap/costmap", self.on_global_costmap, 1
-        )
-        self.local_costmap_sub = self.create_subscription(
-            OccupancyGrid, "/local_costmap/costmap", self.on_local_costmap, 1
-        )
-        self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+        # TF listener runs only while exploring. /tf streams ~40Hz; the tf2
+        # TransformListener deserializes every message in Python (~8% CPU) for a
+        # pose this node needs at 1Hz. When idle it holds no listener, so an
+        # idle node deserializes no TF at all. Started in exploration_start,
+        # torn down in stop_exploring.
+        self.tf_buffer: tf2_ros.Buffer | None = None
+        self.tf_listener: tf2_ros.TransformListener | None = None
         self.create_timer(1.0 / self.EXPLORE_HZ, self.explore_tick)
 
         self.declare_parameter("max_explore_radius", 0.0)
@@ -123,14 +135,16 @@ class PluggableExploreManagerNode(Node):
         self.clear_active_goal()
         self.get_logger().info("PluggableExploreManagerNode ready.")
 
-    def on_map(self, msg: OccupancyGrid):
-        self.latest_map = msg
-
-    def on_global_costmap(self, msg: OccupancyGrid):
-        self.latest_global_costmap = msg
-
-    def on_local_costmap(self, msg: OccupancyGrid):
-        self.latest_local_costmap = msg
+    def fetch_grid(self, topic: str) -> OccupancyGrid | None:
+        # On-demand latest grid. Publishers are latched (TRANSIENT_LOCAL), so a
+        # matching-QoS reader gets the last sample immediately; deserialization
+        # happens here only, never while the node is idle. Briefly blocks the
+        # executor up to time_to_wait; latched topics return in ~ms.
+        ok, msg = wait_for_message(
+            OccupancyGrid, self, topic,
+            qos_profile=self.map_qos, time_to_wait=1.0,
+        )
+        return msg if ok else None
 
     def goal_in_global_costmap(self, xy: XY) -> bool:
         # True if xy maps inside the current global costmap extent. When no
@@ -152,6 +166,7 @@ class PluggableExploreManagerNode(Node):
         self, goal_xy: XY, robot_xy: XY | None, status: str, elapsed: float,
         nav2_error_code: int = 0, nav2_error_msg: str = "",
     ):
+        self.latest_local_costmap = self.fetch_grid("/local_costmap/costmap")
         self.get_logger().warning(format_failure_diagnostics(
             goal_xy, robot_xy, status, elapsed, self.goal_count,
             self.latest_global_costmap, self.latest_local_costmap, self.blacklist,
@@ -171,6 +186,9 @@ class PluggableExploreManagerNode(Node):
         name = intent.get("name", "")
         if name == "exploration_start" and self.state in ("idle", "done"):
             self.reset_session()
+            self.start_tf()
+            # Buffer is empty until TF fills; start_xy is captured on the first
+            # tick where map->base_footprint is available (see explore_tick).
             self.start_xy = self.robot_xy_in_map()
             self.state = "exploring"
             self.publish_status("exploring")
@@ -206,11 +224,18 @@ class PluggableExploreManagerNode(Node):
             return
         if self.paused_on_failure:
             return
+        if self.start_xy is None:
+            # Deferred from exploration_start: TF buffer was empty then.
+            self.start_xy = self.robot_xy_in_map()
         if self.has_active_goal:
             # The frontier choice is only reconsidered when the current goal
             # finishes (reached, aborted, or timed out), not mid-flight.
             self.check_goal_timeout()
             return
+        # Fetch grids on demand only when about to pick a frontier — keeps the
+        # idle node free of standing grid subscriptions (the CPU sink).
+        self.latest_map = self.fetch_grid("/map")
+        self.latest_global_costmap = self.fetch_grid("/global_costmap/costmap")
         self.find_and_send_frontier()
 
     def check_goal_timeout(self):
@@ -414,6 +439,7 @@ class PluggableExploreManagerNode(Node):
             self.goal_handle = None
         self.has_active_goal = False
         self.state = new_state
+        self.stop_tf()
         self.publish_status(new_state)
         self.get_logger().info(f"Exploration stopped → {new_state}.")
         self.telemetry.write(
@@ -421,7 +447,30 @@ class PluggableExploreManagerNode(Node):
             reached=self.goals_reached, failed=self.goals_failed,
         )
 
+    def start_tf(self):
+        # Create the TF listener on demand (see __init__ note). Buffer needs a
+        # moment to fill; first lookups may return None and retry next tick.
+        if self.tf_listener is not None:
+            return
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
+    def stop_tf(self):
+        # Tear down the listener so an idle node deserializes no /tf. Destroy the
+        # subscriptions it registered on this node (attr names guarded for distro
+        # differences), then drop the buffer.
+        if self.tf_listener is None:
+            return
+        for attr in ("tf_sub", "tf_static_sub"):
+            sub = getattr(self.tf_listener, attr, None)
+            if sub is not None:
+                self.destroy_subscription(sub)
+        self.tf_listener = None
+        self.tf_buffer = None
+
     def robot_xy_in_map(self) -> XY | None:
+        if self.tf_buffer is None:
+            return None
         try:
             tf = self.tf_buffer.lookup_transform(
                 "map", "base_footprint", rclpy.time.Time()

@@ -49,16 +49,7 @@ controller_server:
       xy_goal_tolerance: 0.5  # upstream: 0.25
       yaw_goal_tolerance: 1.0  # upstream: 0.25
     FollowPath:
-      plugin: nav2_rotation_shim_controller::RotationShimController  # upstream: nav2_mppi_controller::MPPIController (now primary_controller)
-      # primary_controller + all rotate_* / angular_* / forward_sampling params below: new (not in upstream)
-      primary_controller: nav2_mppi_controller::MPPIController
-      angular_dist_threshold: 0.785        # rotate in place if heading err > 45deg
-      forward_sampling_distance: 0.5
-      rotate_to_heading_angular_vel: 0.5   # above 0.3 stiction/deadband floor
-      max_angular_accel: 3.2
-      rotate_to_goal_heading: true
-      rotate_to_heading_once: false
-      # --- primary controller (MPPI) params below ---
+      plugin: nav2_mppi_controller::MPPIController
       time_steps: 56
       model_dt: 0.05
       batch_size: 1000  # upstream: 2000
@@ -331,10 +322,10 @@ velocity_smoother:
     - -2.0
     odom_topic: odom
     odom_duration: 0.1
-    deadband_velocity:  # upstream: [0.0, 0.0, 0.0]; real robot min move speeds: fwd 0.1, turn 0.3
-    - 0.1
+    deadband_velocity:  # matches upstream; MUST stay [0,0,0] -- a turn deadband
+    - 0.0                # zeros MPPI's normal small commands and the robot stops
+    - 0.0                # moving (see experiment.md E0-E3)
     - 0.0
-    - 0.3
     velocity_timeout: 1.0
 collision_monitor:
   ros__parameters:
