@@ -55,7 +55,7 @@ The lidar scans continuously during transit, not just at the destination. By the
 time the robot arrives at a frontier goal, cells along the entire path are already
 uncovered. Three algorithmic improvements follow from this:
 
-**1. Mid-navigation re-evaluation (implemented in `pluggable_explore_manager_node.py`)**
+**1. Mid-navigation re-evaluation (implemented in `explorer_manager_node.py`)**
 Run the frontier algorithm every tick even with an active goal. If the best frontier
 has shifted more than `REDIRECT_THRESHOLD` (currently 1.5 m) from the current goal,
 cancel and redirect. Implemented via `check_goal_redirect()` and the `is_redirecting`

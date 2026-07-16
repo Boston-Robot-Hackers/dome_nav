@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# sim_explore_node.launch.py — Starts pluggable_explore_manager_node, same config
+# sim_explore_node.launch.py — Starts explorer_manager_node, same config
 # as sim_explore.launch.py. One piece of the manual debug stack — requires
 # sim_robot.launch.py and sim_nav.launch.py already running (needs /map and an
 # active Nav2 stack to send goals to). Once running, publish an
@@ -36,7 +36,7 @@ def sim_explore_node_launch(
 
     bl.node(
         "dome_nav",
-        "pluggable_explore_manager_node",
+        "explorer_manager_node",
         name="explore_manager",
         params={
             "max_explore_radius": max_explore_radius,

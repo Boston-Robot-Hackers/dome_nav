@@ -71,7 +71,7 @@ def nav_experiment_launch(
 
         bl.node(
             "dome_nav",
-            "pluggable_explore_manager_node",
+            "explorer_manager_node",
             name="explore_manager",
             params={
                 "max_explore_radius": max_explore_radius,

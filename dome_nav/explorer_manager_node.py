@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# pluggable_explore_manager_node.py — Nav2 frontier exploration, pluggable algorithm
+# explorer_manager_node.py — Nav2 frontier exploration, pluggable algorithm
 # Author: Pito Salas and Claude Code
 # Open Source Under MIT license
 
@@ -42,7 +42,7 @@ XY = tuple[float, float]
 GOAL_STATUS_NAMES = {4: "succeeded", 5: "canceled", 6: "aborted"}
 
 
-class PluggableExploreManagerNode(Node):
+class ExplorerManagerNode(Node):
     # Timer frequency for the exploration loop.
     EXPLORE_HZ = 1.0
 
@@ -140,7 +140,7 @@ class PluggableExploreManagerNode(Node):
         self.paused_on_failure = False
         self.reset_session()
         self.clear_active_goal()
-        self.get_logger().info("PluggableExploreManagerNode ready.")
+        self.get_logger().info("ExplorerManagerNode ready.")
 
     def fetch_grid(self, topic: str) -> OccupancyGrid | None:
         # On-demand latest grid. Publishers are latched (TRANSIENT_LOCAL), so a
@@ -595,7 +595,7 @@ class PluggableExploreManagerNode(Node):
 
 def main():
     rclpy.init()
-    node = PluggableExploreManagerNode()
+    node = ExplorerManagerNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

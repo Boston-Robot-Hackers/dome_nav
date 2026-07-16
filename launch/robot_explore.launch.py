@@ -49,7 +49,7 @@ def robot_explore_launch(
         lifecycle_waittime=None,
     )
 
-    # Same explorer node as the sim stack (pluggable_explore_manager_node), differing
+    # Same explorer node as the sim stack (explorer_manager_node), differing
     # only by parameter values -- sim and real share one code path. The values below
     # are the explicit real-robot explore settings; several intentionally differ from
     # ExploreParams' dataclass defaults (min_frontier_dist 0.5 vs 1.3,
@@ -60,7 +60,7 @@ def robot_explore_launch(
     # their own values for the simulated worlds.
     bl.node(
         "dome_nav",
-        "pluggable_explore_manager_node",
+        "explorer_manager_node",
         name="explore_manager",
         params={
             "max_explore_radius": max_explore_radius,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# test_pluggable_explore_manager_node.py — unit tests for PluggableExploreManagerNode
+# test_explorer_manager_node.py — unit tests for ExplorerManagerNode
 # Author: Pito Salas and Claude Code
 # Open Source Under MIT license
 
@@ -34,12 +34,12 @@ def ros():
 
 @pytest.fixture
 def node(ros):
-    from dome_nav.pluggable_explore_manager_node import PluggableExploreManagerNode
+    from dome_nav.explorer_manager_node import ExplorerManagerNode
     with patch("tf2_ros.TransformListener"), \
          patch("rclpy.action.ActionClient"), \
-         patch("dome_nav.pluggable_explore_manager_node.TelemetryWriter",
+         patch("dome_nav.explorer_manager_node.TelemetryWriter",
                return_value=MagicMock()):
-        n = PluggableExploreManagerNode(algorithm=MockAlgorithm())
+        n = ExplorerManagerNode(algorithm=MockAlgorithm())
     yield n
     n.destroy_node()
 

@@ -3,7 +3,7 @@
 Concise cold-start orientation. Detailed history lives in git log and the
 `04-tasks/` files — do **not** re-narrate it here.
 
-**Date:** 2026-07-13 · **Branch:** main
+**Date:** 2026-07-16 · **Branch:** main
 
 ## Status
 
@@ -18,7 +18,23 @@ fast) serializes everything: MPPI/NavFn solves block the action-server ACK
 callbacks → intermittent `Timed out while waiting for action server to acknowledge`
 aborts. **Highest-impact fix is to give the VM more vCPUs (→4–6), not more YAML.**
 
-Recent changes (2026-07-10, this session):
+Recent changes (2026-07-16, this session — docs/refactor scaffolding, no nav behavior change):
+- **Experiment logs consolidated:** `experiment.md` + `experiment_navfail.md` →
+  single `experiments.md` (deadband bug, start-in-inflation deadlock, Pi CPU
+  campaign, fail-fast reselection). E7 stub added; E5/E6/E7 pending hardware runs.
+- **Node renamed:** `pluggable_explore_manager_node.py` → `explorer_manager_node.py`,
+  class `PluggableExploreManagerNode` → `ExplorerManagerNode` (ROS graph name
+  `explore_manager_node` kept stable). Entry point, launch files, test, literate 09
+  all updated.
+- **F22 (hello-world plugin):** T01 architecture critique DONE, T02
+  `HelloWorldAlgorithm` DONE (`dome_nav/hello_world_algorithm.py`, literate X08).
+  T03 (runtime `explore_algorithm` selector) / T04 (tests) / T05 (demo) pending.
+- **F23 (decouple manager from frontier):** new feature + TF23 tasks, converted
+  from the T01 critique. Removes 3 leaks — lossy `None` return + `latest_clusters`
+  side-channel, node-hardcoded frontier done-rule, frontier-heavy `ExploreParams`.
+  Issue I12 closed → F23 (retained as backing critique).
+
+Earlier changes (2026-07-10):
 - **Feature files F14–F17 added** (no code changes):
   - F14: `preferred_goal_distance` param replaces binary `prefer_farthest`; ranks
     frontiers by `|d - preferred_dist|` instead of nearest/farthest.
@@ -48,7 +64,7 @@ Known-but-unfixed nav tuning issues (none block basic exploration):
 
 ## Architecture essentials
 
-- **One explorer node for sim and real:** `pluggable_explore_manager_node.py`
+- **One explorer node for sim and real:** `explorer_manager_node.py`
   (injected `ExplorationAlgorithm`, default `FrontierAlgorithm`). The old
   `explore_manager_node.py` was deleted. Sim vs real differ only by ROS params.
 - **No YAML patching.** `config/` holds six standalone, commented copies of the
@@ -117,7 +133,18 @@ Intent contract: `nav go <label>`→`navigation_go {label}`, `nav cancel`→`nav
 8. **Reduce MPPI CPU on real robot** — try `batch_size` 2000→500, `controller_frequency`
    20→10 Hz in `nav2_params_explore_real.yaml`.
 9. **Real-robot verification (F10 T07)** — Modes A/B/E never run on hardware.
+10. **F23 T01 (next focused session)** — intent-carrying `next_goal` result
+    (`NEW_GOAL/NO_TARGETS_BLOCKED/EXPLORED_DONE`); the keystone that removes the
+    `latest_clusters` peek and moves the done-decision into the algorithm. Touches
+    protocol + both algorithms + node + tests together.
+11. **F22 T03/T04** — runtime `explore_algorithm` selector + unit tests, to finish
+    the hello-world plugin end-to-end.
+
+## In-flight features
+
+- **F22** hello-world plugin: T01–T02 done; T03–T05 pending.
+- **F23** decouple manager from frontier: tasks TF23 defined; not started.
 
 ## Open issues
 
-None. `05-issues/open/` is empty (I01–I11 all closed).
+`05-issues/open/` is empty. I12 (interface leak) closed → converted to F23.
