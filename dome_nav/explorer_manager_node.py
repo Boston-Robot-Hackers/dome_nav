@@ -26,6 +26,7 @@ from dome_nav.explore_context import (
     ExplorationAlgorithm,
     ExplorationContext,
     ExploreParams,
+    GoalOutcome,
 )
 from dome_nav.explore_telemetry import TelemetryWriter
 from dome_nav.explore_markers import build_explore_markers
@@ -331,6 +332,7 @@ class ExplorerManagerNode(Node):
         # next tick re-evaluates fresh in case the costmap has since grown.
         rejected: set[XY] = set()
         goal_xy = None
+        decision = None
         for _ in range(self.MAX_GOAL_ATTEMPTS):
             ctx = ExplorationContext(
                 map_data=map_data,
@@ -340,9 +342,10 @@ class ExplorerManagerNode(Node):
                 start_xy=self.start_xy,
                 params=self.params,
             )
-            candidate = self.algorithm.next_goal(ctx)
-            if candidate is None:
+            decision = self.algorithm.next_goal(ctx)
+            if decision.outcome is not GoalOutcome.NEW_GOAL:
                 break
+            candidate = decision.xy
             if self.goal_in_global_costmap(candidate):
                 goal_xy = candidate
                 break
@@ -351,11 +354,19 @@ class ExplorerManagerNode(Node):
                 "outside the global costmap — skipping to next frontier."
             )
             rejected.add(candidate)
-        if goal_xy is None:
-            self.handle_no_frontier(robot_xy)
+        if goal_xy is not None:
+            self.no_frontier_count = 0
+            self.send_nav_goal(goal_xy)
             return
-        self.no_frontier_count = 0
-        self.send_nav_goal(goal_xy)
+        # No goal this tick. The algorithm names why: EXPLORED_DONE ends the
+        # session outright; anything else (NO_TARGETS_BLOCKED, or NEW_GOALs that
+        # all mapped outside the costmap) is a transient block -> debounce.
+        if decision is not None and decision.outcome is GoalOutcome.EXPLORED_DONE:
+            self.get_logger().info("Algorithm reports exploration complete.")
+            self.dump_frontier_exhaustion(robot_xy)
+            self.stop_exploring("done")
+            return
+        self.handle_no_frontier(robot_xy)
 
     def handle_no_frontier(self, robot_xy: XY):
         self.no_frontier_count += 1
@@ -373,14 +384,13 @@ class ExplorerManagerNode(Node):
             **diag,
         )
         if self.no_frontier_count >= self.NO_FRONTIER_PATIENCE:
-            # Distinguish "fully explored" from "blocked": raw clusters exist but
-            # all got filtered/blacklisted. In the blocked case, clear the
+            # We only reach here for a *block* (targets exist but none usable) —
+            # the algorithm owns "fully explored" via EXPLORED_DONE. Clear the
             # blacklist once (stale entries may now be reachable as the map grew)
-            # and keep going; only declare done when there is truly nothing left.
-            raw = len(self.algorithm.latest_clusters)
-            if raw > 0 and not self.blacklist_cleared_once:
+            # and keep going; give up only if a clear already didn't help.
+            if not self.blacklist_cleared_once:
                 self.get_logger().info(
-                    f"Blocked: {raw} raw clusters but all filtered — "
+                    "Blocked: targets exist but all filtered — "
                     "clearing blacklist once and retrying."
                 )
                 self.blacklist.clear()

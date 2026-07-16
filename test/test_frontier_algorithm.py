@@ -5,7 +5,9 @@
 
 import math
 import pytest
-from dome_nav.explore_context import ExplorationContext, ExploreParams
+from dome_nav.explore_context import (
+    ExplorationContext, ExploreParams, GoalOutcome,
+)
 from dome_nav.frontier_algorithm import FrontierAlgorithm
 from dome_nav.frontier_explorer import MapInfo
 
@@ -41,23 +43,27 @@ def make_ctx(
     )
 
 
-# --- next_goal returns None on fully-explored map ---
+# --- no raw clusters → EXPLORED_DONE (algorithm owns the done-condition) ---
 
 def test_next_goal_no_frontiers_all_free():
     algo = FrontierAlgorithm()
     info = make_info(3, 3)
     ctx = make_ctx(flat_map(3, 3, 0), info)
-    assert algo.next_goal(ctx) is None
+    decision = algo.next_goal(ctx)
+    assert decision.outcome is GoalOutcome.EXPLORED_DONE
+    assert decision.xy is None
 
 
 def test_next_goal_no_frontiers_all_unknown():
     algo = FrontierAlgorithm()
     info = make_info(3, 3)
     ctx = make_ctx(flat_map(3, 3, -1), info)
-    assert algo.next_goal(ctx) is None
+    decision = algo.next_goal(ctx)
+    assert decision.outcome is GoalOutcome.EXPLORED_DONE
+    assert decision.xy is None
 
 
-# --- next_goal returns valid (x, y) on map with frontier cells ---
+# --- next_goal returns NEW_GOAL carrying an (x, y) on a map with frontier cells ---
 
 def test_next_goal_returns_xy_on_frontier_map():
     algo = FrontierAlgorithm()
@@ -66,10 +72,10 @@ def test_next_goal_returns_xy_on_frontier_map():
     # Cell 2 is free with unknown neighbor at cell 3 → frontier
     data = [0, 0, 0, -1, -1]
     ctx = make_ctx(data, info)
-    result = algo.next_goal(ctx)
-    assert result is not None
-    assert isinstance(result, tuple)
-    assert len(result) == 2
+    decision = algo.next_goal(ctx)
+    assert decision.outcome is GoalOutcome.NEW_GOAL
+    assert isinstance(decision.xy, tuple)
+    assert len(decision.xy) == 2
 
 
 # --- preferred_goal_distance plumbed through from ExploreParams ---
@@ -85,9 +91,9 @@ def test_next_goal_large_preferred_dist_picks_far_cluster():
         frontier_buffer_cells=1,
     )
     ctx = make_ctx(data, info, params=params)
-    result = algo.next_goal(ctx)
-    assert result is not None
-    assert result[0] > 7.0
+    decision = algo.next_goal(ctx)
+    assert decision.outcome is GoalOutcome.NEW_GOAL
+    assert decision.xy[0] > 7.0
 
 
 def test_next_goal_zero_preferred_dist_picks_near_cluster():
@@ -99,9 +105,9 @@ def test_next_goal_zero_preferred_dist_picks_near_cluster():
         frontier_buffer_cells=1,
     )
     ctx = make_ctx(data, info, params=params)
-    result = algo.next_goal(ctx)
-    assert result is not None
-    assert result[0] < 3.0
+    decision = algo.next_goal(ctx)
+    assert decision.outcome is GoalOutcome.NEW_GOAL
+    assert decision.xy[0] < 3.0
 
 
 # --- latest_clusters populated after each call ---
@@ -158,9 +164,9 @@ def test_latest_diag_transitions():
     assert algo.latest_diag is None
 
 
-# --- blacklist is respected ---
+# --- clusters present but all blacklisted → NO_TARGETS_BLOCKED, not done ---
 
-def test_blacklist_causes_none_when_only_frontier_blocked():
+def test_blacklist_causes_blocked_when_only_frontier_filtered():
     algo = FrontierAlgorithm()
     info = make_info(6, 1)
     # 6x1: cells 0-3 free, 4-5 unknown. Cell 3 touches unknown directly and
@@ -172,8 +178,11 @@ def test_blacklist_causes_none_when_only_frontier_blocked():
                    params=ExploreParams(min_frontier_size=1, min_frontier_dist=0.0,
                                         blacklist_radius=1.0,
                                         frontier_buffer_cells=1))
-    result = algo.next_goal(ctx)
-    assert result is None
+    decision = algo.next_goal(ctx)
+    assert decision.outcome is GoalOutcome.NO_TARGETS_BLOCKED
+    assert decision.xy is None
+    # Raw clusters do exist — this is a block, not exploration completion.
+    assert len(algo.latest_clusters) >= 1
 
 
 # --- goal_inset_m nudge is applied ---
@@ -189,8 +198,9 @@ def test_nudge_applied_goal_closer_than_raw_cell():
                    params=ExploreParams(min_frontier_size=1, min_frontier_dist=0.0,
                                         goal_inset_m=inset,
                                         frontier_buffer_cells=1))
-    result = algo.next_goal(ctx)
-    assert result is not None
+    decision = algo.next_goal(ctx)
+    assert decision.outcome is GoalOutcome.NEW_GOAL
+    result = decision.xy
     # The raw frontier cell is at x=4.5 (or nearby). The nudged result
     # should be closer to the robot than the raw cell.
     raw_dist = 4.5  # approximate distance of nearest frontier cell
@@ -211,8 +221,9 @@ def test_nudge_amount_correct():
                    params=ExploreParams(min_frontier_size=1, min_frontier_dist=0.0,
                                         goal_inset_m=inset,
                                         frontier_buffer_cells=1))
-    result = algo.next_goal(ctx)
-    assert result is not None
+    decision = algo.next_goal(ctx)
+    assert decision.outcome is GoalOutcome.NEW_GOAL
+    result = decision.xy
     # After nudge toward (0,0) by 0.3m, the distance should be reduced by
     # exactly 0.3m.
     raw_xy = (3.5, 0.5)

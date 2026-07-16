@@ -5,7 +5,7 @@ the two biggest leaks); T02/T03 are independent and can follow in either order; 
 is the verification gate; T05 closes out.
 
 ## T01 — Intent-carrying result type for `next_goal`
-**Status**: not done
+**Status**: done
 **Test**: extend `test_frontier_algorithm.py` + `test_hello_world_algorithm.py`:
 `next_goal` returns the new result; assert `NEW_GOAL` carries an `(x,y)`,
 `EXPLORED_DONE` when the algorithm is finished, `NO_TARGETS_BLOCKED` when clusters

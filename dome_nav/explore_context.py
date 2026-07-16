@@ -4,9 +4,37 @@
 # Open Source Under MIT license
 
 from dataclasses import dataclass
+from enum import Enum, auto
 from typing import Protocol
 
 from dome_nav.frontier_explorer import MapInfo
+
+
+class GoalOutcome(Enum):
+    # What an algorithm decided this tick. NEW_GOAL carries an (x, y); the other
+    # two carry no goal and name *why* there is none, so the node no longer has to
+    # peek at algorithm internals to tell "blocked right now" from "finished".
+    NEW_GOAL = auto()
+    NO_TARGETS_BLOCKED = auto()  # targets exist but all filtered/blacklisted
+    EXPLORED_DONE = auto()       # algorithm is finished — end the session
+
+
+@dataclass(frozen=True)
+class GoalDecision:
+    outcome: GoalOutcome
+    xy: tuple[float, float] | None = None
+
+    @classmethod
+    def new_goal(cls, xy: tuple[float, float]) -> "GoalDecision":
+        return cls(GoalOutcome.NEW_GOAL, xy)
+
+    @classmethod
+    def blocked(cls) -> "GoalDecision":
+        return cls(GoalOutcome.NO_TARGETS_BLOCKED)
+
+    @classmethod
+    def done(cls) -> "GoalDecision":
+        return cls(GoalOutcome.EXPLORED_DONE)
 
 
 @dataclass
@@ -39,4 +67,4 @@ class ExplorationAlgorithm(Protocol):
     latest_clusters: list[list[int]]
     latest_diag: dict | None
 
-    def next_goal(self, ctx: ExplorationContext) -> tuple[float, float] | None: ...
+    def next_goal(self, ctx: ExplorationContext) -> GoalDecision: ...

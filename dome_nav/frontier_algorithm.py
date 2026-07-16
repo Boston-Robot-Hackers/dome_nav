@@ -3,7 +3,7 @@
 # Author: Pito Salas and Claude Code
 # Open Source Under MIT license
 
-from dome_nav.explore_context import ExplorationContext
+from dome_nav.explore_context import ExplorationContext, GoalDecision
 from dome_nav.frontier_explorer import (
     find_frontier_clusters,
     nudge_toward_robot,
@@ -20,9 +20,7 @@ class FrontierAlgorithm:
         self.latest_clusters: list[list[int]] = []
         self.latest_diag: dict | None = None
 
-    def next_goal(
-        self, ctx: ExplorationContext
-    ) -> tuple[float, float] | None:
+    def next_goal(self, ctx: ExplorationContext) -> GoalDecision:
         clusters = find_frontier_clusters(
             ctx.map_data, ctx.map_info, ctx.params.frontier_buffer_cells
         )
@@ -40,6 +38,12 @@ class FrontierAlgorithm:
                 ctx.params.min_frontier_dist,
                 ctx.params.max_frontier_dist,
             )
-            return None
+            # No raw clusters at all -> the map is fully explored; the frontier
+            # algorithm owns this done-condition. Clusters present but none survive
+            # filtering/blacklisting -> blocked this tick, not finished.
+            if not clusters:
+                return GoalDecision.done()
+            return GoalDecision.blocked()
         self.latest_diag = None
-        return nudge_toward_robot(target, ctx.robot_xy, ctx.params.goal_inset_m)
+        goal = nudge_toward_robot(target, ctx.robot_xy, ctx.params.goal_inset_m)
+        return GoalDecision.new_goal(goal)
