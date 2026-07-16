@@ -52,6 +52,13 @@ class PluggableExploreManagerNode(Node):
     # Cancel active goal after this many seconds to break Nav2 BT recovery loops.
     GOAL_TIMEOUT_S = 25.0
 
+    # Fail-fast: abandon a goal after this many seconds of NO progress (robot
+    # wedged / collision-monitor-gated), well before GOAL_TIMEOUT_S. Progress =
+    # distance-to-goal dropped by STUCK_PROGRESS_EPS or robot moved STUCK_MOVE_EPS.
+    STUCK_T_S = 7.0
+    STUCK_MOVE_EPS = 0.05
+    STUCK_PROGRESS_EPS = 0.10
+
     # Max frontiers to try in one tick when a candidate goal maps outside the
     # global costmap. Each rejected goal is excluded and next_goal is re-asked, so
     # a run of edge goals near the growing map boundary can't wedge the tick.
@@ -229,14 +236,55 @@ class PluggableExploreManagerNode(Node):
             self.start_xy = self.robot_xy_in_map()
         if self.has_active_goal:
             # The frontier choice is only reconsidered when the current goal
-            # finishes (reached, aborted, or timed out), not mid-flight.
-            self.check_goal_timeout()
+            # finishes (reached, aborted, timed out, or abandoned for no progress).
+            self.check_stuck()
+            if self.has_active_goal:
+                self.check_goal_timeout()
             return
         # Fetch grids on demand only when about to pick a frontier — keeps the
         # idle node free of standing grid subscriptions (the CPU sink).
         self.latest_map = self.fetch_grid("/map")
         self.latest_global_costmap = self.fetch_grid("/global_costmap/costmap")
         self.find_and_send_frontier()
+
+    def check_stuck(self):
+        # Abandon a goal that is making no progress (robot wedged), long before
+        # GOAL_TIMEOUT_S. Blacklisting the target also suppresses its neighborhood
+        # (blacklist_radius), so reselection avoids the same wall.
+        robot_xy = self.robot_xy_in_map()
+        if robot_xy is None or self.current_goal_xy is None:
+            return
+        gx, gy = self.current_goal_xy
+        d = math.sqrt((gx - robot_xy[0]) ** 2 + (gy - robot_xy[1]) ** 2)
+        moved = (
+            math.sqrt((robot_xy[0] - self.last_progress_xy[0]) ** 2
+                      + (robot_xy[1] - self.last_progress_xy[1]) ** 2)
+            if self.last_progress_xy else 0.0
+        )
+        if (self.best_dist_to_goal is None
+                or d < self.best_dist_to_goal - self.STUCK_PROGRESS_EPS
+                or moved > self.STUCK_MOVE_EPS):
+            self.best_dist_to_goal = d if self.best_dist_to_goal is None else min(self.best_dist_to_goal, d)
+            self.last_progress_xy = robot_xy
+            self.last_progress_time = time.monotonic()
+            return
+        if self.last_progress_time is None:
+            return
+        if (time.monotonic() - self.last_progress_time) <= self.STUCK_T_S:
+            return
+        elapsed = round(time.monotonic() - (self.goal_start_time or time.monotonic()), 1)
+        self.get_logger().warning(
+            f"No progress for {self.STUCK_T_S}s — abandoning goal, blacklisting."
+        )
+        self.telemetry.write(
+            "goal_result", goal_num=self.goal_count, status="stuck",
+            elapsed_s=elapsed, robot_xy=[round(v, 3) for v in robot_xy],
+            goal_xy=[round(gx, 3), round(gy, 3)], blacklisted=len(self.blacklist),
+        )
+        if self.goal_handle is not None:
+            self.goal_handle.cancel_goal_async()
+        self.blacklist.add(self.current_goal_xy)
+        self.clear_active_goal()
 
     def check_goal_timeout(self):
         if self.goal_start_time is None:
@@ -325,6 +373,20 @@ class PluggableExploreManagerNode(Node):
             **diag,
         )
         if self.no_frontier_count >= self.NO_FRONTIER_PATIENCE:
+            # Distinguish "fully explored" from "blocked": raw clusters exist but
+            # all got filtered/blacklisted. In the blocked case, clear the
+            # blacklist once (stale entries may now be reachable as the map grew)
+            # and keep going; only declare done when there is truly nothing left.
+            raw = len(self.algorithm.latest_clusters)
+            if raw > 0 and not self.blacklist_cleared_once:
+                self.get_logger().info(
+                    f"Blocked: {raw} raw clusters but all filtered — "
+                    "clearing blacklist once and retrying."
+                )
+                self.blacklist.clear()
+                self.blacklist_cleared_once = True
+                self.no_frontier_count = 0
+                return
             self.get_logger().info("Frontier patience exhausted — exploration done.")
             self.dump_frontier_exhaustion(robot_xy)
             self.stop_exploring("done")
@@ -334,6 +396,7 @@ class PluggableExploreManagerNode(Node):
         self.blacklist: set[XY] = set()
         self.start_xy: XY | None = None
         self.no_frontier_count = 0
+        self.blacklist_cleared_once = False
         self.goal_count = 0
         self.goals_reached = 0
         self.goals_failed = 0
@@ -343,6 +406,10 @@ class PluggableExploreManagerNode(Node):
         self.has_active_goal = False
         self.goal_start_time = None
         self.current_goal_xy = None
+        # No-progress tracking (see check_stuck); set fresh in send_nav_goal.
+        self.best_dist_to_goal = None
+        self.last_progress_xy = None
+        self.last_progress_time = None
 
     def send_nav_goal(self, xy: XY):
         if not self.nav_client.server_is_ready():
@@ -364,6 +431,10 @@ class PluggableExploreManagerNode(Node):
             math.sqrt((xy[0] - robot_xy[0]) ** 2 + (xy[1] - robot_xy[1]) ** 2)
             if robot_xy else -1.0
         )
+        # Seed no-progress tracking for check_stuck.
+        self.best_dist_to_goal = dist if dist >= 0.0 else None
+        self.last_progress_xy = robot_xy
+        self.last_progress_time = time.monotonic()
         self.get_logger().info(
             f"Goal #{self.goal_count}: ({xy[0]:.2f},{xy[1]:.2f})"
             f" dist={dist:.2f}m blacklisted={len(self.blacklist)}"
