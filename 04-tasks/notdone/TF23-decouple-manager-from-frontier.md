@@ -118,11 +118,13 @@ to build the combined `FrontierTuning` it feeds to the pure frontier functions. 
 deprecated `prefer_farthest → preferred_goal_distance` remap moved out of the node
 into `merge_tuning`.
 
-**Still-frontier-coupled node paths kept working (removed in T02, not T03).**
-`dump_frontier_exhaustion`, the `session_start` telemetry, and `publish_markers` still
-read frontier tuning; they now source it via a node `frontier_tuning()` helper that
-returns `merge_tuning(...)` when the active algorithm exposes `frontier_params`, else
-`None` (so a shared-only plugin skips those frontier-only dumps cleanly).
+**Still-frontier-coupled node paths (superseded — see note).** At T03 close,
+`dump_frontier_exhaustion`, `session_start` telemetry, and `publish_markers` still read
+frontier tuning via a node `frontier_tuning()` helper (`merge_tuning(...)` when the
+algorithm exposed `frontier_params`, else `None`). **This was removed in a follow-up
+param-leak cleanup:** those paths now route through the T02 opaque hooks
+(`session_params`, `render_markers`, `exhaustion_report`), so the node no longer reads
+`algorithm.frontier_params` or imports `merge_tuning`/`FrontierTuning`.
 
 **Launch/yaml.** Frontier params are still declared by the same names in the node's
 namespace, so `robot_explore.launch.py` / `sim_explore*.launch.py` pass them
@@ -157,6 +159,22 @@ feasible, else record the grep result here.
 **Description**: Audit the node for any residual frontier concept (imports, fields,
 comments referencing clusters, param names). Confirm `FrontierAlgorithm` is imported
 only for the `main()` registry default. Fix any stragglers.
+
+Known stragglers to address here (params already off the node — post-T03 cleanup):
+- **Naming residue (general concepts wearing frontier names):** `NO_FRONTIER_PATIENCE`,
+  `no_frontier_count`, the `no_frontier` telemetry key, `find_and_send_frontier`,
+  `handle_no_frontier`, `dump_frontier_exhaustion`. These are *no-target* / pick-a-goal
+  concepts, not frontier-specific — rename as part of the Explore-vs-Exploration chore.
+- **Duplicated `NO_FRONTIER_PATIENCE = 14`:** defined both as a module constant in
+  `frontier_algorithm.py` (used only for the `exhaustion_report` label) and as the real
+  debounce threshold `ExplorerManagerNode.NO_FRONTIER_PATIENCE`. They match today; if the
+  node's value is retuned, the frontier report label drifts. Collapse to one source —
+  likely pass the node's value into the report via `RenderContext`, or drop the label's
+  dependency on it.
+- Confirm the `session_params` / `telemetry_extra` / `render_markers` / `exhaustion_report`
+  / `failure_report` opaque hooks leave zero frontier param *names* in the node (T03's
+  earlier `frontier_tuning()` helper was replaced by the `session_params` hook, so the
+  node no longer reads `algorithm.frontier_params`).
 
 ## T05 — Tests, literate, close-out
 **Status**: not done
