@@ -1,6 +1,6 @@
 ---
-version: "1.9"
-generated: "2026-07-16"
+version: "2.0"
+generated: "2026-07-17"
 ---
 
 # The Explorer Manager
@@ -9,22 +9,27 @@ generated: "2026-07-16"
 building" into a stream of concrete navigation goals. It watches a growing
 SLAM map, repeatedly asks a pluggable *algorithm* "where should I go next?",
 hands each answer to Nav2 as a `NavigateToPose` goal, and watches how that goal
-plays out — reached, aborted, timed out, or wedged with no progress. When there
-is nothing left worth visiting, it declares exploration done.
+plays out — reached, aborted, timed out, or wedged with no progress. When the
+algorithm reports there is nothing left worth visiting, the node declares
+exploration done.
 
 The design's organizing idea is a clean seam: **the node owns everything about
-ROS, Nav2, and the exploration *session*; the algorithm owns only the decision
-of where to go.** The node is deliberately reusable across different exploration
-strategies (frontier detection today; random-walk or scan-based tomorrow) by
-injecting a different algorithm object. This document explains how the node is
-built around that seam, and where the seam still leaks.
+ROS, Nav2, and the exploration *session*; the algorithm owns only where to go,
+when it is finished, its own tuning, and its own visualization.** The node is
+deliberately reusable across different exploration strategies (frontier
+detection today; random-walk or scan-based tomorrow) by injecting a different
+algorithm object. This document explains how the node is built around that seam.
+An earlier version of the code leaked frontier concepts across the seam; the F23
+work (T01–T03) closed those leaks, and this document describes the result.
 
 ## The exploration loop as a state machine
 
 At heart the node is a 1 Hz timer (`EXPLORE_HZ = 1.0`) driving a small state
 machine. The states are strings: `idle`, `exploring`, `done`. Transitions are
 triggered by JSON *intents* arriving on `/intent` (`exploration_start`,
-`exploration_stop`, `exploration_resume`) and by the outcome of navigation.
+`exploration_stop`, `exploration_resume`) and by the outcome of navigation —
+including a typed decision the algorithm returns each time it is asked for a
+goal.
 
 ```mermaid
 stateDiagram-v2
@@ -32,8 +37,10 @@ stateDiagram-v2
     idle --> exploring: exploration_start
     done --> exploring: exploration_start
     exploring --> idle: exploration_stop
-    exploring --> done: frontier patience exhausted
+    exploring --> done: EXPLORED_DONE (algorithm declares finished)
+    exploring --> done: NO_TARGETS_BLOCKED — patience exhausted after blacklist-clear
     exploring --> exploring: goal reached / failed / stuck
+    exploring --> exploring: NO_TARGETS_BLOCKED — debounce / clear blacklist once
     note right of exploring
         paused_on_failure freezes
         the loop until resume
@@ -74,58 +81,84 @@ the next is chosen.
 
 ## The pluggable seam
 
-The node never imports frontier logic directly into its decision path. Instead
-it constructs an `ExplorationContext` — a plain data bundle — and calls
+The node never imports frontier logic into its decision path. Instead it
+constructs an `ExplorationContext` — a plain data bundle — and calls
 `self.algorithm.next_goal(ctx)`. The algorithm is injected at construction and
-defaults to `FrontierAlgorithm`:
+defaults to `FrontierAlgorithm`, the only place the node names a concrete
+strategy:
 
 ```python
 def __init__(self, algorithm: ExplorationAlgorithm | None = None):
     ...
     self.algorithm = algorithm or FrontierAlgorithm()
-```
-
-```mermaid
-flowchart LR
-    subgraph Node["ExplorerManagerNode (ROS + session)"]
-        tick[explore_tick] --> ctx[build ExplorationContext]
-        ctx --> call["algorithm.next_goal(ctx)"]
-        call --> send[send_nav_goal to Nav2]
-    end
-    subgraph Algo["ExplorationAlgorithm (decision only)"]
-        call -.-> decide[pick a goal or None]
-    end
-    decide -.-> call
+    # The algorithm declares and reads its own ROS params in this node's
+    # namespace (frontier tuning for FrontierAlgorithm; a no-op otherwise).
+    self.algorithm.declare_params(self)
 ```
 
 The context carries exactly what a decision needs and nothing about ROS: the
 occupancy grid as a flat `list[int]`, its `MapInfo` geometry, the robot's
 `(x, y)` in the map frame, the current blacklist, the exploration start point,
-and the tuning `ExploreParams`. Because the input is pure Python data, an
+and the shared tuning `ExploreParams`. Because the input is pure Python data, an
 algorithm is testable with no robot, no `rclpy`, no Nav2 — the payoff of the
 seam.
+
+### An intent-carrying result
+
+The key to a clean seam is what `next_goal` *returns*. It does not return a bare
+`(x, y)` or `None`; it returns a `GoalDecision` that names the outcome, so the
+node never has to guess what "no goal" means:
+
+- `NEW_GOAL(xy)` — go here.
+- `NO_TARGETS_BLOCKED` — targets exist but none are usable this tick.
+- `EXPLORED_DONE` — the algorithm is finished; end the session.
+
+```mermaid
+flowchart LR
+    subgraph Node["ExplorerManagerNode (ROS + session)"]
+        tick["explore_tick"] --> ctx["build ExplorationContext"]
+        ctx --> call["algorithm.next_goal(ctx)"]
+        call --> branch{"GoalDecision"}
+        branch -->|"NEW_GOAL (xy)"| send["send_nav_goal to Nav2"]
+        branch -->|"NO_TARGETS_BLOCKED"| debounce["patience / blacklist policy"]
+        branch -->|"EXPLORED_DONE"| fin["stop_exploring(done)"]
+    end
+    subgraph Algo["ExplorationAlgorithm (decision only)"]
+        call -.-> decide["return GoalDecision"]
+    end
+    decide -.-> call
+```
+
+The payoff is that **the done-condition belongs to the algorithm, not the node.**
+"When am I finished exploring?" is strategy-specific — a frontier algorithm is
+done when no frontier cells remain; a coverage algorithm is done when its lawn is
+mowed. The node keeps only the *mechanical* session policy that is genuinely
+strategy-agnostic: debouncing a transient block, clearing the blacklist, timing
+out a goal, detecting a wedged robot.
 
 ## Choosing a goal, and rejecting infeasible ones
 
 `find_and_send_frontier` is where the node consults the algorithm. It does not
-blindly trust the first answer. A frontier goal is chosen against the *SLAM map*,
-which can extend past the *global costmap* Nav2 plans in; a goal outside the
-costmap would be rejected by the planner with a `worldToMap` failure. So the node
-loops, asking for the next-best goal and locally excluding any candidate that
-falls outside the costmap, up to `MAX_GOAL_ATTEMPTS`:
+blindly trust the first answer. A goal is chosen against the *SLAM map*, which
+can extend past the *global costmap* Nav2 plans in; a goal outside the costmap
+would be rejected by the planner with a `worldToMap` failure. So the node loops,
+asking for the next-best goal and locally excluding any `NEW_GOAL` that falls
+outside the costmap, up to `MAX_GOAL_ATTEMPTS`:
 
 ```python
 rejected: set[XY] = set()
 goal_xy = None
+decision = None
 for _ in range(self.MAX_GOAL_ATTEMPTS):
     ctx = ExplorationContext(
         map_data=map_data, map_info=info, robot_xy=robot_xy,
         blacklist=self.blacklist | rejected,
         start_xy=self.start_xy, params=self.params,
     )
-    candidate = self.algorithm.next_goal(ctx)
-    if candidate is None:
+    decision = self.algorithm.next_goal(ctx)
+    if decision.outcome is not GoalOutcome.NEW_GOAL:
         break
+    candidate = decision.xy
     if self.goal_in_global_costmap(candidate):
         goal_xy = candidate
         break
@@ -134,9 +167,28 @@ for _ in range(self.MAX_GOAL_ATTEMPTS):
 
 Note the trick: rejected candidates are folded into the blacklist passed *back*
 into the next `ExplorationContext` (`self.blacklist | rejected`), so the
-algorithm naturally returns a *different* frontier each iteration. The `rejected`
+algorithm naturally returns a *different* goal each iteration. The `rejected`
 set is local to this tick — next tick starts fresh, in case the costmap has
 grown to include a previously-out-of-bounds frontier.
+
+The loop exits three ways, and the tail of the method branches on which:
+
+```python
+if goal_xy is not None:
+    self.no_frontier_count = 0
+    self.send_nav_goal(goal_xy)
+    return
+if decision is not None and decision.outcome is GoalOutcome.EXPLORED_DONE:
+    self.dump_frontier_exhaustion(robot_xy)
+    self.stop_exploring("done")
+    return
+self.handle_no_frontier(robot_xy)
+```
+
+A usable `NEW_GOAL` is sent and the patience counter resets. `EXPLORED_DONE`
+ends the session immediately — no waiting. Everything else (a `NO_TARGETS_BLOCKED`
+decision, or a run of `NEW_GOAL`s that all mapped outside the costmap) is treated
+as a *transient* block and handed to the debounce path.
 
 ## Blacklist: the session's memory of failure
 
@@ -156,7 +208,9 @@ of the cleaner boundaries in the design.
 
 A wedged robot is the recurring hazard (see the start-in-inflation deadlock in
 `experiments.md`). The node guards against it with two independent timers while a
-goal is active.
+goal is active. Both are *navigation* concerns — they react to how motion is
+going, not to what the exploration strategy is — so they correctly live in the
+node.
 
 The blunt one is `check_goal_timeout`: cancel any goal older than
 `GOAL_TIMEOUT_S = 25s`, to break Nav2's internal behavior-tree recovery loops.
@@ -226,27 +280,94 @@ target is not re-chosen.
 
 ## Knowing when exploration is finished
 
-When `find_and_send_frontier` gets no usable goal, it calls `handle_no_frontier`,
-which increments a patience counter and, once it reaches
-`NO_FRONTIER_PATIENCE = 14`, must decide between two very different situations:
-genuinely finished, versus temporarily blocked with all frontiers filtered out.
+There are two distinct ways the session ends, and the node now keeps them cleanly
+apart because the algorithm labels each one.
+
+The first is `EXPLORED_DONE`, handled inline in `find_and_send_frontier` (above):
+the algorithm says it is finished, and the node stops at once. The node makes no
+judgement of its own about completeness — it trusts the label.
+
+The second is `NO_TARGETS_BLOCKED`, routed to `handle_no_frontier`, which is a
+pure *debounce* mechanism. A single blocked tick means little (the map is still
+filling in), so the node counts consecutive blocked ticks and acts only when the
+count reaches `NO_FRONTIER_PATIENCE = 14` — a threshold chosen to exceed SLAM's
+5-second `map_update_interval` so the map has had a chance to grow:
 
 ```python
-raw = len(self.algorithm.latest_clusters)
-if raw > 0 and not self.blacklist_cleared_once:
-    self.blacklist.clear()
-    self.blacklist_cleared_once = True
-    self.no_frontier_count = 0
-    return
-self.get_logger().info("Frontier patience exhausted — exploration done.")
+if self.no_frontier_count >= self.NO_FRONTIER_PATIENCE:
+    # We only reach here for a *block* (targets exist but none usable) —
+    # the algorithm owns "fully explored" via EXPLORED_DONE.
+    if not self.blacklist_cleared_once:
+        self.blacklist.clear()
+        self.blacklist_cleared_once = True
+        self.no_frontier_count = 0
+        return
+    self.get_logger().info("Frontier patience exhausted — exploration done.")
 ```
 
-If raw frontier clusters still exist but were all filtered or blacklisted, the
-node clears the blacklist *once* (stale entries may have become reachable as the
-map grew) and tries again; only when nothing remains does it declare done. This
-is a sensible policy — but notice how it works: the node reaches into
-`self.algorithm.latest_clusters`, a frontier-specific attribute, to make the
-call. We return to this below.
+The policy: when patience runs out on a persistent block, clear the blacklist
+*once* (stale entries may have become reachable as the map grew) and try again;
+give up only if a clear already didn't help. Crucially, the node no longer peeks
+at any algorithm-internal state to make this call — the old version inspected
+`self.algorithm.latest_clusters`, a frontier-specific attribute, to distinguish
+"done" from "blocked." That distinction now arrives as the decision's outcome, so
+the debounce path is entirely strategy-agnostic.
+
+## Visualization and diagnostics as opaque hooks
+
+Markers and diagnostics were the other place frontier concepts used to leak. A
+strategy-agnostic node cannot know how to *draw* frontier clusters — that is
+frontier knowledge. The resolution is that the `ExplorationAlgorithm` protocol
+requires only `next_goal` (and a `declare_params` hook); everything visual or
+diagnostic is an **optional** method the node calls via `getattr` and treats as
+opaque. An algorithm implements any subset:
+
+- `render_markers(rc) -> MarkerArray | None` — the node publishes it verbatim.
+- `exhaustion_report(rc) -> str | None` and `failure_report(rc) -> str | None` —
+  logged blindly.
+- `telemetry_extra() -> dict` and `session_params() -> dict` — merged into
+  telemetry blindly.
+
+The node hands each hook a `RenderContext` carrying only node-general session
+state (timestamp, `is_exploring`, map info, robot pose, blacklist, current goal,
+shared params) — no frontier concepts. Publishing markers, for instance, is
+reduced to: if the algorithm offers a renderer, publish whatever it returns.
+
+```python
+def publish_markers(self):
+    render = getattr(self.algorithm, "render_markers", None)
+    if render is None:
+        return
+    markers = render(self.render_context())
+    if markers is not None:
+        self.marker_pub.publish(markers)
+```
+
+`FrontierAlgorithm` implements all of these and keeps its own `latest_clusters` /
+`latest_diag` state privately, for its own rendering. A minimal "hello world"
+plugin implements none of them and holds no faked state — it is just `next_goal`
+plus a no-op `declare_params`.
+
+## Parameters: shared vs. algorithm-owned
+
+The node declares only the small set of *session* parameters that mean something
+to any strategy — `max_explore_radius`, `preferred_goal_distance`,
+`blacklist_radius` — and packs them into `ExploreParams`. Frontier-specific
+tuning (`min_frontier_size`, `min/max_frontier_dist`, `frontier_buffer_cells`,
+`goal_inset_m`) lives in `FrontierParams`, which the algorithm declares in the
+node's namespace through the `declare_params` hook:
+
+```python
+self.declare_parameter("max_explore_radius", 0.0)
+self.declare_parameter("preferred_goal_distance", 1.0)
+...
+self.algorithm = algorithm or FrontierAlgorithm()
+self.algorithm.declare_params(self)   # frontier params, or a no-op
+```
+
+The ROS parameter *names* are unchanged, so existing YAML and launch overrides
+still work — but no frontier parameter name appears anywhere in the node. A
+plugin that needs only the shared params declares nothing extra and runs clean.
 
 ## The CPU discipline: nothing runs while idle
 
@@ -269,38 +390,20 @@ The guiding rule discovered here: an *active* ROS subscription always pays full
 deserialization cost — there is no "throttle by time" QoS — so the only way to
 not pay is to not subscribe.
 
-## Where the design still leaks
+## Observations and further improvements
 
-The pluggable seam is good but not airtight. The clearest tell is the return
-type of the algorithm: `next_goal` returns `(x, y) | None`, and `None` is
-overloaded to mean *both* "nothing worth sending this tick" *and* "exploration is
-finished." Because those are genuinely different outcomes, the node cannot act on
-the return alone — it recovers the missing intent by peeking at
-`len(self.algorithm.latest_clusters)`.
+The seam is now clean: the protocol requires only `next_goal`, the algorithm owns
+its done-condition, tuning, and visualization, and the node reaches into no
+algorithm internals. A few smaller rough edges remain.
 
-That peek forces a second leak: `latest_clusters` and `latest_diag` are
-frontier-specific fields declared on the *general* `ExplorationAlgorithm`
-protocol, consumed by the node in six places (diagnostics, the done-decision,
-telemetry, and marker publishing). A non-frontier algorithm — say a minimal
-"hello world" plugin — has no clusters and must fake `latest_clusters = []` just
-to satisfy the interface. The abstraction is leaking frontier concepts into a
-seam that claims to be strategy-agnostic.
-
-The recommended fix (tracked as feature **F23** (from issue I12)) is to give `next_goal` an
-intent-carrying result — e.g. an enum `NEW_GOAL(xy) / NO_TARGETS_BLOCKED /
-EXPLORED_DONE` — so the node stops inferring done-ness from cluster counts, and
-to move visualization/diagnostics data off the protocol into an opaque optional
-channel the node renders blindly. An open sub-question is who should own frontier
-*marker* rendering, since drawing cluster-colored markers inherently requires
-knowing they are clusters.
-
-### Other, smaller observations
-
-- **Naming is not parallel.** The seam mixes `Explore*` (`ExploreParams`,
-  `ExplorerManagerNode`, `explore_tick`, `explore_algorithm`) with `Exploration*`
-  (`ExplorationContext`, `ExplorationAlgorithm`). Settling on one prefix would
-  improve readability (tracked as a chore). The redundant `Pluggable` prefix has
-  already been dropped from the node name.
+- **Naming is not parallel, and still carries "frontier."** The node mixes
+  `Explore*` (`ExploreParams`, `ExplorerManagerNode`, `explore_tick`) with
+  `Exploration*` (`ExplorationContext`, `ExplorationAlgorithm`), and several
+  general concepts keep frontier-flavored names: `NO_FRONTIER_PATIENCE`,
+  `no_frontier_count`, the `no_frontier` telemetry key, and
+  `find_and_send_frontier` are really *no-target* / *pick-a-goal* concepts.
+  Renaming them (an Explore-vs-Exploration chore) would finish the decoupling in
+  spirit as well as in structure.
 - **The rejected-goal loop reuses the blacklist channel.** Folding this tick's
   `rejected` set into `ctx.blacklist` conflates "permanently failed" with
   "infeasible right now." It works, but a dedicated exclusion field would express
