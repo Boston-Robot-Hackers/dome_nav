@@ -117,16 +117,16 @@ node never has to guess what "no goal" means:
 flowchart LR
     subgraph Node["ExplorerManagerNode (ROS + session)"]
         tick["explore_tick"] --> ctx["build ExplorationContext"]
-        ctx --> call["algorithm.next_goal(ctx)"]
-        call --> branch{"GoalDecision"}
+        ctx --> ask["algorithm.next_goal(ctx)"]
+        ask --> branch{"GoalDecision"}
         branch -->|"NEW_GOAL (xy)"| send["send_nav_goal to Nav2"]
         branch -->|"NO_TARGETS_BLOCKED"| debounce["patience / blacklist policy"]
         branch -->|"EXPLORED_DONE"| fin["stop_exploring(done)"]
     end
     subgraph Algo["ExplorationAlgorithm (decision only)"]
-        call -.-> decide["return GoalDecision"]
+        ask -.-> decide["return GoalDecision"]
     end
-    decide -.-> call
+    decide -.-> ask
 ```
 
 The payoff is that **the done-condition belongs to the algorithm, not the node.**
