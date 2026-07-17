@@ -337,13 +337,6 @@ def test_timeout_expired_clears_active_state(node):
     assert node.current_goal_xy is None
 
 
-def test_timeout_no_start_time_does_nothing(node):
-    node.goal_start_time = None
-    node.goal_handle = MagicMock()
-    node.check_goal_timeout()
-    node.goal_handle.cancel_goal_async.assert_not_called()
-
-
 # --- publish_status JSON shape ---
 
 def test_publish_status_idle_json(node):

@@ -26,6 +26,19 @@ Concise cold-start orientation. Detailed history lives in git log and the
   Pi CPU campaign C1–C4) migrated to `02-doc/notes.md`.
 - Literate refreshed: `02-slam_manager_node` (v3.4), `06-frontier_explorer` (v1.7),
   `08-frontier_algorithm` (v1.1). Full suite: **224 passed, 4 deselected**.
+- **F26 created (+TF26): indoor-survey algorithms paper.** Feature
+  `03-features/notdone/F26-indoor-survey-paper.md` + task list TF26 (T01–T05:
+  background synthesis → literature survey → paper plan → runbook → draft).
+  Algorithm-centric, not ROS2-centric; the two new algorithms are **F14
+  (preferred-goal-distance) + F15 (path novelty)**; venue = arXiv/tech report.
+  ROS2 + pluggable-architecture appear as small sections only.
+- **Chore: explorer_manager_node DRY/YAGNI pass** (644→625 lines). Extracted
+  `dist()`/`rounded()`, `call_hook()` (single optional-hook dispatch),
+  `abandon_active_goal()`, `write_goal_result()`; dropped state-machine-guaranteed
+  guards, the double algorithm-name check (`resolve_algorithm` removed — node
+  warns + falls back once), the dead `start_xy` pre-capture, and the duplicate
+  `session_end` on shutdown. Deleted 4 tests encoding removed defensiveness.
+  **Suite now 220 passed, 4 deselected.**
 
 
 ## Status
@@ -166,7 +179,8 @@ Intent contract: `nav go <label>`→`navigation_go {label}`, `nav cancel`→`nav
 4. **F17 done** — telemetry files now named `e<map_name><dd-mmm>.json`; old `exp-NNNN.json` files coexist untouched. dome_control CSV rename (`t<dd-mmm>.csv`) still pending in dome_control.
 5. **F14 done** — `preferred_goal_distance` param replaces `prefer_farthest`; selection is `min |d - preferred_dist|`. `prefer_farthest` kept as deprecated alias (logs warning, maps True→max_frontier_dist). Sim default 2.0 m, real 1.0 m.
 6. **F16 done** — `save_period_sec` default 60→120 s; `export_legacy_map: bool = True` param; `/slam_toolbox/save_map` called after each posegraph save (best-effort).
-7. **F15** — implement path novelty scoring (opt-in, after F14 landed).
+7. **F15 code done** — novelty scoring landed opt-in (`use_novelty_scoring`);
+   live verification (TF15 T05) pending.
 8. **Reduce MPPI CPU on real robot** — try `batch_size` 2000→500, `controller_frequency`
    20→10 Hz in `nav2_params_explore_real.yaml`.
 9. **Real-robot verification (F10 T07)** — Modes A/B/E never run on hardware.
@@ -176,6 +190,7 @@ Intent contract: `nav go <label>`→`navigation_go {label}`, `nav cancel`→`nav
 
 - **F22** hello-world plugin: **T01–T05 done**, feature closed.
 - **F23** decouple manager from frontier: **T01–T05 done**, feature closed.
+- **F26** indoor-survey algorithms paper: feature + TF26 created; T01–T05 not started.
 
 ## Open issues
 

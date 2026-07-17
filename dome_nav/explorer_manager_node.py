@@ -40,22 +40,25 @@ from dome_nav.hello_world_algorithm import HelloWorldAlgorithm
 
 XY = tuple[float, float]
 
-# Registry of selectable exploration algorithms. The node uses this to pick the
-# algorithm from the `explore_algorithm` ROS param at runtime; tests can still
-# inject any ExplorationAlgorithm via the constructor.
+# Registry of selectable exploration algorithms. The node instantiates the class
+# named by the `explore_algorithm` ROS param; tests can still inject any
+# ExplorationAlgorithm via the constructor.
 DEFAULT_ALGORITHM = "frontier"
 ALGORITHM_REGISTRY: dict[str, type[ExplorationAlgorithm]] = {
     "frontier": FrontierAlgorithm,
     "hello": HelloWorldAlgorithm,
 }
 
+GOAL_STATUS_NAMES = {5: "canceled", 6: "aborted"}
 
-def resolve_algorithm(name: str) -> type[ExplorationAlgorithm]:
-    # Pure helper: map a config name to an algorithm class. Unknown names fall
-    # back to the default so a typo doesn't brick the launch.
-    return ALGORITHM_REGISTRY.get(name, ALGORITHM_REGISTRY[DEFAULT_ALGORITHM])
 
-GOAL_STATUS_NAMES = {4: "succeeded", 5: "canceled", 6: "aborted"}
+def dist(a: XY, b: XY) -> float:
+    return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
+
+
+def rounded(xy: XY | None) -> list[float] | None:
+    # Telemetry wire format: 3-decimal coordinate list, None when pose unknown.
+    return [round(xy[0], 3), round(xy[1], 3)] if xy is not None else None
 
 
 class ExplorerManagerNode(Node):
@@ -130,9 +133,11 @@ class ExplorerManagerNode(Node):
             chosen = self.get_parameter("explore_algorithm").value
             if chosen not in ALGORITHM_REGISTRY:
                 self.get_logger().warning(
-                    f"Unknown explore_algorithm '{chosen}'; falling back to '{DEFAULT_ALGORITHM}'."
+                    f"Unknown explore_algorithm '{chosen}'; "
+                    f"falling back to '{DEFAULT_ALGORITHM}'."
                 )
-            self.algorithm = resolve_algorithm(chosen)()
+                chosen = DEFAULT_ALGORITHM
+            self.algorithm = ALGORITHM_REGISTRY[chosen]()
         self.algorithm.declare_params(self)  # algorithm declares its own ROS params
 
         self.latest_map: OccupancyGrid | None = None
@@ -177,19 +182,15 @@ class ExplorerManagerNode(Node):
             patience=self.NO_TARGET_PATIENCE,
         )
 
+    def call_hook(self, hook: str, *args, default=None):
+        # Optional algorithm hook: absent -> default, present -> called opaquely.
+        fn = getattr(self.algorithm, hook, None)
+        return fn(*args) if fn is not None else default
+
     def dump_exhaustion(self, robot_xy: XY):
-        report = self.algorithm_report("exhaustion_report", self.render_context(robot_xy))
+        report = self.call_hook("exhaustion_report", self.render_context(robot_xy))
         if report is not None:
             self.get_logger().info(report)
-
-    def algorithm_report(self, hook: str, rc: RenderContext) -> str | None:
-        # Optional string-returning diagnostics hook; absent -> None.
-        fn = getattr(self.algorithm, hook, None)
-        return fn(rc) if fn is not None else None
-
-    def algorithm_telemetry(self) -> dict:
-        fn = getattr(self.algorithm, "telemetry_extra", None)
-        return fn() if fn is not None else {}
 
     def session_start_params(self) -> dict:
         # Node's own shared params plus the algorithm's opaque session_params.
@@ -198,9 +199,7 @@ class ExplorerManagerNode(Node):
             "max_radius": self.params.max_explore_radius,
             "preferred_goal_distance": self.params.preferred_goal_distance,
         }
-        fn = getattr(self.algorithm, "session_params", None)
-        if fn is not None:
-            params.update(fn())
+        params.update(self.call_hook("session_params", default={}))
         return params
 
     def dump_failure_diagnostics(
@@ -208,7 +207,7 @@ class ExplorerManagerNode(Node):
         nav2_error_code: int = 0, nav2_error_msg: str = "",
     ):
         self.latest_local_costmap = self.fetch_grid("/local_costmap/costmap")
-        report = self.algorithm_report("failure_report", self.render_context(robot_xy))
+        report = self.call_hook("failure_report", self.render_context(robot_xy))
         self.get_logger().warning(format_failure_diagnostics(
             goal_xy, robot_xy, status, elapsed, self.goal_count,
             self.latest_global_costmap, self.latest_local_costmap, self.blacklist,
@@ -228,9 +227,9 @@ class ExplorerManagerNode(Node):
         if name == "exploration_start" and self.state in ("idle", "done"):
             self.reset_session()
             self.start_tf()
-            # Buffer is empty until TF fills; start_xy is captured on the first
-            # tick where map->base_footprint is available (see explore_tick).
-            self.start_xy = self.robot_xy_in_map()
+            # start_xy stays None here: the fresh TF buffer is still empty, so
+            # it is captured on the first tick where map->base_footprint resolves
+            # (see explore_tick).
             self.state = "exploring"
             self.publish_status("exploring")
             r = (
@@ -239,8 +238,7 @@ class ExplorerManagerNode(Node):
             )
             self.get_logger().info(f"Exploration started{r}.")
             self.telemetry.write(
-                "session_start", map_name=self.map_name,
-                start_xy=list(self.start_xy) if self.start_xy else None,
+                "session_start", map_name=self.map_name, start_xy=None,
                 params=self.session_start_params(),
             )
         elif name == "exploration_stop":
@@ -276,64 +274,46 @@ class ExplorerManagerNode(Node):
     def check_stuck(self):
         # Abandon a goal that is making no progress (robot wedged), long before
         # GOAL_TIMEOUT_S. Blacklisting the target also suppresses its neighborhood
-        # (blacklist_radius), so reselection avoids the same wall.
+        # (blacklist_radius), so reselection avoids the same wall. All tracking
+        # fields are seeded in send_nav_goal; best_dist_to_goal can still be None
+        # here when the goal was sent before TF resolved.
         robot_xy = self.robot_xy_in_map()
         if robot_xy is None or self.current_goal_xy is None:
             return
-        gx, gy = self.current_goal_xy
-        d = math.sqrt((gx - robot_xy[0]) ** 2 + (gy - robot_xy[1]) ** 2)
+        d = dist(robot_xy, self.current_goal_xy)
         moved = (
-            math.sqrt((robot_xy[0] - self.last_progress_xy[0]) ** 2
-                      + (robot_xy[1] - self.last_progress_xy[1]) ** 2)
-            if self.last_progress_xy else 0.0
+            dist(robot_xy, self.last_progress_xy)
+            if self.last_progress_xy is not None else 0.0
         )
         if (self.best_dist_to_goal is None
                 or d < self.best_dist_to_goal - self.STUCK_PROGRESS_EPS
                 or moved > self.STUCK_MOVE_EPS):
-            self.best_dist_to_goal = d if self.best_dist_to_goal is None else min(self.best_dist_to_goal, d)
+            self.best_dist_to_goal = (
+                d if self.best_dist_to_goal is None
+                else min(self.best_dist_to_goal, d)
+            )
             self.last_progress_xy = robot_xy
             self.last_progress_time = time.monotonic()
             return
-        if self.last_progress_time is None:
-            return
         if (time.monotonic() - self.last_progress_time) <= self.STUCK_T_S:
             return
-        elapsed = round(time.monotonic() - (self.goal_start_time or time.monotonic()), 1)
+        elapsed = round(time.monotonic() - self.goal_start_time, 1)
         self.get_logger().warning(
             f"No progress for {self.STUCK_T_S}s — abandoning goal, blacklisting."
         )
-        self.telemetry.write(
-            "goal_result", goal_num=self.goal_count, status="stuck",
-            elapsed_s=elapsed, robot_xy=[round(v, 3) for v in robot_xy],
-            goal_xy=[round(gx, 3), round(gy, 3)], blacklisted=len(self.blacklist),
-        )
-        if self.goal_handle is not None:
-            self.goal_handle.cancel_goal_async()
-        self.blacklist.add(self.current_goal_xy)
-        self.clear_active_goal()
+        self.write_goal_result(self.current_goal_xy, robot_xy, "stuck", elapsed)
+        self.abandon_active_goal()
 
     def check_goal_timeout(self):
-        if self.goal_start_time is None:
-            return
+        # Caller guarantees an active goal (goal_start_time seeded in send_nav_goal).
         if (time.monotonic() - self.goal_start_time) <= self.GOAL_TIMEOUT_S:
             return
         elapsed = round(time.monotonic() - self.goal_start_time, 1)
         self.get_logger().warning(
             f"Goal timed out after {elapsed}s — cancelling and blacklisting."
         )
-        self.telemetry.write(
-            "goal_result", goal_num=self.goal_count, status="timeout",
-            elapsed_s=elapsed, robot_xy=None, blacklisted=len(self.blacklist),
-            goal_xy=(
-                [round(self.current_goal_xy[0], 3), round(self.current_goal_xy[1], 3)]
-                if self.current_goal_xy else None
-            ),
-        )
-        if self.goal_handle is not None:
-            self.goal_handle.cancel_goal_async()
-        if self.current_goal_xy is not None:
-            self.blacklist.add(self.current_goal_xy)
-        self.clear_active_goal()
+        self.write_goal_result(self.current_goal_xy, None, "timeout", elapsed)
+        self.abandon_active_goal()
 
     def find_and_send_goal(self):
         if self.latest_map is None:
@@ -397,14 +377,13 @@ class ExplorerManagerNode(Node):
             f"No usable goal this tick "
             f"(tick {self.no_target_count}/{self.NO_TARGET_PATIENCE})."
         )
-        extra = self.algorithm_telemetry()
         # "no_frontier" kept as a telemetry wire contract; rename is a migration.
         self.telemetry.write(
             "no_frontier", reason="filtered",
             tick=self.no_target_count,
             patience=self.NO_TARGET_PATIENCE,
             blacklisted=len(self.blacklist),
-            **extra,
+            **self.call_hook("telemetry_extra", default={}),
         )
         if self.no_target_count >= self.NO_TARGET_PATIENCE:
             # Blocked, not done (done comes via EXPLORED_DONE). Clear the blacklist
@@ -442,6 +421,22 @@ class ExplorerManagerNode(Node):
         self.last_progress_xy = None
         self.last_progress_time = None
 
+    def abandon_active_goal(self):
+        # Cancel + blacklist the active goal; shared by the stuck/timeout paths.
+        if self.goal_handle is not None:
+            self.goal_handle.cancel_goal_async()
+        if self.current_goal_xy is not None:
+            self.blacklist.add(self.current_goal_xy)
+        self.clear_active_goal()
+
+    def write_goal_result(self, xy: XY | None, robot_xy: XY | None,
+                          status: str, elapsed: float):
+        self.telemetry.write(
+            "goal_result", goal_num=self.goal_count, goal_xy=rounded(xy),
+            status=status, elapsed_s=elapsed, robot_xy=rounded(robot_xy),
+            blacklisted=len(self.blacklist),
+        )
+
     def send_nav_goal(self, xy: XY):
         if not self.nav_client.server_is_ready():
             self.get_logger().warning("NavigateToPose server not ready — will retry.")
@@ -458,23 +453,18 @@ class ExplorerManagerNode(Node):
         self.current_goal_xy = xy
         self.goal_count += 1
         robot_xy = self.robot_xy_in_map()
-        dist = (
-            math.sqrt((xy[0] - robot_xy[0]) ** 2 + (xy[1] - robot_xy[1]) ** 2)
-            if robot_xy else -1.0
-        )
+        goal_dist = dist(xy, robot_xy) if robot_xy is not None else -1.0
         # Seed no-progress tracking for check_stuck.
-        self.best_dist_to_goal = dist if dist >= 0.0 else None
+        self.best_dist_to_goal = goal_dist if goal_dist >= 0.0 else None
         self.last_progress_xy = robot_xy
         self.last_progress_time = time.monotonic()
         self.get_logger().info(
             f"Goal #{self.goal_count}: ({xy[0]:.2f},{xy[1]:.2f})"
-            f" dist={dist:.2f}m blacklisted={len(self.blacklist)}"
+            f" dist={goal_dist:.2f}m blacklisted={len(self.blacklist)}"
         )
         self.telemetry.write(
-            "goal_sent", goal_num=self.goal_count,
-            goal_xy=[round(xy[0], 3), round(xy[1], 3)],
-            dist_m=round(dist, 3),
-            robot_xy=[round(v, 3) for v in robot_xy] if robot_xy else None,
+            "goal_sent", goal_num=self.goal_count, goal_xy=rounded(xy),
+            dist_m=round(goal_dist, 3), robot_xy=rounded(robot_xy),
             blacklisted=len(self.blacklist),
         )
         future = self.nav_client.send_goal_async(goal)
@@ -499,10 +489,8 @@ class ExplorerManagerNode(Node):
         )
 
     def on_goal_result(self, future, xy: XY):
-        elapsed = (
-            round(time.monotonic() - self.goal_start_time, 1)
-            if self.goal_start_time else 0.0
-        )
+        # goal_start_time is seeded in send_nav_goal for any goal that reaches here.
+        elapsed = round(time.monotonic() - self.goal_start_time, 1)
         self.clear_active_goal()
         result = future.result()
         robot_xy = self.robot_xy_in_map()
@@ -526,13 +514,7 @@ class ExplorerManagerNode(Node):
                     nav2_error_code=result.result.error_code,
                     nav2_error_msg=result.result.error_msg,
                 )
-        self.telemetry.write(
-            "goal_result", goal_num=self.goal_count,
-            goal_xy=[round(xy[0], 3), round(xy[1], 3)],
-            status=status_name, elapsed_s=elapsed,
-            robot_xy=[round(v, 3) for v in robot_xy] if robot_xy else None,
-            blacklisted=len(self.blacklist),
-        )
+        self.write_goal_result(xy, robot_xy, status_name, elapsed)
         self.blacklist.add(xy)
 
     def stop_exploring(self, new_state: str):
@@ -588,10 +570,7 @@ class ExplorerManagerNode(Node):
 
     def publish_markers(self):
         # Optional opaque hook: publish the algorithm's MarkerArray verbatim.
-        render = getattr(self.algorithm, "render_markers", None)
-        if render is None:
-            return
-        markers = render(self.render_context())
+        markers = self.call_hook("render_markers", self.render_context())
         if markers is not None:
             self.marker_pub.publish(markers)
 
@@ -610,9 +589,8 @@ class ExplorerManagerNode(Node):
             has_goal = self.current_goal_xy is not None and robot_xy is not None
             if has_goal:
                 gx, gy = self.current_goal_xy
-                dist = math.sqrt((gx - robot_xy[0]) ** 2 + (gy - robot_xy[1]) ** 2)
                 data["goal_xy"] = [round(gx, 2), round(gy, 2)]
-                data["dist_m"] = round(dist, 2)
+                data["dist_m"] = round(dist(self.current_goal_xy, robot_xy), 2)
                 data["elapsed_s"] = (
                     round(time.monotonic() - self.goal_start_time, 1)
                     if self.goal_start_time else None
@@ -630,10 +608,13 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        node.telemetry.write(
-            "session_end", reason="shutdown", goals_sent=node.goal_count,
-            reached=node.goals_reached, failed=node.goals_failed,
-        )
+        # stop_exploring owns session_end for normally-ended sessions; only an
+        # interrupted active session needs the shutdown record here.
+        if node.state == "exploring":
+            node.telemetry.write(
+                "session_end", reason="shutdown", goals_sent=node.goal_count,
+                reached=node.goals_reached, failed=node.goals_failed,
+            )
         node.telemetry.close()
         node.destroy_node()
         if rclpy.ok():
