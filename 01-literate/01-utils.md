@@ -126,7 +126,7 @@ flowchart LR
     A[launch file] -->|world_name| B[require_world_name]
     B --> C[world_spawn_xy]
     A -->|rsp params dict| D[write_config]
-    D -->|sha1 name| E[(DOME_HOME/launch_cache/*.yaml)]
+    D -->|sha1 name| E[("DOME_HOME/launch_cache/*.yaml")]
     C -->|spawn x,y| F[gazebo.spawn_model]
 ```
 

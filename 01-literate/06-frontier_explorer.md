@@ -110,10 +110,10 @@ for seed in is_frontier:
 
 ```mermaid
 flowchart TD
-    A[grid cells] --> B[free cells touching unknown]
-    B --> C[their known free neighbors = frontier cells]
-    C --> D[8-connectivity flood fill]
-    D --> E[clusters of frontier cell indices]
+    A["grid cells"] --> B["free cells touching unknown"]
+    B --> C["their known free neighbors = frontier cells"]
+    C --> D["8-connectivity flood fill"]
+    D --> E["clusters of frontier cell indices"]
 ```
 
 ## Picking the goal: nearest cell, not centroid

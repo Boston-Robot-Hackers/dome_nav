@@ -45,13 +45,13 @@ The file assembles the stack in a specific order, each piece feeding the next:
 
 ```mermaid
 flowchart TD
-    GZ[gazebo_launch + spawn_model] --> BR[ros_gz_bridge: scan/odom/tf/cmd_vel/joint_state]
-    BR --> RSP[robot_state_publisher]
-    RSP --> LTF[gz_laser_frame_bridge static TF]
-    LTF --> SLAM[slam_toolbox online_async]
-    SLAM --> NAV[Nav2 navigation_launch]
-    NAV --> SM[slam_manager_node]
-    SM --> EXP[pluggable_explore_manager_node]
+    GZ["gazebo_launch + spawn_model"] --> BR["ros_gz_bridge: scan/odom/tf/cmd_vel/joint_state"]
+    BR --> RSP["robot_state_publisher"]
+    RSP --> LTF["gz_laser_frame_bridge static TF"]
+    LTF --> SLAM["slam_toolbox online_async"]
+    SLAM --> NAV["Nav2 navigation_launch"]
+    NAV --> SM["slam_manager_node"]
+    SM --> EXP["pluggable_explore_manager_node"]
 ```
 
 1. **Gazebo + spawn** — the world runs (`-r`) and the robot spawns at the world's

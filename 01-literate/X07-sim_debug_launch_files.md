@@ -18,11 +18,11 @@ incrementally.
 
 ```mermaid
 flowchart LR
-    R[sim_robot] --> S[sim_slam]
-    S -->|wait for map->odom| N[sim_nav2]
-    N --> E[sim_explore_node]
-    R -.-> V[sim_rviz]
-    R & S & N & E ==> F[sim_nav_full = all of the above, composed]
+    R["sim_robot"] --> S["sim_slam"]
+    S -->|"wait for map to odom"| N["sim_nav2"]
+    N --> E["sim_explore_node"]
+    R -.-> V["sim_rviz"]
+    R & S & N & E ==> F["sim_nav_full = all of the above, composed"]
 ```
 
 - **`sim_robot.launch.py`** — the visible, TF-correct robot with no autonomy:

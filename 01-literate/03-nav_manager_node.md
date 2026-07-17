@@ -92,9 +92,9 @@ sequenceDiagram
     participant Nav2
     N->>Nav2: send_goal_async
     Nav2-->>N: on_goal_accepted
-    Note over N: rejected → "goal_rejected:label"
+    Note over N: rejected produces goal_rejected:label
     Nav2-->>N: on_goal_result
-    Note over N: SUCCEEDED → "done:label" else "failed:label"
+    Note over N: SUCCEEDED produces done:label else failed:label
 ```
 
 `navigation_cancel` cancels the stored handle and reports `"cancelled"`.

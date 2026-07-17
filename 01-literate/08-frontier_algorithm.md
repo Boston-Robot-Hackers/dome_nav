@@ -81,12 +81,12 @@ Three things worth noticing:
 
 ```mermaid
 flowchart LR
-    CTX[ExplorationContext] --> FC[find_frontier_clusters]
-    FC --> PBF[pick_best_frontier]
-    PBF -->|None| DIAG[frontier_diag → latest_diag]
-    PBF -->|cell| NUDGE[nudge_toward_robot]
-    NUDGE --> GOAL[goal xy]
-    FC --> LC[latest_clusters]
+    CTX["ExplorationContext"] --> FC["find_frontier_clusters"]
+    FC --> PBF["pick_best_frontier"]
+    PBF -->|None| DIAG["frontier_diag sets latest_diag"]
+    PBF -->|cell| NUDGE["nudge_toward_robot"]
+    NUDGE --> GOAL["goal xy"]
+    FC --> LC["latest_clusters"]
 ```
 
 ## Observations / possible improvements

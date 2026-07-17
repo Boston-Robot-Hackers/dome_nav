@@ -96,11 +96,11 @@ needs.
 
 ```mermaid
 flowchart LR
-    N[PluggableExploreManagerNode] -- builds --> C[ExplorationContext]
-    C -- next_goal --> A[ExplorationAlgorithm]
-    A -- goal xy / None --> N
-    A -. latest_clusters .-> M[markers]
-    A -. latest_diag .-> T[telemetry]
+    N["PluggableExploreManagerNode"] -->|builds| C["ExplorationContext"]
+    C -->|next_goal| A["ExplorationAlgorithm"]
+    A -->|"goal xy / None"| N
+    A -.->|latest_clusters| M["markers"]
+    A -.->|latest_diag| T["telemetry"]
 ```
 
 ## Observations / possible improvements

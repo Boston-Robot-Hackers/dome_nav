@@ -33,10 +33,10 @@ status publisher, the service client, and the periodic timer — each created in
 ```mermaid
 stateDiagram-v2
     [*] --> unconfigured
-    unconfigured --> inactive: on_configure (subs, pub, client)
-    inactive --> active: on_activate (start save timer)
-    active --> inactive: on_deactivate (stop timer)
-    active --> finalized: on_shutdown (SYNC final save)
+    unconfigured --> inactive: on_configure - subs, pub, client
+    inactive --> active: on_activate - start save timer
+    active --> inactive: on_deactivate - stop timer
+    active --> finalized: on_shutdown - SYNC final save
     inactive --> finalized: on_cleanup
 ```
 

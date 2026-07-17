@@ -92,10 +92,10 @@ teleports the robot to the goal, and continues — declaring "complete" after
 
 ```mermaid
 flowchart TD
-    S[cluster + pick] --> G{goal?}
-    G -- none --> P[no-frontier count++ / patience]
-    G -- blocked LoS --> BL[blacklist goal]
-    G -- clear --> M[reveal along path, move robot, blacklist visited]
+    S["cluster + pick"] --> G{"goal?"}
+    G -->|none| P["no-frontier count++ / patience"]
+    G -->|blocked LoS| BL["blacklist goal"]
+    G -->|clear| M["reveal along path, move robot, blacklist visited"]
     P --> S
     BL --> S
     M --> S
