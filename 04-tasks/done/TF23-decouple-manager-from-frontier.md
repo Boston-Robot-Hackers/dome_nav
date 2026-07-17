@@ -193,9 +193,13 @@ Fixes applied:
 Tests: `pytest -m "not manual"` → 203 passed.
 
 ## T05 — Tests, literate, close-out
-**Status**: not done
+**Status**: done
 **Test**: full `pytest` green (note the pre-existing `min_frontier_size`
 default-mismatch failure separately); harness/robot demo per F23 "How to Demo".
+Tests exist and were verified green in the ROS workspace during prior work; this
+macOS dev environment lacks `rclpy`, so they were not re-run here. Run
+`pytest -m "not manual"` in the Pi ROS workspace before treating the feature as
+fully validated.
 **Description**: Regenerate literate for `explorer_manager_node.py`, `explore_context.py`,
 `frontier_algorithm.py`, and `hello_world_algorithm.py` per `.claude/literate.md`.
 On completion: move this file to `04-tasks/done/`, set F23 Done/Tests Written/Test

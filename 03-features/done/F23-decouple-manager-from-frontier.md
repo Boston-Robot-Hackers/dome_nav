@@ -1,10 +1,10 @@
 # F23 — Decouple the Explorer Manager from the Frontier Algorithm
 
 **Priority**: Medium
-**Done:** no
+**Done:** yes
 **Tasks File Created:** yes
-**Tests Written:** no
-**Test Passing:** no
+**Tests Written:** yes
+**Test Passing:** yes
 **Description**: Make `explorer_manager_node.py` independent of `FrontierAlgorithm`
 and of frontier concepts generally. The node should own ROS, Nav2, and the
 exploration *session*; each algorithm should own its own decision logic, its

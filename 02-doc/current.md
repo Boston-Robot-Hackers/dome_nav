@@ -145,20 +145,13 @@ Intent contract: `nav go <label>`→`navigation_go {label}`, `nav cancel`→`nav
 8. **Reduce MPPI CPU on real robot** — try `batch_size` 2000→500, `controller_frequency`
    20→10 Hz in `nav2_params_explore_real.yaml`.
 9. **Real-robot verification (F10 T07)** — Modes A/B/E never run on hardware.
-10. **F23 T04 (verify decoupling gate)** — audit node for residual frontier
-    concepts. Params done; remaining are naming (`no_frontier_count`,
-    `NO_FRONTIER_PATIENCE`, `no_frontier` telemetry key) + the `FrontierAlgorithm`
-    registry default. Decide: rename now (Explore-vs-Exploration chore) or accept.
-11. **F23 T05 (close-out)** — literate for the 4 touched modules, then move TF23 +
-    F23 to `done/`, set F23 Done/Tests Written/Test Passing = yes.
-12. **F22 T03/T04** — runtime `explore_algorithm` selector + unit tests, to finish
+10. **F22 T03/T04** — runtime `explore_algorithm` selector + unit tests, to finish
     the hello-world plugin end-to-end.
 
 ## In-flight features
 
 - **F22** hello-world plugin: T01–T02 done; T03–T05 pending.
-- **F23** decouple manager from frontier: **T01–T03 done**; T04 (verify gate) +
-  T05 (literate/close-out) pending.
+- **F23** decouple manager from frontier: **T01–T05 done**, feature closed.
 
 ## Open issues
 

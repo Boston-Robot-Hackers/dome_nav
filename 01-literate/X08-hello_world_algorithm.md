@@ -1,61 +1,80 @@
 ---
 version: "1.0"
-generated: "2026-07-16"
+generated: "2026-07-17"
 ---
 
-# Appendix: The Hello-World Algorithm
+# Hello World Algorithm
 
-`hello_world_algorithm.py` is the smallest thing that satisfies the
-`ExplorationAlgorithm` protocol and still drives the robot. It exists as a
-reference template for authoring new exploration plugins, and as a live proof that
-the F12 pluggable seam swaps behavior on a real robot — not only in tests. It is
-deliberately trivial, hence an appendix.
+`hello_world_algorithm.py` is the smallest plugin that still exercises the
+`ExplorationAlgorithm` protocol end to end. It ignores the map and drives the
+robot one fixed step forward in the map +x direction.
 
-## What the protocol asks for
+## Purpose
 
-An algorithm must expose two attributes the manager node reads and implement one
-method:
+A reference plugin serves two roles:
+
+1. **Template.** New algorithm authors can copy it and replace the decision
+   logic without first understanding frontier clustering.
+2. **Seam test.** If the manager can run this trivial plugin, the plugin boundary
+   is real. If the manager only works with `FrontierAlgorithm`, the boundary is
+   leaky.
+
+## State
+
+The algorithm has a single boolean of internal state:
 
 ```python
-def next_goal(self, ctx: ExplorationContext) -> tuple[float, float] | None:
-    ...
+def __init__(self):
+    self.emitted = False
 ```
 
-Return a world-frame `(x, y)` goal, or `None` to mean "nothing to send." The node
-calls `next_goal` whenever it has no active goal, pursues each returned goal to
-completion, and — after enough consecutive `None`s (`NO_FRONTIER_PATIENCE`) —
-declares exploration finished.
+`emitted` tracks whether the one goal has already been handed out.
 
-## The whole algorithm
-
-Hello-world ignores the map entirely. It emits exactly one goal a fixed step ahead
-of the robot in the map **+x** direction, then returns `None` forever after:
+## Decision logic
 
 ```python
-def next_goal(self, ctx):
+def next_goal(self, ctx: ExplorationContext) -> GoalDecision:
     if self.emitted:
-        return None
+        return GoalDecision.done()
     self.emitted = True
     rx, ry = ctx.robot_xy
-    step = ctx.params.preferred_goal_distance
-    return (rx + step, ry)
+    return GoalDecision.new_goal((rx + ctx.params.preferred_goal_distance, ry))
 ```
 
-The `emitted` flag is the entire state. `preferred_goal_distance` is the one tuning
-param it borrows from the shared `ExploreParams`; every other param is frontier
-tuning it never touches. Heading is ignored — the node stamps orientation `w = 1.0`.
+- First call: return a goal `preferred_goal_distance` meters ahead in map +x.
+- Subsequent calls: return `EXPLORED_DONE`, which ends the session immediately.
 
-## The one wart, on purpose
+The algorithm uses `preferred_goal_distance` as a step size, not as a preference
+toward a particular frontier distance. That is acceptable for a wiring demo, but
+a more descriptive parameter name would be clearer for this specific plugin.
 
-The class also sets `latest_clusters = []` and `latest_diag = None`. These are
-frontier-specific fields the general protocol still requires (the node reads them
-for markers, telemetry, and its done-decision). Hello-world has no clusters, so it
-*fakes* them. That fakery is not incidental — it is the concrete evidence behind
-feature **F23**, which decouples the manager from frontier concepts so a minimal
-plugin no longer has to pretend. Until F23 lands, the fake stays.
+## No optional hooks
 
-```mermaid
-flowchart LR
-    A[first next_goal] --> B["NEW goal: robot_x + step, robot_y"]
-    A2[later next_goal] --> C["None -> node counts toward done"]
+`HelloWorldAlgorithm` implements only the required `next_goal` and the optional
+`declare_params` no-op. It has no markers, diagnostics, or extra telemetry. The
+node's `getattr`-based hook calls silently skip it.
+
+```python
+def declare_params(self, node):
+    pass  # no tuning of its own
 ```
+
+## How it differs from FrontierAlgorithm
+
+| Aspect | FrontierAlgorithm | HelloWorldAlgorithm |
+|--------|-------------------|---------------------|
+| Map use | Reads every cell | Ignores |
+| Done condition | No frontier cells | One goal emitted |
+| Hooks | All implemented | None |
+| State | Clusters, diag, params | Single boolean |
+
+## Observations for improvement
+
+- The parameter name `preferred_goal_distance` is semantically odd here. For a
+  step-goal plugin, `step_distance` would be clearer.
+- There is currently no runtime selector in the manager, so this plugin is only
+  reachable through constructor injection in tests. Adding an
+  `explore_algorithm` ROS param would let users run it from launch.
+- A second hello-world variant that publishes its own marker (for example, a
+  single arrow showing the chosen direction) would be a good illustration of the
+  optional `render_markers` hook.

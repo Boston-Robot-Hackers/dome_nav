@@ -1,104 +1,164 @@
 ---
-version: "1.4"
-generated: "2026-07-09"
+version: "1.0"
+generated: "2026-07-17"
 ---
 
-# frontier_algorithm.py — The Default Exploration Strategy
+# The Frontier Algorithm
 
-`FrontierAlgorithm` is the concrete strategy that satisfies the
-`ExplorationAlgorithm` protocol. It contains almost no logic of its own: its job
-is to compose the pure functions in `frontier_explorer.py` into a single
-`next_goal(ctx)` call and to remember two things the node wants back afterward.
-It is the adapter that lets the ROS node stay ignorant of *how* frontiers are
-chosen.
+`frontier_algorithm.py` is the default exploration strategy for `dome_nav`. It
+wraps the pure, ROS-free functions in `frontier_explorer.py` behind the
+`ExplorationAlgorithm` protocol, and it owns all frontier-specific tuning and
+state.
 
-## Why this class exists at all
+## What frontier exploration means here
 
-The pure functions (`find_frontier_clusters`, `pick_best_frontier`,
-`nudge_toward_robot`, `frontier_diag`) are stateless. But the node needs a stable
-object it can hold, call every tick, and interrogate for markers and telemetry.
-`FrontierAlgorithm` provides that object and holds the small amount of state that
-spans a single decision:
+A frontier is the boundary between known free space and unknown space in the
+SLAM map. The robot drives to the frontier, observes what is beyond it, and the
+map grows. Repeating this process covers the environment.
+
+The algorithm is deliberately simple:
+
+1. Find clusters of frontier cells.
+2. Filter out clusters that are too small, too close, too far, or blacklisted.
+3. Pick the best remaining cell, nudge it slightly toward the robot, and return
+   it as the next goal.
+
+## Separation of concerns
+
+The module keeps three things distinct:
+
+- **Frontier detection math** lives in `frontier_explorer.py` and has no ROS or
+  algorithm state.
+- **Frontier tuning** lives in `frontier_params.py` and is declared/read as ROS
+  parameters.
+- **Protocol adaptation** lives here: state, `next_goal`, and optional hooks.
+
+This separation makes the math testable in isolation and keeps the algorithm
+module focused on wiring.
+
+## State owned by the algorithm
 
 ```python
 class FrontierAlgorithm:
-    def __init__(self):
+    def __init__(self, frontier_params: FrontierParams | None = None):
         self.latest_clusters: list[list[int]] = []
         self.latest_diag: dict | None = None
+        self.frontier_params = frontier_params or FrontierParams()
 ```
 
-`latest_clusters` feeds the RViz frontier markers; `latest_diag` feeds the
-"no frontier, and here's why" telemetry. Both are the protocol's side channel.
+- `latest_clusters` stores the most recent frontier cell clusters. It is used
+  only by the optional visualization and diagnostics hooks, not by the protocol's
+  `next_goal` method.
+- `latest_diag` holds filter-stage counts when no frontier is chosen. It is
+  merged into `no_frontier` telemetry via the `telemetry_extra` hook.
+- `frontier_params` is the algorithm's private tuning object.
 
-## The one method: `next_goal`
+These fields are no longer part of the `ExplorationAlgorithm` protocol. The node
+never reads them directly.
 
-The method is a clean pipeline — cluster, pick, and either explain-the-failure or
-nudge-the-success:
+## Parameter declaration
+
+The algorithm declares its own ROS parameters so the node does not need to know
+frontier parameter names:
 
 ```python
-def next_goal(self, ctx):
+def declare_params(self, node):
+    self.frontier_params = declare_frontier_params(node)
+```
+
+`declare_frontier_params` lives in `frontier_params.py` and registers each tuning
+value in the node's namespace. Launch files and yaml configs can override them
+with the same names as before, but the manager node has no hardcoded knowledge
+of those names.
+
+## The decision loop
+
+```python
+def next_goal(self, ctx: ExplorationContext) -> GoalDecision:
+    tuning = merge_tuning(ctx.params, self.frontier_params)
     clusters = find_frontier_clusters(
-        ctx.map_data, ctx.map_info, ctx.params.frontier_buffer_cells
+        ctx.map_data, ctx.map_info, tuning.frontier_buffer_cells
     )
     self.latest_clusters = clusters
     target = pick_best_frontier(
-        clusters, ctx.map_info, ctx.robot_xy,
-        min_size=ctx.params.min_frontier_size,
-        blacklist=ctx.blacklist,
-        blacklist_radius=ctx.params.blacklist_radius,
-        max_radius=ctx.params.max_explore_radius,
-        start_xy=ctx.start_xy,
-        min_dist=ctx.params.min_frontier_dist,
-        max_dist=ctx.params.max_frontier_dist,
-        prefer_farthest=ctx.params.prefer_farthest,
+        clusters, ctx.map_info, ctx.robot_xy, tuning,
+        blacklist=ctx.blacklist, start_xy=ctx.start_xy,
     )
     if target is None:
-        self.latest_diag = frontier_diag(
-            clusters, ctx.map_info, ctx.robot_xy,
-            ctx.params.min_frontier_size,
-            ctx.params.min_frontier_dist,
-            ctx.params.max_frontier_dist,
-        )
-        return None
+        self.latest_diag = frontier_diag(...)
+        if not clusters:
+            return GoalDecision.done()
+        return GoalDecision.blocked()
     self.latest_diag = None
-    return nudge_toward_robot(target, ctx.robot_xy, ctx.params.goal_inset_m)
+    goal = nudge_toward_robot(target, ctx.robot_xy, tuning.goal_inset_m)
+    return GoalDecision.new_goal(goal)
 ```
 
-Three things worth noticing:
+The logic encodes the three outcomes the manager understands:
 
-1. **Every knob comes from `ctx.params`.** The algorithm has no hardcoded tuning
-   — it is fully driven by the `ExploreParams` the node built from ROS
-   parameters. That's what lets sim and real behave differently through the same
-   code. Even the frontier-detection depth (`frontier_buffer_cells`) is passed
-   straight through to `find_frontier_clusters`.
-2. **The diagnostic pass only runs on failure.** `frontier_diag` is computed only
-   when `target is None`, so the normal (goal-found) path pays nothing for the
-   introspection. On success `latest_diag` is reset to `None` so stale
-   diagnostics never leak into telemetry.
-3. **The returned point is nudged.** `pick_best_frontier` returns the raw
-   frontier cell; `nudge_toward_robot` pulls it `goal_inset_m` back toward the
-   robot before it becomes the goal — keeping it inside navigable space.
+- `NEW_GOAL`: a candidate survived all filters.
+- `NO_TARGETS_BLOCKED`: clusters exist but none are usable this tick.
+- `EXPLORED_DONE`: there are no frontier cells at all, so exploration is
+  complete.
+
+`nudge_toward_robot` pulls the goal slightly inward from the unknown edge. This
+is frontier-specific goal shaping, so it belongs in the algorithm rather than
+in the node.
+
+## Optional hooks
+
+The algorithm implements all the optional hooks so the node can render markers,
+log exhaustion reports, and append diagnostics on failure:
+
+```python
+def render_markers(self, rc: RenderContext) -> MarkerArray:
+    return build_explore_markers(...)
+
+def exhaustion_report(self, rc: RenderContext) -> str:
+    tuning = merge_tuning(rc.params, self.frontier_params)
+    return format_frontier_exhaustion(...)
+
+def failure_report(self, rc: RenderContext) -> str:
+    return format_cluster_summary(self.latest_clusters, rc.map_info)
+
+def telemetry_extra(self) -> dict:
+    diag = self.latest_diag or {}
+    return {"raw_clusters": len(self.latest_clusters), **diag}
+
+def session_params(self) -> dict:
+    fp = self.frontier_params
+    return {
+        "min_frontier_dist": fp.min_frontier_dist,
+        "max_frontier_dist": fp.max_frontier_dist,
+        "goal_inset": fp.goal_inset_m,
+        "min_frontier_size": fp.min_frontier_size,
+    }
+```
+
+The node treats each return value as opaque. It does not know what a cluster is;
+it only knows that the algorithm handed back a `MarkerArray`, a string, or a
+ dictionary.
+
+## Data flow
 
 ```mermaid
-flowchart LR
-    CTX["ExplorationContext"] --> FC["find_frontier_clusters"]
-    FC --> PBF["pick_best_frontier"]
-    PBF -->|None| DIAG["frontier_diag sets latest_diag"]
-    PBF -->|cell| NUDGE["nudge_toward_robot"]
-    NUDGE --> GOAL["goal xy"]
-    FC --> LC["latest_clusters"]
+flowchart TD
+    A[ExplorationContext] --> B[merge_tuning]
+    B --> C[find_frontier_clusters]
+    C --> D{target found?}
+    D -->|yes| E[nudge_toward_robot]
+    E --> F[GoalDecision.new_goal]
+    D -->|no clusters| G[GoalDecision.done]
+    D -->|filtered out| H[GoalDecision.blocked]
 ```
 
-## Observations / possible improvements
+## Observations for improvement
 
-- **This is the seam where alternative strategies plug in.** A
-  `CostmapFrontierAlgorithm` (reading `/global_costmap/costmap` instead of the raw
-  `/map`) or a directional/heading-biased strategy would live as a sibling class
-  implementing the same protocol, injected at node construction — no change here.
-- **`pick_best_frontier`'s long call is repeated almost verbatim in the diag
-  call.** Both unpack the same handful of `ctx.params` fields; if the parameter
-  set grows, passing `ctx.params` straight through (and letting the pure
-  functions read it) would cut the repetition.
-- **`latest_diag`/`latest_clusters` are the only mutable state.** They make the
-  object non-reentrant (one decision at a time), which is fine for a single 2 Hz
-  node but worth remembering if it were ever shared.
+- `render_markers` uses `self.frontier_params.min_frontier_size` directly instead
+  of the merged `tuning`. That is usually fine, but it means a shared override of
+  `min_frontier_size` would affect goal selection without affecting marker
+  filtering. Using the merged value would be more consistent.
+- `session_params` omits `frontier_buffer_cells` and `prefer_farthest`. Adding them
+  would make telemetry more complete.
+- `prefer_farthest` is deprecated but currently remapped silently. A visible
+  deprecation warning would help users migrate to `preferred_goal_distance`.
