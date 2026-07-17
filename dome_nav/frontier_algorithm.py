@@ -29,13 +29,10 @@ from dome_nav.frontier_explorer import (
 
 
 class FrontierAlgorithm:
-    # Default exploration algorithm. Wraps the pure functions in
-    # frontier_explorer.py behind the ExplorationAlgorithm protocol. Owns its own
-    # frontier tuning (FrontierParams) — the node declares/carries no frontier
-    # params — and its own frontier state (latest_clusters/latest_diag) for the
-    # optional visualization/diagnostics hooks. Neither is protocol surface the
-    # node depends on. next_goal and the hooks merge the shared context params with
-    # the frontier tuning to feed the pure functions.
+    # Default algorithm: wraps frontier_explorer's pure functions behind the
+    # ExplorationAlgorithm protocol. Owns its own FrontierParams and its
+    # latest_clusters/latest_diag state (for the viz/diag hooks); neither is
+    # protocol surface. next_goal merges shared ctx.params with the frontier tuning.
 
     def __init__(self, frontier_params: FrontierParams | None = None):
         self.latest_clusters: list[list[int]] = []
@@ -43,9 +40,6 @@ class FrontierAlgorithm:
         self.frontier_params = frontier_params or FrontierParams()
 
     def declare_params(self, node):
-        # Node calls this once at construction. The frontier algorithm declares its
-        # own ROS params in the node's namespace (see declare_frontier_params) so
-        # they stay yaml/launch settable without leaking frontier names into the node.
         self.frontier_params = declare_frontier_params(node)
 
     def next_goal(self, ctx: ExplorationContext) -> GoalDecision:
@@ -67,9 +61,7 @@ class FrontierAlgorithm:
                 tuning.min_frontier_dist,
                 tuning.max_frontier_dist,
             )
-            # No raw clusters at all -> the map is fully explored; the frontier
-            # algorithm owns this done-condition. Clusters present but none survive
-            # filtering/blacklisting -> blocked this tick, not finished.
+            # No clusters -> done; clusters but all filtered -> blocked, not done.
             if not clusters:
                 return GoalDecision.done()
             return GoalDecision.blocked()
@@ -78,9 +70,6 @@ class FrontierAlgorithm:
         return GoalDecision.new_goal(goal)
 
     def render_markers(self, rc: RenderContext) -> MarkerArray:
-        # Frontier visualization: the yellow frontier points plus the general
-        # blacklist and goal markers. The node publishes whatever we return here.
-        # min_frontier_size is frontier-owned tuning, not a shared context param.
         return build_explore_markers(
             now=rc.now,
             is_exploring=rc.is_exploring,
@@ -102,13 +91,11 @@ class FrontierAlgorithm:
         return format_cluster_summary(self.latest_clusters, rc.map_info)
 
     def telemetry_extra(self) -> dict:
-        # Extra no_frontier telemetry fields the node merges in blindly.
         diag = self.latest_diag or {}
         return {"raw_clusters": len(self.latest_clusters), **diag}
 
     def session_params(self) -> dict:
-        # Frontier tuning logged at session start. The node merges this in blindly,
-        # so its own frontier param names never surface in the manager.
+        # Frontier tuning logged at session start, merged blindly by the node.
         fp = self.frontier_params
         return {
             "min_frontier_dist": fp.min_frontier_dist,

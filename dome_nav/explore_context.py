@@ -12,9 +12,7 @@ from builtin_interfaces.msg import Time
 
 @dataclass
 class MapInfo:
-    # Occupancy-grid geometry. Strategy-neutral — lives here in the shared contract
-    # module so the manager node and any algorithm can use it without depending on
-    # a specific strategy's module.
+    # Occupancy-grid geometry. Lives in the shared contract module, not a strategy's.
     width: int
     height: int
     resolution: float
@@ -23,12 +21,10 @@ class MapInfo:
 
 
 class GoalOutcome(Enum):
-    # What an algorithm decided this tick. NEW_GOAL carries an (x, y); the other
-    # two carry no goal and name *why* there is none, so the node no longer has to
-    # peek at algorithm internals to tell "blocked right now" from "finished".
+    # Names why next_goal returned no goal, so the node needn't peek at internals.
     NEW_GOAL = auto()
     NO_TARGETS_BLOCKED = auto()  # targets exist but all filtered/blacklisted
-    EXPLORED_DONE = auto()       # algorithm is finished — end the session
+    EXPLORED_DONE = auto()       # algorithm finished — end the session
 
 
 @dataclass(frozen=True)
@@ -51,11 +47,9 @@ class GoalDecision:
 
 @dataclass
 class ExploreParams:
-    # Shared/session tuning owned by the manager node — the small set meaningful to
-    # any exploration strategy, not just frontier. Frontier-only tuning moved to
-    # frontier_params.FrontierParams, which the frontier algorithm owns and
-    # self-declares (F23 T03). blacklist_radius stays here because the node's own
-    # blacklist/reselection policy uses it.
+    # Shared/session tuning the node owns. Strategy-specific tuning lives in the
+    # algorithm (e.g. frontier_params.FrontierParams). blacklist_radius is here
+    # because the node's own reselection policy uses it.
     max_explore_radius: float = 0.0
     blacklist_radius: float = 0.5
     preferred_goal_distance: float = 1.0
@@ -73,10 +67,8 @@ class ExplorationContext:
 
 @dataclass
 class RenderContext:
-    # Node-owned session state handed to an algorithm's optional visualization /
-    # diagnostics hooks. Everything here is general session state (no frontier
-    # concepts); the node fills it and treats whatever the hook returns — a
-    # MarkerArray, a report string, a telemetry dict — as opaque.
+    # General session state the node hands to an algorithm's optional viz/diagnostic
+    # hooks. The node treats whatever the hook returns as opaque.
     now: Time
     is_exploring: bool
     map_info: MapInfo | None
@@ -88,22 +80,16 @@ class RenderContext:
 
 
 class ExplorationAlgorithm(Protocol):
-    # Required surface: turn a context into a decision. Nothing else is mandatory.
-    #
-    # Visualization and diagnostics are OPTIONAL hooks the node calls via getattr
-    # and treats as opaque (see explorer_manager_node). An algorithm may implement
-    # any subset:
-    #   render_markers(rc: RenderContext) -> MarkerArray | None
-    #   exhaustion_report(rc: RenderContext) -> str | None
-    #   failure_report(rc: RenderContext) -> str | None
+    # next_goal is the only required method. These optional hooks are called via
+    # getattr and treated as opaque; a plugin omits any it doesn't need:
+    #   render_markers(rc) -> MarkerArray | None
+    #   exhaustion_report(rc) -> str | None
+    #   failure_report(rc) -> str | None
     #   telemetry_extra() -> dict
     #   session_params() -> dict
-    # A plugin with no markers or diagnostics simply omits them.
     def next_goal(self, ctx: ExplorationContext) -> GoalDecision: ...
 
     def declare_params(self, node) -> None:
-        # Optional hook the node calls once at construction so an algorithm can
-        # declare and read its own ROS parameters in the node's namespace (ROS
-        # params must be node-declared to be yaml/launch-settable). Algorithms
-        # with no tuning of their own leave this as a no-op.
+        # Optional: declare/read the algorithm's own ROS params in the node's
+        # namespace (must be node-declared to be yaml/launch-settable). No-op if none.
         ...

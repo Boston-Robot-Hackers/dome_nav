@@ -10,29 +10,19 @@ from dome_nav.explore_context import ExploreParams
 
 @dataclass
 class FrontierParams:
-    # Frontier-only tuning, owned and declared by FrontierAlgorithm (not the
-    # manager node). These moved out of ExploreParams in F23 T03 because they are
-    # meaningless to a non-frontier strategy. The frontier algorithm self-declares
-    # them as ROS params (see declare_frontier_params) so they stay yaml/launch
-    # settable without the node knowing their names.
+    # Frontier-only tuning, owned and self-declared by FrontierAlgorithm.
     min_frontier_size: int = 15
     min_frontier_dist: float = 1.3
     max_frontier_dist: float = 0.0
     goal_inset_m: float = 0.3
-    # Known-cell rings between a frontier goal and the unknown boundary. 2 keeps
-    # goals two confirmed-known cells inside the mapped edge (see
-    # find_frontier_clusters); 1 is the original single-buffer behaviour.
-    frontier_buffer_cells: int = 2
+    frontier_buffer_cells: int = 2  # known-cell rings inside the unknown boundary
     prefer_farthest: bool = False  # deprecated: use preferred_goal_distance
 
 
 @dataclass
 class FrontierTuning:
-    # Combined read-only view the frontier pure functions and diagnostics consume:
-    # the shared/session fields (from ExploreParams) the frontier code still needs,
-    # merged with the frontier-owned fields. Assembled per tick by FrontierAlgorithm
-    # from ctx.params + its FrontierParams, so neither dataclass has to carry the
-    # other's fields.
+    # Shared + frontier fields, merged per tick, that the frontier pure functions
+    # and diagnostics read.
     min_frontier_size: int
     blacklist_radius: float
     min_frontier_dist: float
@@ -65,10 +55,8 @@ def merge_tuning(shared: ExploreParams, frontier: FrontierParams) -> FrontierTun
 
 
 def declare_frontier_params(node) -> FrontierParams:
-    # Self-declare the frontier tuning as ROS params in the node's namespace and
-    # read them back into a FrontierParams. Chosen over a node-driven schema so no
-    # frontier param name ever appears in explorer_manager_node.py (F23 T04). The
-    # node calls this once via the algorithm's declare_params hook.
+    # Declare the frontier tuning as ROS params in the node's namespace and read
+    # them back, so no frontier param name appears in the node.
     defaults = FrontierParams()
     node.declare_parameter("min_frontier_size", defaults.min_frontier_size)
     node.declare_parameter("min_frontier_dist", defaults.min_frontier_dist)

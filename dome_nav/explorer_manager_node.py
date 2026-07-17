@@ -94,9 +94,8 @@ class ExplorerManagerNode(Node):
         self.tf_listener: tf2_ros.TransformListener | None = None
         self.create_timer(1.0 / self.EXPLORE_HZ, self.explore_tick)
 
-        # Shared/session params the node owns. Any algorithm-specific tuning is
-        # declared by the algorithm itself (algorithm.declare_params below), so no
-        # strategy-specific param name appears here (F23 T03/T04).
+        # Shared params only; algorithm-specific tuning is declared by the
+        # algorithm itself (declare_params below).
         self.declare_parameter("max_explore_radius", 0.0)
         self.declare_parameter("preferred_goal_distance", 1.0)
         self.declare_parameter("map_name", "unknown")
@@ -109,10 +108,7 @@ class ExplorerManagerNode(Node):
             preferred_goal_distance=self.get_parameter("preferred_goal_distance").value,
         )
         self.algorithm = algorithm or FrontierAlgorithm()
-        # The algorithm declares and reads its own ROS params in this node's
-        # namespace (the default algorithm's tuning; a no-op for plugins needing
-        # only the shared params above).
-        self.algorithm.declare_params(self)
+        self.algorithm.declare_params(self)  # algorithm declares its own ROS params
 
         self.latest_map: OccupancyGrid | None = None
         self.latest_map_info: MapInfo | None = None
@@ -145,8 +141,6 @@ class ExplorerManagerNode(Node):
         return costmap_cell_cost(self.latest_global_costmap, xy) is not None
 
     def render_context(self, robot_xy: XY | None = None) -> RenderContext:
-        # Node-owned session state for the algorithm's optional render/diagnostics
-        # hooks. Nothing here is algorithm-specific.
         return RenderContext(
             now=self.get_clock().now().to_msg(),
             is_exploring=self.state == "exploring",
@@ -159,29 +153,21 @@ class ExplorerManagerNode(Node):
         )
 
     def dump_exhaustion(self, robot_xy: XY):
-        # Fully opaque: the algorithm renders its own exhaustion report; the node
-        # reaches into no algorithm internals (F23 T02).
-        rc = self.render_context(robot_xy)
-        report = self.algorithm_report("exhaustion_report", rc)
+        report = self.algorithm_report("exhaustion_report", self.render_context(robot_xy))
         if report is not None:
             self.get_logger().info(report)
 
     def algorithm_report(self, hook: str, rc: RenderContext) -> str | None:
-        # Call an optional string-returning diagnostics hook, treating its return
-        # as opaque. Absent hook -> nothing to report.
+        # Optional string-returning diagnostics hook; absent -> None.
         fn = getattr(self.algorithm, hook, None)
         return fn(rc) if fn is not None else None
 
     def algorithm_telemetry(self) -> dict:
-        # Optional extra no-target telemetry fields the algorithm supplies, merged
-        # in blindly.
         fn = getattr(self.algorithm, "telemetry_extra", None)
         return fn() if fn is not None else {}
 
     def session_start_params(self) -> dict:
-        # Session telemetry. The node logs only its own shared/session params; the
-        # algorithm contributes its own tuning via an optional opaque hook, so no
-        # algorithm-specific param names live here.
+        # Node's own shared params plus the algorithm's opaque session_params.
         params: dict = {
             "timeout_s": self.GOAL_TIMEOUT_S,
             "max_radius": self.params.max_explore_radius,
@@ -372,9 +358,7 @@ class ExplorerManagerNode(Node):
             self.no_target_count = 0
             self.send_nav_goal(goal_xy)
             return
-        # No goal this tick. The algorithm names why: EXPLORED_DONE ends the
-        # session outright; anything else (NO_TARGETS_BLOCKED, or NEW_GOALs that
-        # all mapped outside the costmap) is a transient block -> debounce.
+        # No goal: EXPLORED_DONE ends the session; anything else debounces.
         if decision is not None and decision.outcome is GoalOutcome.EXPLORED_DONE:
             self.get_logger().info("Algorithm reports exploration complete.")
             self.dump_exhaustion(robot_xy)
@@ -389,8 +373,7 @@ class ExplorerManagerNode(Node):
             f"(tick {self.no_target_count}/{self.NO_TARGET_PATIENCE})."
         )
         extra = self.algorithm_telemetry()
-        # "no_frontier" event name kept as a telemetry wire contract (log
-        # consumers parse it); renaming it is a separate migration (F23 T04).
+        # "no_frontier" kept as a telemetry wire contract; rename is a migration.
         self.telemetry.write(
             "no_frontier", reason="filtered",
             tick=self.no_target_count,
@@ -399,10 +382,8 @@ class ExplorerManagerNode(Node):
             **extra,
         )
         if self.no_target_count >= self.NO_TARGET_PATIENCE:
-            # We only reach here for a *block* (targets exist but none usable) —
-            # the algorithm owns "fully explored" via EXPLORED_DONE. Clear the
-            # blacklist once (stale entries may now be reachable as the map grew)
-            # and keep going; give up only if a clear already didn't help.
+            # Blocked, not done (done comes via EXPLORED_DONE). Clear the blacklist
+            # once in case the growing map reopened stale entries; then give up.
             if not self.blacklist_cleared_once:
                 self.get_logger().info(
                     "Blocked: targets exist but all filtered — "
@@ -581,9 +562,7 @@ class ExplorerManagerNode(Node):
             return None
 
     def publish_markers(self):
-        # Visualization is an optional, opaque algorithm hook: the algorithm
-        # builds its own MarkerArray and the node publishes it verbatim. A plugin
-        # with nothing to show simply omits render_markers.
+        # Optional opaque hook: publish the algorithm's MarkerArray verbatim.
         render = getattr(self.algorithm, "render_markers", None)
         if render is None:
             return
@@ -601,8 +580,7 @@ class ExplorerManagerNode(Node):
         if status == "exploring":
             data["goal_num"] = self.goal_count
             data["blacklisted"] = len(self.blacklist)
-            # "no_frontier_ticks" kept as a /explore/status wire contract (dome_control
-            # parses it); renaming is a separate migration (F23 T04).
+            # "no_frontier_ticks" kept as a status wire contract; rename is a migration.
             data["no_frontier_ticks"] = self.no_target_count
             has_goal = self.current_goal_xy is not None and robot_xy is not None
             if has_goal:
