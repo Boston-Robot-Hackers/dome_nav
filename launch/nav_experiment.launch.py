@@ -15,7 +15,7 @@
 #       --slam_config <slam yaml> --nav2_config <nav2 yaml> \
 #       --map_name <name>
 #
-# See experiment.md for the log of what was tried.
+# Experiment configs were passed via --nav2_config; the experiments/ log was removed.
 # Author: Pito Salas and Claude Code
 # Open Source Under MIT license
 

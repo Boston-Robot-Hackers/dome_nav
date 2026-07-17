@@ -21,9 +21,11 @@ from dome_nav.frontier_params import (
     merge_tuning,
 )
 from dome_nav.frontier_explorer import (
+    best_frontier_candidates,
     find_frontier_clusters,
     nudge_toward_robot,
     pick_best_frontier,
+    pick_by_novelty,
     frontier_diag,
 )
 
@@ -37,6 +39,7 @@ class FrontierAlgorithm:
     def __init__(self, frontier_params: FrontierParams | None = None):
         self.latest_clusters: list[list[int]] = []
         self.latest_diag: dict | None = None
+        self.latest_novelty: int | None = None
         self.frontier_params = frontier_params or FrontierParams()
 
     def declare_params(self, node):
@@ -48,10 +51,7 @@ class FrontierAlgorithm:
             ctx.map_data, ctx.map_info, tuning.frontier_buffer_cells
         )
         self.latest_clusters = clusters
-        target = pick_best_frontier(
-            clusters, ctx.map_info, ctx.robot_xy, tuning,
-            blacklist=ctx.blacklist, start_xy=ctx.start_xy,
-        )
+        target = self.select_target(clusters, ctx, tuning)
         if target is None:
             self.latest_diag = frontier_diag(
                 clusters,
@@ -68,6 +68,27 @@ class FrontierAlgorithm:
         self.latest_diag = None
         goal = nudge_toward_robot(target, ctx.robot_xy, tuning.goal_inset_m)
         return GoalDecision.new_goal(goal)
+
+    def select_target(self, clusters, ctx, tuning):
+        # Default: single distance-best cell. Novelty on: short-list the top-N
+        # distance candidates, then pick the one whose straight-line path crosses
+        # the most unknown cells. latest_novelty is stashed for telemetry.
+        if not tuning.use_novelty_scoring:
+            self.latest_novelty = None
+            return pick_best_frontier(
+                clusters, ctx.map_info, ctx.robot_xy, tuning,
+                blacklist=ctx.blacklist, start_xy=ctx.start_xy,
+            )
+        candidates = best_frontier_candidates(
+            clusters, ctx.map_info, ctx.robot_xy, tuning,
+            blacklist=ctx.blacklist, start_xy=ctx.start_xy,
+            top_n=tuning.novelty_top_n,
+        )
+        target, score = pick_by_novelty(
+            candidates, ctx.robot_xy, ctx.map_data, ctx.map_info
+        )
+        self.latest_novelty = score if target is not None else None
+        return target
 
     def render_markers(self, rc: RenderContext) -> MarkerArray:
         return build_explore_markers(
@@ -92,7 +113,10 @@ class FrontierAlgorithm:
 
     def telemetry_extra(self) -> dict:
         diag = self.latest_diag or {}
-        return {"raw_clusters": len(self.latest_clusters), **diag}
+        extra = {"raw_clusters": len(self.latest_clusters), **diag}
+        if self.latest_novelty is not None:
+            extra["novelty_score"] = self.latest_novelty
+        return extra
 
     def session_params(self) -> dict:
         # Frontier tuning logged at session start, merged blindly by the node.

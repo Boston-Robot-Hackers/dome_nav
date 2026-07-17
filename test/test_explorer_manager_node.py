@@ -521,13 +521,25 @@ def test_default_algorithm_is_frontier(frontier_node):
 
 
 def test_unknown_explore_algorithm_param_falls_back_to_frontier(ros):
-    # Constructing a node with an unknown algorithm name should still yield the
-    # default FrontierAlgorithm, and should log a warning.
+    # An unknown explore_algorithm param value must fall back to the default
+    # FrontierAlgorithm and log a warning. The node reads the param during
+    # __init__, so the bogus value is injected by patching declare_parameter —
+    # a post-construction set_parameter would be too late.
+    from rclpy.node import Node
     from dome_nav.explorer_manager_node import ExplorerManagerNode
+
+    real_declare = Node.declare_parameter
+
+    def declare_with_bogus_algorithm(self, name, value=None, *args, **kwargs):
+        if name == "explore_algorithm":
+            value = "not_a_real_algorithm"
+        return real_declare(self, name, value, *args, **kwargs)
+
     with patch("tf2_ros.TransformListener"), \
          patch("rclpy.action.ActionClient"), \
          patch("dome_nav.explorer_manager_node.TelemetryWriter",
                return_value=MagicMock()), \
+         patch.object(Node, "declare_parameter", declare_with_bogus_algorithm), \
          patch.object(ExplorerManagerNode, "get_logger") as mock_get_logger:
         n = ExplorerManagerNode()
     assert isinstance(n.algorithm, FrontierAlgorithm)

@@ -34,6 +34,8 @@ def tuning(
         preferred_goal_distance=1.0,
         frontier_buffer_cells=2,
         prefer_farthest=False,
+        use_novelty_scoring=False,
+        novelty_top_n=5,
     )
 
 

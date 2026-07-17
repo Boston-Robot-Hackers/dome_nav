@@ -277,3 +277,42 @@ def test_nudge_amount_correct():
     raw_dist = math.sqrt(raw_xy[0] ** 2 + raw_xy[1] ** 2)
     result_dist = math.sqrt(result[0] ** 2 + result[1] ** 2)
     assert abs((raw_dist - result_dist) - inset) < 1e-6
+
+
+# --- F15 novelty scoring opt-in ---
+
+def unknown_row_map():
+    # 5x3 grid, all free except row 0 fully unknown. Two candidate frontier
+    # clusters: one reachable across the unknown row, one across a free row.
+    info = make_info(5, 3, resolution=1.0)
+    data = flat_map(5, 3, 0)
+    for col in range(5):
+        data[col] = -1          # row 0 unknown
+    data[1 * 5 + 4] = -1        # single unknown by (row1,col4) → frontier near free row
+    return data, info
+
+
+def test_novelty_off_matches_default_selection():
+    # With scoring off the algorithm returns exactly the distance-best goal.
+    data, info = unknown_row_map()
+    off = make_algo(make_frontier_params(use_novelty_scoring=False))
+    on_default = make_algo(make_frontier_params())
+    ctx = make_ctx(data, info, robot_xy=(0.5, 1.5))
+    assert off.next_goal(ctx).xy == on_default.next_goal(ctx).xy
+    assert off.latest_novelty is None
+
+
+def test_novelty_on_sets_telemetry_score():
+    data, info = unknown_row_map()
+    algo = make_algo(make_frontier_params(use_novelty_scoring=True, novelty_top_n=5))
+    decision = algo.next_goal(make_ctx(data, info, robot_xy=(0.5, 1.5)))
+    if decision.outcome is GoalOutcome.NEW_GOAL:
+        assert algo.latest_novelty is not None
+        assert "novelty_score" in algo.telemetry_extra()
+
+
+def test_novelty_off_omits_telemetry_score():
+    data, info = unknown_row_map()
+    algo = make_algo(make_frontier_params(use_novelty_scoring=False))
+    algo.next_goal(make_ctx(data, info, robot_xy=(0.5, 1.5)))
+    assert "novelty_score" not in algo.telemetry_extra()

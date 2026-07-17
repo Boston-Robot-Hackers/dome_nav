@@ -17,17 +17,11 @@ def default_map_path() -> str:
 
 
 class SlamManagerNode(LifecycleNode):
-    DEFAULT_SAVE_PERIOD_SEC = 120.0
-
     def __init__(self):
         super().__init__("slam_manager_node")
         self.declare_parameter("map_persist_path", default_map_path())
         self.map_persist_path = (
             self.get_parameter("map_persist_path").get_parameter_value().string_value
-        )
-        self.declare_parameter("save_period_sec", self.DEFAULT_SAVE_PERIOD_SEC)
-        self.save_period_sec = (
-            self.get_parameter("save_period_sec").get_parameter_value().double_value
         )
         self.declare_parameter("export_legacy_map", True)
         self.export_legacy_map: bool = (
@@ -38,7 +32,6 @@ class SlamManagerNode(LifecycleNode):
         self.status_pub = None
         self.serialize_client = None
         self.save_map_client = None
-        self.save_timer = None
 
     def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
         self.map_sub = self.create_subscription(OccupancyGrid, "/map", self.on_map, 10)
@@ -54,16 +47,6 @@ class SlamManagerNode(LifecycleNode):
         self.get_logger().info(f"Configured. path={self.map_persist_path}")
         return TransitionCallbackReturn.SUCCESS
 
-    def on_activate(self, state: LifecycleState) -> TransitionCallbackReturn:
-        self.save_timer = self.create_timer(self.save_period_sec, self.periodic_save)
-        return super().on_activate(state)
-
-    def on_deactivate(self, state: LifecycleState) -> TransitionCallbackReturn:
-        if self.save_timer is not None:
-            self.destroy_timer(self.save_timer)
-            self.save_timer = None
-        return super().on_deactivate(state)
-
     def on_cleanup(self, state: LifecycleState) -> TransitionCallbackReturn:
         self.destroy_entities()
         return TransitionCallbackReturn.SUCCESS
@@ -78,9 +61,6 @@ class SlamManagerNode(LifecycleNode):
         return TransitionCallbackReturn.SUCCESS
 
     def destroy_entities(self):
-        if self.save_timer is not None:
-            self.destroy_timer(self.save_timer)
-            self.save_timer = None
         if self.map_sub is not None:
             self.destroy_subscription(self.map_sub)
             self.map_sub = None
@@ -105,10 +85,6 @@ class SlamManagerNode(LifecycleNode):
         status.data = "mapping"
         self.status_pub.publish(status)
         if first_map:
-            self.save_map_async()
-
-    def periodic_save(self):
-        if self.map_ready:
             self.save_map_async()
 
     def save_map_async(self):

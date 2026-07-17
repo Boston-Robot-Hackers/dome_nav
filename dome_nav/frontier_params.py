@@ -17,6 +17,8 @@ class FrontierParams:
     goal_inset_m: float = 0.3
     frontier_buffer_cells: int = 2  # known-cell rings inside the unknown boundary
     prefer_farthest: bool = False  # deprecated: use preferred_goal_distance
+    use_novelty_scoring: bool = False  # opt-in: re-rank candidates by unknown-cell path
+    novelty_top_n: int = 5  # candidate short-list size when novelty scoring is on
 
 
 @dataclass
@@ -32,6 +34,8 @@ class FrontierTuning:
     preferred_goal_distance: float
     frontier_buffer_cells: int
     prefer_farthest: bool
+    use_novelty_scoring: bool
+    novelty_top_n: int
 
 
 def merge_tuning(shared: ExploreParams, frontier: FrontierParams) -> FrontierTuning:
@@ -51,6 +55,8 @@ def merge_tuning(shared: ExploreParams, frontier: FrontierParams) -> FrontierTun
         preferred_goal_distance=preferred,
         frontier_buffer_cells=frontier.frontier_buffer_cells,
         prefer_farthest=frontier.prefer_farthest,
+        use_novelty_scoring=frontier.use_novelty_scoring,
+        novelty_top_n=frontier.novelty_top_n,
     )
 
 
@@ -64,6 +70,8 @@ def declare_frontier_params(node) -> FrontierParams:
     node.declare_parameter("goal_inset_m", defaults.goal_inset_m)
     node.declare_parameter("frontier_buffer_cells", defaults.frontier_buffer_cells)
     node.declare_parameter("prefer_farthest", defaults.prefer_farthest)  # deprecated
+    node.declare_parameter("use_novelty_scoring", defaults.use_novelty_scoring)
+    node.declare_parameter("novelty_top_n", defaults.novelty_top_n)
     return FrontierParams(
         min_frontier_size=node.get_parameter("min_frontier_size").value,
         min_frontier_dist=node.get_parameter("min_frontier_dist").value,
@@ -71,4 +79,6 @@ def declare_frontier_params(node) -> FrontierParams:
         goal_inset_m=node.get_parameter("goal_inset_m").value,
         frontier_buffer_cells=node.get_parameter("frontier_buffer_cells").value,
         prefer_farthest=node.get_parameter("prefer_farthest").value,
+        use_novelty_scoring=node.get_parameter("use_novelty_scoring").value,
+        novelty_top_n=node.get_parameter("novelty_top_n").value,
     )

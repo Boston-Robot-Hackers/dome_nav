@@ -1,10 +1,18 @@
 # F15 — Path Novelty Scoring for Frontier Selection
 
 **Priority**: Medium
-**Done:** no
-**Tasks File Created:** no
-**Tests Written:** no
-**Test Passing:** no
+**Done:** code done; live verification (TF15 T05) pending
+**Tasks File Created:** yes (TF15)
+**Tests Written:** yes
+**Test Passing:** yes (226 passed, 4 deselected)
+
+> **Post-F23 reconciliation (2026-07-17):** filenames/param location below predate
+> F23. As built: node is `explorer_manager_node.py`; novelty params live in
+> `FrontierParams` (`frontier_params.py`), not `ExploreParams`; novelty telemetry
+> rides the opaque `telemetry_extra` hook (`novelty_score`), keeping the node
+> frontier-decoupled — the node's `goal_sent` was **not** touched. Launch args
+> deferred: the param is algorithm-declared and overridable via
+> `--use_novelty_scoring` / `--novelty_top_n`; feature is opt-in and not live-verified.
 **Description**: Score each frontier candidate by how much unknown space lies along
 the straight-line path from the robot's current position to that candidate. The score
 is the count of unknown cells (value -1 in the raw OccupancyGrid) crossed by a

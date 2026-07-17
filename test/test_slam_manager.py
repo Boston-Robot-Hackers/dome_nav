@@ -34,25 +34,14 @@ def test_configure_creates_entities(node):
     assert node.save_map_client is not None
 
 
-def test_default_save_period_is_120(node):
-    from dome_nav.slam_manager_node import SlamManagerNode
-    assert SlamManagerNode.DEFAULT_SAVE_PERIOD_SEC == 120.0
-
-
 def test_export_legacy_map_default_true(node):
     assert node.export_legacy_map is True
 
 
-def test_activate_starts_save_timer(node):
-    assert node.save_timer is None
+def test_activate_creates_no_timer(node):
+    # F24 removed the periodic-save timer; saves are event-driven only.
     node.trigger_activate()
-    assert node.save_timer is not None
-
-
-def test_deactivate_stops_save_timer(node):
-    node.trigger_activate()
-    node.trigger_deactivate()
-    assert node.save_timer is None
+    assert not hasattr(node, "save_timer")
 
 
 # --- on_map ---

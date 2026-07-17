@@ -109,12 +109,83 @@ def cell_to_world(idx: int, info: MapInfo) -> tuple[float, float]:
     return (x, y)
 
 
+def world_to_cell(xy: tuple[float, float], info: MapInfo) -> tuple[int, int]:
+    # Inverse of cell_to_world: floor recovers the cell whose centre maps back.
+    col = int((xy[0] - info.origin_x) / info.resolution)
+    row = int((xy[1] - info.origin_y) / info.resolution)
+    return (row, col)
+
+
+def bresenham_cells(r0: int, c0: int, r1: int, c1: int):
+    # Integer raster line from (r0,c0) to (r1,c1), both endpoints included.
+    dc = abs(c1 - c0)
+    dr = -abs(r1 - r0)
+    sc = 1 if c0 < c1 else -1
+    sr = 1 if r0 < r1 else -1
+    err = dc + dr
+    while True:
+        yield (r0, c0)
+        if r0 == r1 and c0 == c1:
+            return
+        e2 = 2 * err
+        if e2 >= dr:
+            err += dr
+            c0 += sc
+        if e2 <= dc:
+            err += dc
+            r0 += sr
+
+
+def path_novelty_score(
+    start_xy: tuple[float, float], end_xy: tuple[float, float],
+    data: list[int], info: MapInfo,
+) -> int:
+    # Unknown-cell count on the straight-line path start->end. More unknown cells
+    # crossed = more new territory revealed by travelling there. Out-of-bounds
+    # cells are skipped (not counted). Pure integer-cell arithmetic.
+    r0, c0 = world_to_cell(start_xy, info)
+    r1, c1 = world_to_cell(end_xy, info)
+    score = 0
+    for row, col in bresenham_cells(r0, c0, r1, c1):
+        if 0 <= row < info.height and 0 <= col < info.width:
+            if data[row * info.width + col] == -1:
+                score += 1
+    return score
+
+
 # Returns the nearest non-blacklisted frontier cell (not centroid) beyond min_dist.
 # Using the nearest cell rather than centroid avoids the ring-cluster problem: a
 # large frontier surrounding the robot has centroid ≈ robot position, but individual
 # cells are at the map boundary where the robot actually needs to go.
 # Centroid is still used for max_radius filtering (cluster-level position proxy).
 # Blacklist is checked per-cell so only visited cells are excluded, not entire clusters.
+
+def best_frontier_candidates(
+    clusters: list[list[int]],
+    info: MapInfo,
+    robot_xy: tuple[float, float],
+    params: "FrontierTuning",
+    blacklist: set[tuple[float, float]] | None = None,
+    start_xy: tuple[float, float] | None = None,
+    top_n: int = 1,
+) -> list[tuple[float, float]]:
+    # Up to top_n candidate cells, one best cell per surviving cluster, ranked by
+    # distance-to-preferred score. Cross-cluster diversity is deliberate: it gives
+    # novelty re-ranking spatially distinct options. All filters (size, blacklist,
+    # min/max dist, max_radius) come off params.
+    bl = blacklist or set()
+    scored: list[tuple[float, tuple[float, float]]] = []
+    for cluster in clusters:
+        if len(cluster) < params.min_frontier_size:
+            continue
+        if cluster_outside_radius(cluster, info, start_xy, params.max_explore_radius):
+            continue
+        goal, goal_score = best_cell_in_cluster(cluster, info, robot_xy, bl, params)
+        if goal is not None:
+            scored.append((goal_score, goal))
+    scored.sort(key=lambda item: item[0])
+    return [goal for _, goal in scored[:top_n]]
+
 
 def pick_best_frontier(
     clusters: list[list[int]],
@@ -126,23 +197,30 @@ def pick_best_frontier(
 ) -> tuple[float, float] | None:
     # Selects the frontier cell whose distance from the robot is closest to
     # params.preferred_goal_distance (0.0 → nearest-first; large → farthest-first).
-    # All filters (size, blacklist, min/max dist, max_radius) come off params.
-    rx, ry = robot_xy
-    bl = blacklist or set()
-    best: tuple[float, float] | None = None
-    best_score = float("inf")
+    candidates = best_frontier_candidates(
+        clusters, info, robot_xy, params, blacklist, start_xy, top_n=1
+    )
+    return candidates[0] if candidates else None
 
-    for cluster in clusters:
-        if len(cluster) < params.min_frontier_size:
-            continue
-        if cluster_outside_radius(cluster, info, start_xy, params.max_explore_radius):
-            continue
-        goal, goal_score = best_cell_in_cluster(cluster, info, robot_xy, bl, params)
-        if goal is not None and goal_score < best_score:
-            best_score = goal_score
-            best = goal
 
-    return best
+def pick_by_novelty(
+    candidates: list[tuple[float, float]],
+    robot_xy: tuple[float, float],
+    data: list[int],
+    info: MapInfo,
+) -> tuple[tuple[float, float] | None, int]:
+    # Re-rank pre-filtered candidates by unknown-cell count on the straight-line
+    # path from the robot; ties keep input order (already distance-ranked).
+    if not candidates:
+        return (None, 0)
+    best = candidates[0]
+    best_score = path_novelty_score(robot_xy, best, data, info)
+    for cand in candidates[1:]:
+        score = path_novelty_score(robot_xy, cand, data, info)
+        if score > best_score:
+            best_score = score
+            best = cand
+    return (best, best_score)
 
 
 def cluster_outside_radius(

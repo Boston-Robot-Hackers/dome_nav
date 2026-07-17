@@ -1,6 +1,6 @@
 ---
-version: "1.6"
-generated: "2026-07-09"
+version: "1.7"
+generated: "2026-07-17"
 ---
 
 # frontier_explorer.py — Frontier Detection from an Occupancy Grid
@@ -119,33 +119,84 @@ flowchart TD
 ## Picking the goal: nearest cell, not centroid
 
 `pick_best_frontier` chooses among clusters, and its most important decision is
-what point *within* a cluster to aim at. It uses the nearest qualifying **cell**,
-not the cluster centroid.
+what point *within* a cluster to aim at. It uses a qualifying **cell**, not the
+cluster centroid. As of F23 the picker is a thin wrapper over
+`best_frontier_candidates`, which returns the top-`n` cells ranked by score (one
+best cell per surviving cluster); `pick_best_frontier` just takes the first:
 
 ```python
-for cluster in clusters:
-    if len(cluster) < min_size:
-        continue
-    ...
-    for cell_idx in cluster:
-        wx, wy = cell_to_world(cell_idx, info)
-        # skip blacklisted, too-close, too-far cells...
-        is_better = d > goal_dist if prefer_farthest else d < goal_dist
-        if is_better:
-            goal_dist, goal = d, (wx, wy)
+def pick_best_frontier(clusters, info, robot_xy, params, blacklist=None, start_xy=None):
+    candidates = best_frontier_candidates(
+        clusters, info, robot_xy, params, blacklist, start_xy, top_n=1
+    )
+    return candidates[0] if candidates else None
 ```
 
-The comment explains why: a large frontier that *surrounds* the robot (a ring)
-has a centroid ≈ the robot's own position — useless as a goal — while its
-individual cells are out at the map boundary where the robot actually needs to
-go. So the centroid is used only for the `max_radius` cluster-level filter, never
-as the goal itself.
+Inside a cluster, `best_cell_in_cluster` scores each cell by
+`abs(d - preferred_goal_distance)` — the F14 change that replaced the old binary
+`prefer_farthest` flag. A `preferred_goal_distance` of 0 reproduces
+nearest-first; a large value reproduces farthest-first; intermediate values aim
+for a comfortable step size. The centroid is used only for the `max_radius`
+cluster-level filter, never as the goal — because a frontier that *surrounds* the
+robot has a centroid ≈ the robot's own position, useless as a goal, while its
+cells are out at the boundary where the robot must go.
 
 The filters stack per cell: **blacklist** (within `blacklist_radius` of a failed
-point), **`min_dist`/`max_dist`** distance band, and cluster-level `min_size` and
-`max_radius`. The `prefer_farthest` flag flips every "nearer is better"
-comparison to "farther is better" — the same code path, one operator — used in
-sim to escape locally-stuck regions.
+point) and the **`min_dist`/`max_dist`** distance band, plus cluster-level
+`min_size` and `max_radius`. Splitting selection into "collect candidates, then
+pick" is what makes the novelty re-ranking below possible without touching the
+filter logic.
+
+## Path novelty scoring (F15, opt-in)
+
+Distance scoring answers "how far?" but not "how much *new* space does getting
+there reveal?" A robot re-traversing a mapped corridor to reach a far frontier
+learns little on the way. `path_novelty_score` estimates that payload: the count
+of **unknown** cells (`-1`) a straight line from the robot to the candidate
+crosses. More unknown cells crossed = more territory revealed by the trip.
+
+It needs the inverse of `cell_to_world` and an integer line. `world_to_cell`
+floors world coordinates back to a `(row, col)`; `bresenham_cells` walks the
+integer raster line between two cells, both endpoints included:
+
+```python
+def path_novelty_score(start_xy, end_xy, data, info):
+    r0, c0 = world_to_cell(start_xy, info)
+    r1, c1 = world_to_cell(end_xy, info)
+    score = 0
+    for row, col in bresenham_cells(r0, c0, r1, c1):
+        if 0 <= row < info.height and 0 <= col < info.width:
+            if data[row * info.width + col] == -1:
+                score += 1
+    return score
+```
+
+Out-of-bounds cells are skipped rather than counted — the line may leave the grid
+near the edge. The score is over the *straight* line, not Nav2's eventual planned
+path: the planned path isn't known at selection time, and the straight-line
+approximation is cheap and directionally correct.
+
+Re-ranking is a separate step so the default path is untouched.
+`pick_by_novelty` takes the pre-filtered, distance-ranked short-list and returns
+the highest-novelty candidate, keeping input order on ties (so distance breaks
+ties):
+
+```python
+def pick_by_novelty(candidates, robot_xy, data, info):
+    if not candidates:
+        return (None, 0)
+    best = candidates[0]
+    best_score = path_novelty_score(robot_xy, best, data, info)
+    for cand in candidates[1:]:
+        score = path_novelty_score(robot_xy, cand, data, info)
+        if score > best_score:
+            best_score, best = score, cand
+    return (best, best_score)
+```
+
+Cost stays negligible because novelty runs only on the short-list (≤ `novelty_top_n`,
+default 5), never on every frontier cell. The feature is off by default
+(`use_novelty_scoring=False`); `frontier_algorithm` wires the branch.
 
 ## Placing the goal off the boundary: `nudge_toward_robot`
 

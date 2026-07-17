@@ -1,5 +1,5 @@
 ---
-version: "1.0"
+version: "1.1"
 generated: "2026-07-17"
 ---
 
@@ -43,6 +43,7 @@ class FrontierAlgorithm:
     def __init__(self, frontier_params: FrontierParams | None = None):
         self.latest_clusters: list[list[int]] = []
         self.latest_diag: dict | None = None
+        self.latest_novelty: int | None = None
         self.frontier_params = frontier_params or FrontierParams()
 ```
 
@@ -51,6 +52,8 @@ class FrontierAlgorithm:
   `next_goal` method.
 - `latest_diag` holds filter-stage counts when no frontier is chosen. It is
   merged into `no_frontier` telemetry via the `telemetry_extra` hook.
+- `latest_novelty` holds the novelty score of the last chosen goal when path
+  novelty scoring (F15) is on, else `None`. Surfaced through `telemetry_extra`.
 - `frontier_params` is the algorithm's private tuning object.
 
 These fields are no longer part of the `ExplorationAlgorithm` protocol. The node
@@ -80,10 +83,7 @@ def next_goal(self, ctx: ExplorationContext) -> GoalDecision:
         ctx.map_data, ctx.map_info, tuning.frontier_buffer_cells
     )
     self.latest_clusters = clusters
-    target = pick_best_frontier(
-        clusters, ctx.map_info, ctx.robot_xy, tuning,
-        blacklist=ctx.blacklist, start_xy=ctx.start_xy,
-    )
+    target = self.select_target(clusters, ctx, tuning)
     if target is None:
         self.latest_diag = frontier_diag(...)
         if not clusters:
@@ -105,6 +105,38 @@ The logic encodes the three outcomes the manager understands:
 is frontier-specific goal shaping, so it belongs in the algorithm rather than
 in the node.
 
+## Selecting the target: distance, or distance-then-novelty
+
+`next_goal` delegates the actual choice to `select_target`, which keeps the
+default fast path untouched and adds the F15 novelty branch behind a flag:
+
+```python
+def select_target(self, clusters, ctx, tuning):
+    if not tuning.use_novelty_scoring:
+        self.latest_novelty = None
+        return pick_best_frontier(
+            clusters, ctx.map_info, ctx.robot_xy, tuning,
+            blacklist=ctx.blacklist, start_xy=ctx.start_xy,
+        )
+    candidates = best_frontier_candidates(
+        clusters, ctx.map_info, ctx.robot_xy, tuning,
+        blacklist=ctx.blacklist, start_xy=ctx.start_xy,
+        top_n=tuning.novelty_top_n,
+    )
+    target, score = pick_by_novelty(
+        candidates, ctx.robot_xy, ctx.map_data, ctx.map_info
+    )
+    self.latest_novelty = score if target is not None else None
+    return target
+```
+
+With scoring off, this is exactly the old `pick_best_frontier` call. With it on,
+the algorithm asks for the top-`novelty_top_n` distance candidates and re-ranks
+them by how much unknown space each straight-line path crosses (see
+`frontier_explorer`). The chosen goal's score is stashed in `latest_novelty` for
+telemetry. Because the branch only re-orders an already-filtered short-list, all
+the filtering guarantees of the default path still hold.
+
 ## Optional hooks
 
 The algorithm implements all the optional hooks so the node can render markers,
@@ -123,7 +155,10 @@ def failure_report(self, rc: RenderContext) -> str:
 
 def telemetry_extra(self) -> dict:
     diag = self.latest_diag or {}
-    return {"raw_clusters": len(self.latest_clusters), **diag}
+    extra = {"raw_clusters": len(self.latest_clusters), **diag}
+    if self.latest_novelty is not None:
+        extra["novelty_score"] = self.latest_novelty
+    return extra
 
 def session_params(self) -> dict:
     fp = self.frontier_params
@@ -145,7 +180,11 @@ it only knows that the algorithm handed back a `MarkerArray`, a string, or a
 flowchart TD
     A[ExplorationContext] --> B[merge_tuning]
     B --> C[find_frontier_clusters]
-    C --> D{target found?}
+    C --> S{use_novelty_scoring?}
+    S -->|no| P[pick_best_frontier]
+    S -->|yes| N[best_frontier_candidates then pick_by_novelty]
+    P --> D{target found?}
+    N --> D
     D -->|yes| E[nudge_toward_robot]
     E --> F[GoalDecision.new_goal]
     D -->|no clusters| G[GoalDecision.done]

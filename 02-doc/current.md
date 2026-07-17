@@ -3,7 +3,30 @@
 Concise cold-start orientation. Detailed history lives in git log and the
 `04-tasks/` files — do **not** re-narrate it here.
 
-**Date:** 2026-07-16 · **Branch:** main
+**Date:** 2026-07-17 · **Branch:** main
+
+## This session (2026-07-17)
+
+- **F15 path novelty scoring — landed (code+tests), live-verify (TF15 T05) pending.**
+  Pure `path_novelty_score`/`best_frontier_candidates`/`pick_by_novelty` in
+  `frontier_explorer.py`; opt-in `use_novelty_scoring`/`novelty_top_n` in
+  `FrontierParams`; `FrontierAlgorithm.select_target` branch; novelty rides the opaque
+  `telemetry_extra` (`novelty_score`) — node untouched (F23 intact). Off by default.
+- **F24 remove periodic map save — landed.** Stripped the `save_period_sec` timer +
+  `periodic_save` from `slam_manager_node.py` (reverses F16's periodic save only; keeps
+  first-map + shutdown saves, both still modern+legacy). Dropped `save_period_sec`
+  overrides in `sim_nav_full`/`sim_explore` launches. **`kill -9` now keeps only the
+  first-map save** (no periodic fallback).
+- **F25 minimal real explore config — file added.** `config/nav2_params_explore_real_mini.yaml`
+  = upstream `nav2_params.yaml` + 3 surgical deltas: `robot_radius` 0.22→0.15 (×2),
+  `time_before_collision` 1.2→0.5 (E6/E7, **UNVERIFIED**), deadband kept [0,0,0]. Not
+  wired into any launch; opt-in via `--nav2_config`.
+- **Deleted `experiments.md` + `experiments/` (5 yamls).** Recoverable via git history
+  only. Bug 2 root cause + Pi CPU campaign (C1/C2/C4) findings now live ONLY in git
+  history — not migrated to notes.md yet.
+- Literate refreshed: `02-slam_manager_node` (v3.4), `06-frontier_explorer` (v1.7),
+  `08-frontier_algorithm` (v1.1). Full suite: **224 passed, 4 deselected**.
+
 
 ## Status
 
@@ -36,8 +59,10 @@ Recent changes (2026-07-16, this session — **F23 T01–T03 decoupling landed**
   opaque `session_params` hook). Remaining `frontier`/`cluster` hits in the node are
   naming only (`no_frontier_count`, `NO_FRONTIER_PATIENCE`) + the registry default —
   T04 audit / rename chore. `STUCK_T_S`/`GOAL_TIMEOUT_S` are navigation, node-owned.
-- Earlier this session: experiment logs consolidated → `experiments.md`; node
-  renamed `pluggable_explore_manager_node.py` → `explorer_manager_node.py`.
+- Earlier this session: node renamed
+  `pluggable_explore_manager_node.py` → `explorer_manager_node.py`.
+  (`experiments.md` + `experiments/` were later deleted — see git history for the
+  Bug 1/Bug 2/CPU investigation log.)
 - **F22 (hello-world plugin):** T01–T02 done; hello updated for the F23 protocol
   (declare_params no-op, no faked cluster state). T03–T05 pending.
 

@@ -35,6 +35,8 @@ def filters(
     preferred_goal_distance: float = 1.0,
     frontier_buffer_cells: int = 2,
     prefer_farthest: bool = False,
+    use_novelty_scoring: bool = False,
+    novelty_top_n: int = 5,
 ) -> FrontierTuning:
     return FrontierTuning(
         min_frontier_size=min_frontier_size,
@@ -46,6 +48,8 @@ def filters(
         preferred_goal_distance=preferred_goal_distance,
         frontier_buffer_cells=frontier_buffer_cells,
         prefer_farthest=prefer_farthest,
+        use_novelty_scoring=use_novelty_scoring,
+        novelty_top_n=novelty_top_n,
     )
 
 
@@ -522,3 +526,111 @@ def test_pick_returns_cell_within_max_dist():
     )
     assert result is not None
     assert abs(result[0] - 0.5) < 1e-6
+
+
+# --- path_novelty_score / best_frontier_candidates / pick_by_novelty ---
+
+from dome_nav.frontier_explorer import (  # noqa: E402
+    path_novelty_score,
+    best_frontier_candidates,
+    pick_by_novelty,
+    world_to_cell,
+)
+
+
+def test_world_to_cell_inverts_cell_to_world():
+    info = make_info(10, 10, resolution=0.5)
+    for idx in (0, 3, 27, 99):
+        row, col = world_to_cell(cell_to_world(idx, info), info)
+        assert row * info.width + col == idx
+
+
+def test_novelty_horizontal_counts_only_unknown():
+    # Row of: free, unknown, unknown, occupied, free. Path across the row.
+    info = make_info(5, 1, resolution=1.0)
+    data = [0, -1, -1, 100, 0]
+    # robot at cell 0 centre (0.5), goal at cell 4 centre (4.5).
+    assert path_novelty_score((0.5, 0.5), (4.5, 0.5), data, info) == 2
+
+
+def test_novelty_includes_both_endpoints():
+    info = make_info(3, 1, resolution=1.0)
+    data = [-1, 0, -1]  # both endpoints unknown, middle free
+    assert path_novelty_score((0.5, 0.5), (2.5, 0.5), data, info) == 2
+
+
+def test_novelty_vertical():
+    info = make_info(1, 4, resolution=1.0)
+    data = [0, -1, -1, -1]  # column, rows 1..3 unknown
+    assert path_novelty_score((0.5, 0.5), (0.5, 3.5), data, info) == 3
+
+
+def test_novelty_diagonal():
+    info = make_info(3, 3, resolution=1.0)
+    data = flat_map(3, 3, 0)
+    data[0] = -1   # (r0,c0)
+    data[4] = -1   # (r1,c1) centre
+    data[8] = -1   # (r2,c2)
+    # Diagonal from cell (0,0) centre to cell (2,2) centre crosses 0,4,8.
+    assert path_novelty_score((0.5, 0.5), (2.5, 2.5), data, info) == 3
+
+
+def test_novelty_zero_when_no_unknown():
+    info = make_info(5, 1, resolution=1.0)
+    data = flat_map(5, 1, 0)
+    assert path_novelty_score((0.5, 0.5), (4.5, 0.5), data, info) == 0
+
+
+def test_novelty_skips_out_of_bounds():
+    # Goal beyond the grid: cells past the edge are skipped, not counted/indexed.
+    info = make_info(3, 1, resolution=1.0)
+    data = [-1, -1, -1]
+    assert path_novelty_score((0.5, 0.5), (7.5, 0.5), data, info) == 3
+
+
+def test_best_frontier_candidates_ranks_by_distance_and_caps_top_n():
+    # Three single-cell clusters at increasing distance from robot at origin.
+    info = make_info(10, 1, resolution=1.0)
+    clusters = [[1], [4], [8]]  # world x 1.5, 4.5, 8.5
+    cands = best_frontier_candidates(
+        clusters, info, (0.0, 0.0), filters(preferred_goal_distance=0.0), top_n=2
+    )
+    assert len(cands) == 2
+    assert abs(cands[0][0] - 1.5) < 1e-6  # nearest first
+    assert abs(cands[1][0] - 4.5) < 1e-6
+
+
+def test_pick_best_frontier_matches_top1_candidate():
+    info = make_info(10, 1, resolution=1.0)
+    clusters = [[1], [4], [8]]
+    tuning = filters(preferred_goal_distance=0.0)
+    top1 = best_frontier_candidates(clusters, info, (0.0, 0.0), tuning, top_n=1)[0]
+    assert pick_best_frontier(clusters, info, (0.0, 0.0), tuning) == top1
+
+
+def test_pick_by_novelty_prefers_more_unknown_path():
+    info = make_info(5, 3, resolution=1.0)
+    data = flat_map(5, 3, 0)
+    # Unknown strip along row 0 only; candidate A along row 0, B along row 2.
+    for col in range(5):
+        data[col] = -1
+    cand_a = (4.5, 0.5)  # path across the unknown row
+    cand_b = (4.5, 2.5)  # path across all-free row
+    best, score = pick_by_novelty([cand_b, cand_a], (0.5, 0.5), data, info)
+    assert best == cand_a
+    assert score >= 3
+
+
+def test_pick_by_novelty_empty_returns_none():
+    info = make_info(3, 3, resolution=1.0)
+    assert pick_by_novelty([], (0.0, 0.0), flat_map(3, 3, 0), info) == (None, 0)
+
+
+def test_pick_by_novelty_ties_keep_input_order():
+    info = make_info(3, 1, resolution=1.0)
+    data = flat_map(3, 1, 0)  # no unknown → all scores 0 → tie
+    first = (0.5, 0.5)
+    second = (2.5, 0.5)
+    best, score = pick_by_novelty([first, second], (0.5, 0.5), data, info)
+    assert best == first
+    assert score == 0
