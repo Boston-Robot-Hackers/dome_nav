@@ -159,7 +159,8 @@ class ExplorerManagerNode(Node):
     def dump_frontier_exhaustion(self, robot_xy: XY):
         # Fully opaque: the algorithm renders its own exhaustion report; the node
         # reaches into no algorithm internals (F23 T02).
-        report = self.algorithm_report("exhaustion_report", self.render_context(robot_xy))
+        rc = self.render_context(robot_xy)
+        report = self.algorithm_report("exhaustion_report", rc)
         if report is not None:
             self.get_logger().info(report)
 

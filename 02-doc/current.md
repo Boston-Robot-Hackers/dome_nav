@@ -18,21 +18,28 @@ fast) serializes everything: MPPI/NavFn solves block the action-server ACK
 callbacks → intermittent `Timed out while waiting for action server to acknowledge`
 aborts. **Highest-impact fix is to give the VM more vCPUs (→4–6), not more YAML.**
 
-Recent changes (2026-07-16, this session — docs/refactor scaffolding, no nav behavior change):
-- **Experiment logs consolidated:** `experiment.md` + `experiment_navfail.md` →
-  single `experiments.md` (deadband bug, start-in-inflation deadlock, Pi CPU
-  campaign, fail-fast reselection). E7 stub added; E5/E6/E7 pending hardware runs.
-- **Node renamed:** `pluggable_explore_manager_node.py` → `explorer_manager_node.py`,
-  class `PluggableExploreManagerNode` → `ExplorerManagerNode` (ROS graph name
-  `explore_manager_node` kept stable). Entry point, launch files, test, literate 09
-  all updated.
-- **F22 (hello-world plugin):** T01 architecture critique DONE, T02
-  `HelloWorldAlgorithm` DONE (`dome_nav/hello_world_algorithm.py`, literate X08).
-  T03 (runtime `explore_algorithm` selector) / T04 (tests) / T05 (demo) pending.
-- **F23 (decouple manager from frontier):** new feature + TF23 tasks, converted
-  from the T01 critique. Removes 3 leaks — lossy `None` return + `latest_clusters`
-  side-channel, node-hardcoded frontier done-rule, frontier-heavy `ExploreParams`.
-  Issue I12 closed → F23 (retained as backing critique).
+Recent changes (2026-07-16, this session — **F23 T01–T03 decoupling landed**, no nav behavior change):
+- **F23 T01 — intent-carrying result:** `next_goal(ctx) -> GoalDecision`
+  (`NEW_GOAL(xy)/NO_TARGETS_BLOCKED/EXPLORED_DONE`, in `explore_context.py`).
+  Algorithm owns the done-condition; node dropped its `latest_clusters` done-peek.
+  `EXPLORED_DONE` ends the session immediately (hello no longer waits out patience).
+- **F23 T02 — viz/diag off the protocol:** protocol requires only `next_goal`.
+  Markers/exhaustion/failure/telemetry are OPTIONAL opaque hooks the node calls via
+  `getattr` (`render_markers`/`exhaustion_report`/`failure_report`/`telemetry_extra`/
+  `session_params`); new `RenderContext` carries node-general session state only.
+  Node reads **zero** algorithm internals; `latest_clusters`/`latest_diag` are now
+  private to `FrontierAlgorithm`.
+- **F23 T03 — split params:** new `frontier_params.FrontierParams` owns frontier
+  tuning; `ExploreParams` keeps only the shared set. Algorithm self-declares its ROS
+  params via `declare_params(node)`; the node declares **no** frontier param names.
+- **Node has no frontier params/tuning left** (session telemetry routes through the
+  opaque `session_params` hook). Remaining `frontier`/`cluster` hits in the node are
+  naming only (`no_frontier_count`, `NO_FRONTIER_PATIENCE`) + the registry default —
+  T04 audit / rename chore. `STUCK_T_S`/`GOAL_TIMEOUT_S` are navigation, node-owned.
+- Earlier this session: experiment logs consolidated → `experiments.md`; node
+  renamed `pluggable_explore_manager_node.py` → `explorer_manager_node.py`.
+- **F22 (hello-world plugin):** T01–T02 done; hello updated for the F23 protocol
+  (declare_params no-op, no faked cluster state). T03–T05 pending.
 
 Earlier changes (2026-07-10):
 - **Feature files F14–F17 added** (no code changes):
@@ -81,15 +88,20 @@ Known-but-unfixed nav tuning issues (none block basic exploration):
 - **Gotcha — orphan processes:** stale nodes/`gz sim` across runs cause TF/clock
   collisions. `ps` audit + explicit `kill -9` beats trusting `pkill -f`.
 
-## Key params (node ROS params; real default / sim override)
+## Key params (ROS params; real default / sim override)
 
-- `min_frontier_dist`: 0.5 / **0.9** m (raw frontier-cell floor; `goal_inset` 0.3 pulls the sent goal 0.3 m closer)
-- `max_frontier_dist`: 0.0 (unlimited) / **15.0** m
-- `min_frontier_size`: 10 / **5** cells
-- `preferred_goal_distance`: **1.0 m** (real) / **2.0 m** (sim) — selects frontier cell with `min |d - preferred_dist|`; `prefer_farthest` deprecated
-- `frontier_buffer_cells`: 2 (known-cell rings between a frontier goal and unknown)
-- `max_explore_radius`: 0.0 (unlimited); `goal_inset_m`: 0.3; `blacklist_radius`: 0.5 m
-- Constants: `EXPLORE_HZ` 2, `NO_FRONTIER_PATIENCE` 14 ticks (must exceed slam's 5 s `map_update_interval`), `GOAL_TIMEOUT_S` 25 s, `MAX_GOAL_ATTEMPTS` 8
+**Since F23 T03 the frontier params are owned + self-declared by `FrontierAlgorithm`**
+(`frontier_params.FrontierParams` / `declare_frontier_params`), not the node. Same
+ROS names, still yaml/launch-settable; the node declares only the shared set.
+
+- `min_frontier_dist`: 0.5 / **0.9** m (raw frontier-cell floor; `goal_inset` 0.3 pulls the sent goal 0.3 m closer) — *frontier*
+- `max_frontier_dist`: 0.0 (unlimited) / **15.0** m — *frontier*
+- `min_frontier_size`: 15 default / **5** sim / launch overrides to 10 real — *frontier*
+- `frontier_buffer_cells`: 2 (known-cell rings between a frontier goal and unknown) — *frontier*
+- `goal_inset_m`: 0.3 — *frontier*
+- `preferred_goal_distance`: **1.0 m** (real) / **2.0 m** (sim) — *shared*; selects frontier cell with `min |d - preferred_dist|`; `prefer_farthest` deprecated (frontier)
+- `max_explore_radius`: 0.0 (unlimited); `blacklist_radius`: 0.5 m — *shared*
+- Node constants (navigation/session, not frontier): `EXPLORE_HZ` 1, `NO_FRONTIER_PATIENCE` 14 ticks (must exceed slam's 5 s `map_update_interval`), `GOAL_TIMEOUT_S` 25 s, `STUCK_T_S` 7 s, `MAX_GOAL_ATTEMPTS` 8
 - Sim goal checker: `yaw_goal_tolerance` ~π (goals sent with identity orientation; exploration doesn't care about final heading)
 
 ## Launch
@@ -133,17 +145,20 @@ Intent contract: `nav go <label>`→`navigation_go {label}`, `nav cancel`→`nav
 8. **Reduce MPPI CPU on real robot** — try `batch_size` 2000→500, `controller_frequency`
    20→10 Hz in `nav2_params_explore_real.yaml`.
 9. **Real-robot verification (F10 T07)** — Modes A/B/E never run on hardware.
-10. **F23 T01 (next focused session)** — intent-carrying `next_goal` result
-    (`NEW_GOAL/NO_TARGETS_BLOCKED/EXPLORED_DONE`); the keystone that removes the
-    `latest_clusters` peek and moves the done-decision into the algorithm. Touches
-    protocol + both algorithms + node + tests together.
-11. **F22 T03/T04** — runtime `explore_algorithm` selector + unit tests, to finish
+10. **F23 T04 (verify decoupling gate)** — audit node for residual frontier
+    concepts. Params done; remaining are naming (`no_frontier_count`,
+    `NO_FRONTIER_PATIENCE`, `no_frontier` telemetry key) + the `FrontierAlgorithm`
+    registry default. Decide: rename now (Explore-vs-Exploration chore) or accept.
+11. **F23 T05 (close-out)** — literate for the 4 touched modules, then move TF23 +
+    F23 to `done/`, set F23 Done/Tests Written/Test Passing = yes.
+12. **F22 T03/T04** — runtime `explore_algorithm` selector + unit tests, to finish
     the hello-world plugin end-to-end.
 
 ## In-flight features
 
 - **F22** hello-world plugin: T01–T02 done; T03–T05 pending.
-- **F23** decouple manager from frontier: tasks TF23 defined; not started.
+- **F23** decouple manager from frontier: **T01–T03 done**; T04 (verify gate) +
+  T05 (literate/close-out) pending.
 
 ## Open issues
 
