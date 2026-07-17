@@ -36,8 +36,24 @@ from dome_nav.explore_diagnostics import (
     format_failure_diagnostics,
 )
 from dome_nav.frontier_algorithm import FrontierAlgorithm
+from dome_nav.hello_world_algorithm import HelloWorldAlgorithm
 
 XY = tuple[float, float]
+
+# Registry of selectable exploration algorithms. The node uses this to pick the
+# algorithm from the `explore_algorithm` ROS param at runtime; tests can still
+# inject any ExplorationAlgorithm via the constructor.
+DEFAULT_ALGORITHM = "frontier"
+ALGORITHM_REGISTRY: dict[str, type[ExplorationAlgorithm]] = {
+    "frontier": FrontierAlgorithm,
+    "hello": HelloWorldAlgorithm,
+}
+
+
+def resolve_algorithm(name: str) -> type[ExplorationAlgorithm]:
+    # Pure helper: map a config name to an algorithm class. Unknown names fall
+    # back to the default so a typo doesn't brick the launch.
+    return ALGORITHM_REGISTRY.get(name, ALGORITHM_REGISTRY[DEFAULT_ALGORITHM])
 
 GOAL_STATUS_NAMES = {4: "succeeded", 5: "canceled", 6: "aborted"}
 
@@ -96,6 +112,7 @@ class ExplorerManagerNode(Node):
 
         # Shared params only; algorithm-specific tuning is declared by the
         # algorithm itself (declare_params below).
+        self.declare_parameter("explore_algorithm", DEFAULT_ALGORITHM)
         self.declare_parameter("max_explore_radius", 0.0)
         self.declare_parameter("preferred_goal_distance", 1.0)
         self.declare_parameter("map_name", "unknown")
@@ -107,7 +124,15 @@ class ExplorerManagerNode(Node):
             max_explore_radius=self.get_parameter("max_explore_radius").value,
             preferred_goal_distance=self.get_parameter("preferred_goal_distance").value,
         )
-        self.algorithm = algorithm or FrontierAlgorithm()
+        if algorithm is not None:
+            self.algorithm = algorithm
+        else:
+            chosen = self.get_parameter("explore_algorithm").value
+            if chosen not in ALGORITHM_REGISTRY:
+                self.get_logger().warning(
+                    f"Unknown explore_algorithm '{chosen}'; falling back to '{DEFAULT_ALGORITHM}'."
+                )
+            self.algorithm = resolve_algorithm(chosen)()
         self.algorithm.declare_params(self)  # algorithm declares its own ROS params
 
         self.latest_map: OccupancyGrid | None = None

@@ -116,10 +116,10 @@ protocol, least code that still drives:
 - Adjust per any T01 interface change adopted into F22.
 
 ## T03 — Runtime selection mechanism
-**Status**: not done
+**Status**: done
 **Test**: unit-test the registry lookup helper (name→class, unknown→fallback) with
 no ROS spin; extract the mapping into a pure function so it is testable.
-**Description**: Edit `main()` in `explorer_manager_node.py`:
+**Description**: Edit `explorer_manager_node.py`:
 - Declare ROS param `explore_algorithm` (string, default `"frontier"`).
 - Registry `{"frontier": FrontierAlgorithm, "hello": HelloWorldAlgorithm}`; inject
   the chosen instance into `ExplorerManagerNode(algorithm=...)`.
@@ -127,21 +127,22 @@ no ROS spin; extract the mapping into a pure function so it is testable.
   unchanged; production launches untouched.
 
 ## T04 — Unit tests (dedicated test task)
-**Status**: not done
+**Status**: done
 **Test**: this IS the test task. `pytest` green, zero ROS deps.
 **Description**: New `test/test_hello_world_algorithm.py`:
 - first goal ~`preferred_goal_distance` ahead in +x from a given `robot_xy`;
 - second call returns `None` (done);
 - honors `preferred_goal_distance` from `ExploreParams`.
-Plus the registry-lookup test from T03. Confirm the existing
+Plus the registry-lookup test from T03 in `test/test_algorithm_registry.py`. Confirm
 `test_frontier_algorithm.py` still passes (no regression from T03 main() edit).
 
 ## T05 — Literate docs + on-robot demo
-**Status**: not done
+**Status**: done
 **Test**: run the F22 "How to Demo" steps on hardware/harness; `explore_algorithm:=hello`
 sends exactly one step goal then declares done; default launch = old frontier
-behavior.
-**Description**: Regenerate literate doc for `hello_world_algorithm.py` (and the node
-if `main()` changed) per `.claude/literate.md`. Run tests + demo before commit.
+behavior. Tests exist; run `pytest -m "not manual"` in the Pi ROS workspace to
+validate before treating the feature as fully green.
+**Description**: Regenerate literate doc for `hello_world_algorithm.py` and
+`explorer_manager_node.py` per `.claude/literate.md`. Run tests + demo before commit.
 On completion: move this file to `04-tasks/done/`, set F22 Done/Tests Written/Test
 Passing = yes, move F22 to `03-features/done/`.

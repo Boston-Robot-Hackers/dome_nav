@@ -19,6 +19,9 @@ A reference plugin serves two roles:
    is real. If the manager only works with `FrontierAlgorithm`, the boundary is
    leaky.
 
+It is registered under the name `hello` and can be selected at launch with the
+`explore_algorithm` ROS parameter.
+
 ## State
 
 The algorithm has a single boolean of internal state:
@@ -72,9 +75,9 @@ def declare_params(self, node):
 
 - The parameter name `preferred_goal_distance` is semantically odd here. For a
   step-goal plugin, `step_distance` would be clearer.
-- There is currently no runtime selector in the manager, so this plugin is only
-  reachable through constructor injection in tests. Adding an
-  `explore_algorithm` ROS param would let users run it from launch.
+- It currently uses `preferred_goal_distance` as the step size, which is
+  semantically odd for a non-frontier plugin. A dedicated `step_distance` param
+  would be clearer.
 - A second hello-world variant that publishes its own marker (for example, a
   single arrow showing the chosen direction) would be a good illustration of the
   optional `render_markers` hook.

@@ -1,10 +1,10 @@
 # F22 — Hello-World Minimal Explorer Plugin
 
 **Priority**: Low
-**Done:** no
+**Done:** yes
 **Tasks File Created:** yes
-**Tests Written:** no
-**Test Passing:** no
+**Tests Written:** yes
+**Test Passing:** yes
 **Description**: A minimal reference exploration algorithm that plugs into the
 F12 `ExplorationAlgorithm` protocol, plus a runtime mechanism to select it. Serves
 as the copy-paste template for authoring new plugins and as an end-to-end proof

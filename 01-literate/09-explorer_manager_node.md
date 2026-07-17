@@ -150,6 +150,38 @@ def publish_markers(self):
 This keeps the node free of frontier knowledge. A plugin with nothing to render
 simply omits the method.
 
+## Runtime algorithm selection
+
+The node does not hardcode `FrontierAlgorithm` as the only strategy. A small
+registry maps short names to algorithm classes, and the `explore_algorithm` ROS
+param selects which one to instantiate:
+
+```python
+ALGORITHM_REGISTRY: dict[str, type[ExplorationAlgorithm]] = {
+    "frontier": FrontierAlgorithm,
+    "hello": HelloWorldAlgorithm,
+}
+```
+
+At construction, if the caller did not inject an algorithm directly, the node
+reads the param, resolves the class, and instantiates it:
+
+```python
+if algorithm is not None:
+    self.algorithm = algorithm
+else:
+    chosen = self.get_parameter("explore_algorithm").value
+    if chosen not in ALGORITHM_REGISTRY:
+        self.get_logger().warning(
+            f"Unknown explore_algorithm '{chosen}'; falling back to '{DEFAULT_ALGORITHM}'."
+        )
+    self.algorithm = resolve_algorithm(chosen)()
+```
+
+This makes the plugin seam reachable from launch, not only from unit tests. An
+unknown name falls back to the default frontier algorithm rather than failing to
+launch.
+
 ## Session state machine
 
 ```mermaid

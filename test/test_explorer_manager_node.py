@@ -14,6 +14,7 @@ from std_msgs.msg import String
 from dome_nav.explore_context import ExploreParams, GoalDecision, GoalOutcome
 from dome_nav.frontier_params import FrontierParams
 from dome_nav.frontier_algorithm import FrontierAlgorithm
+from dome_nav.hello_world_algorithm import HelloWorldAlgorithm
 
 
 class MockAlgorithm:
@@ -506,3 +507,29 @@ def test_goal_in_costmap_false_for_goal_past_edge(node):
     node.latest_global_costmap = costmap_2m()
     assert node.goal_in_global_costmap((2.05, 1.0)) is False
     assert node.goal_in_global_costmap((1.0, -0.1)) is False
+
+
+# --- F22 T03: runtime algorithm selector ---
+
+def test_explore_algorithm_param_declared(node):
+    assert node.has_parameter("explore_algorithm")
+    assert node.get_parameter("explore_algorithm").value == "frontier"
+
+
+def test_default_algorithm_is_frontier(frontier_node):
+    assert isinstance(frontier_node.algorithm, FrontierAlgorithm)
+
+
+def test_unknown_explore_algorithm_param_falls_back_to_frontier(ros):
+    # Constructing a node with an unknown algorithm name should still yield the
+    # default FrontierAlgorithm, and should log a warning.
+    from dome_nav.explorer_manager_node import ExplorerManagerNode
+    with patch("tf2_ros.TransformListener"), \
+         patch("rclpy.action.ActionClient"), \
+         patch("dome_nav.explorer_manager_node.TelemetryWriter",
+               return_value=MagicMock()), \
+         patch.object(ExplorerManagerNode, "get_logger") as mock_get_logger:
+        n = ExplorerManagerNode()
+    assert isinstance(n.algorithm, FrontierAlgorithm)
+    mock_get_logger.return_value.warning.assert_called_once()
+    n.destroy_node()
