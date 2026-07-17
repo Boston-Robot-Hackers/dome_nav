@@ -21,9 +21,9 @@ Concise cold-start orientation. Detailed history lives in git log and the
   = upstream `nav2_params.yaml` + 3 surgical deltas: `robot_radius` 0.22→0.15 (×2),
   `time_before_collision` 1.2→0.5 (E6/E7, **UNVERIFIED**), deadband kept [0,0,0]. Not
   wired into any launch; opt-in via `--nav2_config`.
-- **Deleted `experiments.md` + `experiments/` (5 yamls).** Recoverable via git history
-  only. Bug 2 root cause + Pi CPU campaign (C1/C2/C4) findings now live ONLY in git
-  history — not migrated to notes.md yet.
+- **Deleted `experiments.md` + `experiments/` (5 yamls).** Full run logs in git history
+  (`git show 3d1b187:experiments.md`). Durable findings (Bug 1, Bug 2 3-gate deadlock,
+  Pi CPU campaign C1–C4) migrated to `02-doc/notes.md`.
 - Literate refreshed: `02-slam_manager_node` (v3.4), `06-frontier_explorer` (v1.7),
   `08-frontier_algorithm` (v1.1). Full suite: **224 passed, 4 deselected**.
 
