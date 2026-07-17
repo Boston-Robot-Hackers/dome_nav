@@ -37,10 +37,10 @@ stateDiagram-v2
     idle --> exploring: exploration_start
     done --> exploring: exploration_start
     exploring --> idle: exploration_stop
-    exploring --> done: EXPLORED_DONE (algorithm declares finished)
-    exploring --> done: NO_TARGETS_BLOCKED — patience exhausted after blacklist-clear
-    exploring --> exploring: goal reached / failed / stuck
-    exploring --> exploring: NO_TARGETS_BLOCKED — debounce / clear blacklist once
+    exploring --> done: EXPLORED_DONE, algorithm finished
+    exploring --> done: NO_TARGETS_BLOCKED, patience exhausted
+    exploring --> exploring: goal reached, failed or stuck
+    exploring --> exploring: NO_TARGETS_BLOCKED, debounce and clear blacklist
     note right of exploring
         paused_on_failure freezes
         the loop until resume
@@ -239,11 +239,11 @@ clear the goal so a fresh frontier is chosen next tick.
 
 ```mermaid
 flowchart TD
-    A[tick with active goal] --> B{closer to goal<br/>or moved?}
-    B -- yes --> C[reset progress clock]
-    B -- no --> D{no progress<br/>over STUCK_T_S?}
-    D -- no --> E[wait]
-    D -- yes --> F[cancel + blacklist + clear goal]
+    A["tick with active goal"] --> B{"closer to goal or moved?"}
+    B -->|yes| C["reset progress clock"]
+    B -->|no| D{"no progress over STUCK_T_S?"}
+    D -->|no| E["wait"]
+    D -->|yes| F["cancel + blacklist + clear goal"]
     C --> E
 ```
 
