@@ -152,7 +152,7 @@ with non-default `FrontierParams` and asserts `min_frontier_size`, `min_frontier
 instead of an `ExploreParams`.
 
 ## T04 — Verify decoupling (gate)
-**Status**: not done
+**Status**: done
 **Test**: `grep -iE 'frontier|cluster|Frontier' dome_nav/explorer_manager_node.py`
 returns ONLY the `main()` registry line — add as an assertion / CI-style check where
 feasible, else record the grep result here.
@@ -160,21 +160,37 @@ feasible, else record the grep result here.
 comments referencing clusters, param names). Confirm `FrontierAlgorithm` is imported
 only for the `main()` registry default. Fix any stragglers.
 
-Known stragglers to address here (params already off the node — post-T03 cleanup):
-- **Naming residue (general concepts wearing frontier names):** `NO_FRONTIER_PATIENCE`,
-  `no_frontier_count`, the `no_frontier` telemetry key, `find_and_send_frontier`,
-  `handle_no_frontier`, `dump_frontier_exhaustion`. These are *no-target* / pick-a-goal
-  concepts, not frontier-specific — rename as part of the Explore-vs-Exploration chore.
-- **Duplicated `NO_FRONTIER_PATIENCE = 14`:** defined both as a module constant in
-  `frontier_algorithm.py` (used only for the `exhaustion_report` label) and as the real
-  debounce threshold `ExplorerManagerNode.NO_FRONTIER_PATIENCE`. They match today; if the
-  node's value is retuned, the frontier report label drifts. Collapse to one source —
-  likely pass the node's value into the report via `RenderContext`, or drop the label's
-  dependency on it.
-- Confirm the `session_params` / `telemetry_extra` / `render_markers` / `exhaustion_report`
-  / `failure_report` opaque hooks leave zero frontier param *names* in the node (T03's
-  earlier `frontier_tuning()` helper was replaced by the `session_params` hook, so the
-  node no longer reads `algorithm.frontier_params`).
+### Resolution (done)
+
+Frontier mentions in `explorer_manager_node.py` cut from 34 to 8; zero `cluster`
+mentions. Remaining 8 are all intentional:
+- **Registry default (2):** `from dome_nav.frontier_algorithm import FrontierAlgorithm`
+  and `self.algorithm = algorithm or FrontierAlgorithm()` — the one allowed coupling.
+- **Wire-contract strings (6):** the `"no_frontier"` telemetry event (3) and the
+  `"no_frontier_ticks"` `/explore/status` field (1) plus their explanatory comments.
+  These are consumed downstream (telemetry analysis; dome_control parses the status
+  field), so renaming them is a **format migration**, deliberately deferred — each is
+  commented as such in the code. (Grep-gate assertion not added as a test because the
+  8 legitimate hits make a bare "only main() line" assertion false; the exception set
+  is documented here instead.)
+
+Fixes applied:
+- **`MapInfo` relocated** from `frontier_explorer.py` to `explore_context.py` (the
+  neutral contract module). `frontier_explorer`, `explore_markers`, `explore_diagnostics`,
+  and the node now import it from there; the node no longer imports any frontier module
+  except the registry default. `frontier_explorer` re-exports it (imports it), so
+  `from frontier_explorer import MapInfo` in tests still resolves.
+- **Renames:** `NO_FRONTIER_PATIENCE`→`NO_TARGET_PATIENCE`, `no_frontier_count`→
+  `no_target_count`, `find_and_send_frontier`→`find_and_send_goal`, `handle_no_frontier`→
+  `handle_no_target`, `dump_frontier_exhaustion`→`dump_exhaustion`; comments/log strings
+  reworded off "frontier" to goal/target wording.
+- **Duplicated `NO_FRONTIER_PATIENCE = 14` collapsed:** the module constant in
+  `frontier_algorithm.py` is deleted; the node's value now travels to the frontier
+  `exhaustion_report` via a new `RenderContext.patience` field. Single source of truth.
+- Confirmed the opaque hooks (`session_params`/`telemetry_extra`/`render_markers`/
+  `exhaustion_report`/`failure_report`) leave zero algorithm-param names in the node.
+
+Tests: `pytest -m "not manual"` → 203 passed.
 
 ## T05 — Tests, literate, close-out
 **Status**: not done

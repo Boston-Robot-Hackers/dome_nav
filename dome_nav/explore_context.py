@@ -9,7 +9,17 @@ from typing import Protocol
 
 from builtin_interfaces.msg import Time
 
-from dome_nav.frontier_explorer import MapInfo
+
+@dataclass
+class MapInfo:
+    # Occupancy-grid geometry. Strategy-neutral — lives here in the shared contract
+    # module so the manager node and any algorithm can use it without depending on
+    # a specific strategy's module.
+    width: int
+    height: int
+    resolution: float
+    origin_x: float
+    origin_y: float
 
 
 class GoalOutcome(Enum):
@@ -74,6 +84,7 @@ class RenderContext:
     blacklist: set[tuple[float, float]]
     goal_xy: tuple[float, float] | None
     params: ExploreParams
+    patience: int  # node's no-target debounce threshold, for report labels
 
 
 class ExplorationAlgorithm(Protocol):
@@ -86,6 +97,7 @@ class ExplorationAlgorithm(Protocol):
     #   exhaustion_report(rc: RenderContext) -> str | None
     #   failure_report(rc: RenderContext) -> str | None
     #   telemetry_extra() -> dict
+    #   session_params() -> dict
     # A plugin with no markers or diagnostics simply omits them.
     def next_goal(self, ctx: ExplorationContext) -> GoalDecision: ...
 

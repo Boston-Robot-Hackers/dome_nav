@@ -31,7 +31,7 @@ def test_first_call_new_goal():
     assert decision.xy == (3.5, 5.0)
 
 
-# --- second call: EXPLORED_DONE immediately, no NO_FRONTIER_PATIENCE wait ---
+# --- second call: EXPLORED_DONE immediately, no NO_TARGET_PATIENCE wait ---
 
 def test_second_call_done():
     algo = HelloWorldAlgorithm()

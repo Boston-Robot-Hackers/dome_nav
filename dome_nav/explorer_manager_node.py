@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# explorer_manager_node.py — Nav2 frontier exploration, pluggable algorithm
+# explorer_manager_node.py — Nav2 exploration session manager, pluggable algorithm
 # Author: Pito Salas and Claude Code
 # Open Source Under MIT license
 
@@ -27,6 +27,7 @@ from dome_nav.explore_context import (
     ExplorationContext,
     ExploreParams,
     GoalOutcome,
+    MapInfo,
     RenderContext,
 )
 from dome_nav.explore_telemetry import TelemetryWriter
@@ -35,7 +36,6 @@ from dome_nav.explore_diagnostics import (
     format_failure_diagnostics,
 )
 from dome_nav.frontier_algorithm import FrontierAlgorithm
-from dome_nav.frontier_explorer import MapInfo
 
 XY = tuple[float, float]
 
@@ -46,8 +46,9 @@ class ExplorerManagerNode(Node):
     # Timer frequency for the exploration loop.
     EXPLORE_HZ = 1.0
 
-    # How many consecutive ticks with no valid frontier before declaring done.
-    NO_FRONTIER_PATIENCE = 14
+    # How many consecutive ticks the algorithm reports no usable goal (blocked)
+    # before the node gives up and declares the session done.
+    NO_TARGET_PATIENCE = 14
 
     # Cancel active goal after this many seconds to break Nav2 BT recovery loops.
     GOAL_TIMEOUT_S = 25.0
@@ -59,7 +60,7 @@ class ExplorerManagerNode(Node):
     STUCK_MOVE_EPS = 0.05
     STUCK_PROGRESS_EPS = 0.10
 
-    # Max frontiers to try in one tick when a candidate goal maps outside the
+    # Max goal candidates to try in one tick when a candidate maps outside the
     # global costmap. Each rejected goal is excluded and next_goal is re-asked, so
     # a run of edge goals near the growing map boundary can't wedge the tick.
     MAX_GOAL_ATTEMPTS = 8
@@ -93,9 +94,9 @@ class ExplorerManagerNode(Node):
         self.tf_listener: tf2_ros.TransformListener | None = None
         self.create_timer(1.0 / self.EXPLORE_HZ, self.explore_tick)
 
-        # Shared/session params the node owns. Frontier tuning is declared by the
-        # algorithm itself (algorithm.declare_params below), so no frontier param
-        # name appears here (F23 T03/T04).
+        # Shared/session params the node owns. Any algorithm-specific tuning is
+        # declared by the algorithm itself (algorithm.declare_params below), so no
+        # strategy-specific param name appears here (F23 T03/T04).
         self.declare_parameter("max_explore_radius", 0.0)
         self.declare_parameter("preferred_goal_distance", 1.0)
         self.declare_parameter("map_name", "unknown")
@@ -109,8 +110,8 @@ class ExplorerManagerNode(Node):
         )
         self.algorithm = algorithm or FrontierAlgorithm()
         # The algorithm declares and reads its own ROS params in this node's
-        # namespace (frontier tuning for FrontierAlgorithm; a no-op for plugins
-        # needing only the shared params above).
+        # namespace (the default algorithm's tuning; a no-op for plugins needing
+        # only the shared params above).
         self.algorithm.declare_params(self)
 
         self.latest_map: OccupancyGrid | None = None
@@ -136,9 +137,9 @@ class ExplorerManagerNode(Node):
     def goal_in_global_costmap(self, xy: XY) -> bool:
         # True if xy maps inside the current global costmap extent. When no
         # global costmap has been received yet, returns True so startup is not
-        # blocked. Guards against dispatching frontier goals outside the costmap,
-        # which the planner rejects with a worldToMap failure -> PLAN/NO_VALID_PATH
-        # (the SLAM /map the frontier detector reads can extend past the costmap).
+        # blocked. Guards against dispatching goals outside the costmap, which the
+        # planner rejects with a worldToMap failure -> PLAN/NO_VALID_PATH (the SLAM
+        # /map the algorithm reads can extend past the smaller global costmap).
         if self.latest_global_costmap is None:
             return True
         return costmap_cell_cost(self.latest_global_costmap, xy) is not None
@@ -154,9 +155,10 @@ class ExplorerManagerNode(Node):
             blacklist=self.blacklist,
             goal_xy=self.current_goal_xy,
             params=self.params,
+            patience=self.NO_TARGET_PATIENCE,
         )
 
-    def dump_frontier_exhaustion(self, robot_xy: XY):
+    def dump_exhaustion(self, robot_xy: XY):
         # Fully opaque: the algorithm renders its own exhaustion report; the node
         # reaches into no algorithm internals (F23 T02).
         rc = self.render_context(robot_xy)
@@ -171,7 +173,8 @@ class ExplorerManagerNode(Node):
         return fn(rc) if fn is not None else None
 
     def algorithm_telemetry(self) -> dict:
-        # Optional extra no_frontier telemetry fields, merged in blindly.
+        # Optional extra no-target telemetry fields the algorithm supplies, merged
+        # in blindly.
         fn = getattr(self.algorithm, "telemetry_extra", None)
         return fn() if fn is not None else {}
 
@@ -247,17 +250,17 @@ class ExplorerManagerNode(Node):
             # Deferred from exploration_start: TF buffer was empty then.
             self.start_xy = self.robot_xy_in_map()
         if self.has_active_goal:
-            # The frontier choice is only reconsidered when the current goal
-            # finishes (reached, aborted, timed out, or abandoned for no progress).
+            # The next goal is only reconsidered when the current goal finishes
+            # (reached, aborted, timed out, or abandoned for no progress).
             self.check_stuck()
             if self.has_active_goal:
                 self.check_goal_timeout()
             return
-        # Fetch grids on demand only when about to pick a frontier — keeps the
-        # idle node free of standing grid subscriptions (the CPU sink).
+        # Fetch grids on demand only when about to pick a goal — keeps the idle
+        # node free of standing grid subscriptions (the CPU sink).
         self.latest_map = self.fetch_grid("/map")
         self.latest_global_costmap = self.fetch_grid("/global_costmap/costmap")
-        self.find_and_send_frontier()
+        self.find_and_send_goal()
 
     def check_stuck(self):
         # Abandon a goal that is making no progress (robot wedged), long before
@@ -321,7 +324,7 @@ class ExplorerManagerNode(Node):
             self.blacklist.add(self.current_goal_xy)
         self.clear_active_goal()
 
-    def find_and_send_frontier(self):
+    def find_and_send_goal(self):
         if self.latest_map is None:
             self.telemetry.write("no_frontier", reason="no_map")
             return
@@ -339,7 +342,7 @@ class ExplorerManagerNode(Node):
         map_data = list(m.data)
         # Ask the algorithm for a goal; if the candidate maps outside the global
         # costmap the planner would reject it (worldToMap failure), so exclude it
-        # and re-ask for the next-best frontier. rejected is local to this tick —
+        # and re-ask for the next-best goal. rejected is local to this tick —
         # next tick re-evaluates fresh in case the costmap has since grown.
         rejected: set[XY] = set()
         goal_xy = None
@@ -361,12 +364,12 @@ class ExplorerManagerNode(Node):
                 goal_xy = candidate
                 break
             self.get_logger().warning(
-                f"Frontier goal ({candidate[0]:.3f}, {candidate[1]:.3f}) is "
-                "outside the global costmap — skipping to next frontier."
+                f"Goal candidate ({candidate[0]:.3f}, {candidate[1]:.3f}) is "
+                "outside the global costmap — skipping to next candidate."
             )
             rejected.add(candidate)
         if goal_xy is not None:
-            self.no_frontier_count = 0
+            self.no_target_count = 0
             self.send_nav_goal(goal_xy)
             return
         # No goal this tick. The algorithm names why: EXPLORED_DONE ends the
@@ -374,26 +377,28 @@ class ExplorerManagerNode(Node):
         # all mapped outside the costmap) is a transient block -> debounce.
         if decision is not None and decision.outcome is GoalOutcome.EXPLORED_DONE:
             self.get_logger().info("Algorithm reports exploration complete.")
-            self.dump_frontier_exhaustion(robot_xy)
+            self.dump_exhaustion(robot_xy)
             self.stop_exploring("done")
             return
-        self.handle_no_frontier(robot_xy)
+        self.handle_no_target(robot_xy)
 
-    def handle_no_frontier(self, robot_xy: XY):
-        self.no_frontier_count += 1
+    def handle_no_target(self, robot_xy: XY):
+        self.no_target_count += 1
         self.get_logger().info(
-            f"No frontiers found "
-            f"(tick {self.no_frontier_count}/{self.NO_FRONTIER_PATIENCE})."
+            f"No usable goal this tick "
+            f"(tick {self.no_target_count}/{self.NO_TARGET_PATIENCE})."
         )
         extra = self.algorithm_telemetry()
+        # "no_frontier" event name kept as a telemetry wire contract (log
+        # consumers parse it); renaming it is a separate migration (F23 T04).
         self.telemetry.write(
             "no_frontier", reason="filtered",
-            tick=self.no_frontier_count,
-            patience=self.NO_FRONTIER_PATIENCE,
+            tick=self.no_target_count,
+            patience=self.NO_TARGET_PATIENCE,
             blacklisted=len(self.blacklist),
             **extra,
         )
-        if self.no_frontier_count >= self.NO_FRONTIER_PATIENCE:
+        if self.no_target_count >= self.NO_TARGET_PATIENCE:
             # We only reach here for a *block* (targets exist but none usable) —
             # the algorithm owns "fully explored" via EXPLORED_DONE. Clear the
             # blacklist once (stale entries may now be reachable as the map grew)
@@ -405,17 +410,17 @@ class ExplorerManagerNode(Node):
                 )
                 self.blacklist.clear()
                 self.blacklist_cleared_once = True
-                self.no_frontier_count = 0
+                self.no_target_count = 0
                 return
-            self.get_logger().info("Frontier patience exhausted — exploration done.")
-            self.dump_frontier_exhaustion(robot_xy)
+            self.get_logger().info("No-target patience exhausted — exploration done.")
+            self.dump_exhaustion(robot_xy)
             self.stop_exploring("done")
 
     def reset_session(self):
         self.state = "idle"
         self.blacklist: set[XY] = set()
         self.start_xy: XY | None = None
-        self.no_frontier_count = 0
+        self.no_target_count = 0
         self.blacklist_cleared_once = False
         self.goal_count = 0
         self.goals_reached = 0
@@ -596,7 +601,9 @@ class ExplorerManagerNode(Node):
         if status == "exploring":
             data["goal_num"] = self.goal_count
             data["blacklisted"] = len(self.blacklist)
-            data["no_frontier_ticks"] = self.no_frontier_count
+            # "no_frontier_ticks" kept as a /explore/status wire contract (dome_control
+            # parses it); renaming is a separate migration (F23 T04).
+            data["no_frontier_ticks"] = self.no_target_count
             has_goal = self.current_goal_xy is not None and robot_xy is not None
             if has_goal:
                 gx, gy = self.current_goal_xy

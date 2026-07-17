@@ -135,22 +135,22 @@ def test_intent_start_resets_counters(node):
     node.goal_count = 5
     node.goals_reached = 3
     node.goals_failed = 2
-    node.no_frontier_count = 4
+    node.no_target_count = 4
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
     node.on_intent(make_intent("exploration_start"))
     assert node.goal_count == 0
     assert node.goals_reached == 0
     assert node.goals_failed == 0
-    assert node.no_frontier_count == 0
+    assert node.no_target_count == 0
 
 
-# --- find_and_send_frontier via MockAlgorithm ---
+# --- find_and_send_goal via MockAlgorithm ---
 
 def test_find_frontier_no_map_early_return(node):
     node.state = "exploring"
     node.latest_map = None
     node.send_nav_goal = MagicMock()
-    node.find_and_send_frontier()
+    node.find_and_send_goal()
     node.send_nav_goal.assert_not_called()
 
 
@@ -159,7 +159,7 @@ def test_find_frontier_no_robot_xy_early_return(node):
     node.latest_map = make_map()
     node.robot_xy_in_map = MagicMock(return_value=None)
     node.send_nav_goal = MagicMock()
-    node.find_and_send_frontier()
+    node.find_and_send_goal()
     node.send_nav_goal.assert_not_called()
 
 
@@ -167,25 +167,25 @@ def test_find_frontier_blocked_increments_count(node):
     node.state = "exploring"
     node.latest_map = make_map()
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
-    node.no_frontier_count = 0
+    node.no_target_count = 0
     node.send_nav_goal = MagicMock()
     node.algorithm = MockAlgorithm(GoalDecision.blocked())
-    node.find_and_send_frontier()
-    assert node.no_frontier_count == 1
+    node.find_and_send_goal()
+    assert node.no_target_count == 1
     node.send_nav_goal.assert_not_called()
 
 
 def test_find_frontier_explored_done_ends_session_immediately(node):
-    # EXPLORED_DONE ends the session at once — no NO_FRONTIER_PATIENCE wait, and
+    # EXPLORED_DONE ends the session at once — no NO_TARGET_PATIENCE wait, and
     # WITHOUT the node reading latest_clusters to decide.
     node.state = "exploring"
     node.latest_map = make_map()
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
-    node.no_frontier_count = 0
+    node.no_target_count = 0
     node.send_nav_goal = MagicMock()
-    node.dump_frontier_exhaustion = MagicMock()
+    node.dump_exhaustion = MagicMock()
     node.algorithm = MockAlgorithm(GoalDecision.done())
-    node.find_and_send_frontier()
+    node.find_and_send_goal()
     assert node.state == "done"
     node.send_nav_goal.assert_not_called()
 
@@ -196,16 +196,16 @@ def test_find_frontier_blocked_patience_clears_blacklist_once(node):
     node.state = "exploring"
     node.latest_map = make_map()
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
-    node.no_frontier_count = node.NO_FRONTIER_PATIENCE - 1
+    node.no_target_count = node.NO_TARGET_PATIENCE - 1
     node.blacklist = {(1.0, 1.0)}
     node.blacklist_cleared_once = False
     node.send_nav_goal = MagicMock()
     node.algorithm = MockAlgorithm(GoalDecision.blocked())
-    node.find_and_send_frontier()
+    node.find_and_send_goal()
     assert node.state == "exploring"
     assert node.blacklist == set()
     assert node.blacklist_cleared_once is True
-    assert node.no_frontier_count == 0
+    assert node.no_target_count == 0
 
 
 def test_find_frontier_blocked_patience_after_clear_sets_done(node):
@@ -213,12 +213,12 @@ def test_find_frontier_blocked_patience_after_clear_sets_done(node):
     node.state = "exploring"
     node.latest_map = make_map()
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
-    node.no_frontier_count = node.NO_FRONTIER_PATIENCE - 1
+    node.no_target_count = node.NO_TARGET_PATIENCE - 1
     node.blacklist_cleared_once = True
     node.send_nav_goal = MagicMock()
-    node.dump_frontier_exhaustion = MagicMock()
+    node.dump_exhaustion = MagicMock()
     node.algorithm = MockAlgorithm(GoalDecision.blocked())
-    node.find_and_send_frontier()
+    node.find_and_send_goal()
     assert node.state == "done"
     node.send_nav_goal.assert_not_called()
 
@@ -227,11 +227,11 @@ def test_find_frontier_found_resets_patience_count(node):
     node.state = "exploring"
     node.latest_map = make_map()
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
-    node.no_frontier_count = 5
+    node.no_target_count = 5
     node.send_nav_goal = MagicMock()
     node.algorithm = MockAlgorithm(GoalDecision.new_goal((3.0, 0.0)))
-    node.find_and_send_frontier()
-    assert node.no_frontier_count == 0
+    node.find_and_send_goal()
+    assert node.no_target_count == 0
     node.send_nav_goal.assert_called_once()
 
 
@@ -241,7 +241,7 @@ def test_find_frontier_sends_algorithm_goal(node):
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
     node.send_nav_goal = MagicMock()
     node.algorithm = MockAlgorithm(GoalDecision.new_goal((1.0, 2.0)))
-    node.find_and_send_frontier()
+    node.find_and_send_goal()
     call_args = node.send_nav_goal.call_args
     sent_xy = call_args[0][0]
     assert sent_xy == (1.0, 2.0)
@@ -267,14 +267,14 @@ def test_publish_markers_no_hook_does_not_publish(node):
     node.marker_pub.publish.assert_not_called()
 
 
-def test_handle_no_frontier_writes_telemetry_without_cluster_state(node):
+def test_handle_no_target_writes_telemetry_without_cluster_state(node):
     # A stub exposing no clusters/diag still produces valid no_frontier telemetry.
     node.state = "exploring"
-    node.no_frontier_count = 0
+    node.no_target_count = 0
     node.blacklist = set()
     node.telemetry.write = MagicMock()
-    node.handle_no_frontier((0.0, 0.0))
-    assert node.no_frontier_count == 1
+    node.handle_no_target((0.0, 0.0))
+    assert node.no_target_count == 1
     node.telemetry.write.assert_called_once()
     kwargs = node.telemetry.write.call_args.kwargs
     assert kwargs["reason"] == "filtered"
@@ -371,7 +371,7 @@ def test_publish_status_exploring_no_goal(node):
     node.goals_failed = 0
     node.goal_count = 2
     node.blacklist = set()
-    node.no_frontier_count = 3
+    node.no_target_count = 3
     node.robot_xy_in_map = MagicMock(return_value=(1.0, 2.0))
     published = []
     node.status_pub.publish = lambda m: published.append(json.loads(m.data))
@@ -392,7 +392,7 @@ def test_publish_status_exploring_with_goal_fields(node):
     node.goal_count = 3
     node.goal_start_time = time.monotonic() - 5.0
     node.blacklist = {(1.0, 0.0), (2.0, 0.0)}
-    node.no_frontier_count = 0
+    node.no_target_count = 0
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
     published = []
     node.status_pub.publish = lambda m: published.append(json.loads(m.data))
@@ -415,7 +415,7 @@ def test_publish_status_dist_correct(node):
     node.goal_count = 1
     node.goal_start_time = time.monotonic()
     node.blacklist = set()
-    node.no_frontier_count = 0
+    node.no_target_count = 0
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
     published = []
     node.status_pub.publish = lambda m: published.append(json.loads(m.data))
@@ -471,7 +471,7 @@ def test_shared_only_plugin_ticks_without_frontier_params(node):
     node.send_nav_goal = MagicMock()
     node.algorithm = MockAlgorithm(GoalDecision.new_goal((1.0, 2.0)))
     node.publish_markers()  # no render_markers hook -> must not raise
-    node.find_and_send_frontier()
+    node.find_and_send_goal()
     node.send_nav_goal.assert_called_once()
 
 

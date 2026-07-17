@@ -4,20 +4,12 @@
 # Open Source Under MIT license
 
 import math
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from dome_nav.explore_context import MapInfo
 
 if TYPE_CHECKING:
     from dome_nav.frontier_params import FrontierTuning
-
-
-@dataclass
-class MapInfo:
-    width: int
-    height: int
-    resolution: float
-    origin_x: float
-    origin_y: float
 
 
 def find_frontier_clusters(

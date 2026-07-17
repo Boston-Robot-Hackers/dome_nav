@@ -19,7 +19,7 @@
 # The node calls next_goal once (or a few times per tick if a goal maps outside
 # the global costmap) whenever it has NO active goal. It pursues each returned
 # goal to completion before asking again. GoalDecision.done() ends exploration
-# straight away — no NO_FRONTIER_PATIENCE wait.
+# straight away — no NO_TARGET_PATIENCE wait.
 
 from dome_nav.explore_context import ExplorationContext, GoalDecision
 
@@ -39,7 +39,7 @@ class HelloWorldAlgorithm:
 
     def next_goal(self, ctx: ExplorationContext) -> GoalDecision:
         # Already sent our single goal -> we are finished. EXPLORED_DONE ends the
-        # session immediately; no NO_FRONTIER_PATIENCE wait.
+        # session immediately; no NO_TARGET_PATIENCE wait.
         if self.emitted:
             return GoalDecision.done()
         self.emitted = True

@@ -7,7 +7,8 @@ from builtin_interfaces.msg import Time
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker, MarkerArray
 
-from dome_nav.frontier_explorer import MapInfo, cell_to_world
+from dome_nav.explore_context import MapInfo
+from dome_nav.frontier_explorer import cell_to_world
 
 
 def build_explore_markers(

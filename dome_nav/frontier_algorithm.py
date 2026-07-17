@@ -27,8 +27,6 @@ from dome_nav.frontier_explorer import (
     frontier_diag,
 )
 
-NO_FRONTIER_PATIENCE = 14
-
 
 class FrontierAlgorithm:
     # Default exploration algorithm. Wraps the pure functions in
@@ -97,7 +95,7 @@ class FrontierAlgorithm:
         tuning = merge_tuning(rc.params, self.frontier_params)
         return format_frontier_exhaustion(
             self.latest_clusters, rc.map_info, rc.robot_xy,
-            tuning, rc.blacklist, NO_FRONTIER_PATIENCE,
+            tuning, rc.blacklist, rc.patience,
         )
 
     def failure_report(self, rc: RenderContext) -> str:

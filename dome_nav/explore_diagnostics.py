@@ -6,8 +6,9 @@
 import math
 from nav_msgs.msg import OccupancyGrid
 
+from dome_nav.explore_context import MapInfo
 from dome_nav.frontier_params import FrontierTuning
-from dome_nav.frontier_explorer import MapInfo, cell_to_world
+from dome_nav.frontier_explorer import cell_to_world
 
 XY = tuple[float, float]
 SEP = "=" * 60
