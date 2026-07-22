@@ -1,10 +1,35 @@
 # nav2_params_explore_real_mini.yaml
-# Minimal real-robot explore config: upstream nav2_bringup/params/nav2_params.yaml
-# copied VERBATIM, with only these surgical deltas (see F25):
-#   - robot_radius 0.22 -> 0.15 (both costmaps): true DOME radius; lever on Bug-2 lethal ring
-#   - FootprintApproach.time_before_collision 1.2 -> 0.5 (E6/E7): UNVERIFIED, never run on hardware
-#   - deadband_velocity kept [0,0,0]: Bug 1 requires it (upstream already correct)
-# Everything else = upstream defaults (NavFn planner, batch_size 2000, tolerances, etc).
+#
+# RULES FOR EDITING THIS FILE (for humans and AI assistants):
+# 1. This file is upstream /opt/ros/jazzy/share/nav2_bringup/params/nav2_params.yaml
+#    copied verbatim. Do not reformat, reorder, or "clean up" untouched lines.
+# 2. Every line whose value differs from upstream MUST carry an in-place comment
+#    in exactly this form:  # annotation: change from upstream: xxx -> yyy
+# 3. No multi-line comment blocks or narrative below this header. Upstream
+#    comment blocks are condensed to one line. Rationale/history lives in
+#    04-tasks/chores.md and git log, not here.
+# 4. If an upstream (non-comment) line is removed, mark the spot with
+#    "# annotation: change from upstream: line deleted - <line>".
+# 5. Keep the CHANGES list below in sync with the in-place markers.
+# 6. After any edit, verify with a comments-stripped diff against upstream that
+#    the CHANGES list, the marked lines, and the differing lines all agree.
+# 7. EVERY comment not present in upstream (including rule-2/rule-4 change
+#    markers) MUST start with "# annotation:" so ours are distinguishable from
+#    upstream's own comments. This header block is the only exception.
+#
+# CHANGES FROM UPSTREAM:
+#   controller_server.MPPI.time_steps            56 -> 36
+#   controller_server.MPPI.batch_size          2000 -> 1000
+#   controller_server.MPPI.vx_max               0.5 -> 0.25
+#   controller_server.MPPI.vx_min             -0.35 -> -0.25
+#   local_costmap.robot_radius                 0.22 -> 0.17
+#   local_costmap.inflation_radius             0.70 -> 0.4
+#   global_costmap.robot_radius                0.22 -> 0.17
+#   global_costmap.cost_scaling_factor          3.0 -> 2.5
+#   velocity_smoother.max_velocity   [0.5, 0.0, 2.0] -> [0.25, 0.0, 2.0]
+#   velocity_smoother.min_velocity  [-0.5, 0.0,-2.0] -> [-0.25, 0.0, -2.0]
+#   collision_monitor.FootprintApproach.time_before_collision  1.2 -> 1.0
+#
 # Author: Pito Salas and Claude Code
 # Open Source Under MIT license
 amcl:
@@ -61,14 +86,9 @@ bt_navigator:
       plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
     navigate_through_poses:
       plugin: "nav2_bt_navigator::NavigateThroughPosesNavigator"
-    # 'default_nav_through_poses_bt_xml' and 'default_nav_to_pose_bt_xml' are use defaults:
-    # nav2_bt_navigator/navigate_to_pose_w_replanning_and_recovery.xml
-    # nav2_bt_navigator/navigate_through_poses_w_replanning_and_recovery.xml
-    # They can be set here or via a RewrittenYaml remap from a parent launch file to Nav2.
+    # annotation: default BT xmls in use; settable here or via RewrittenYaml
 
-    # plugin_lib_names is used to add custom BT plugins to the executor (vector of strings).
-    # Built-in plugins are added automatically
-    # plugin_lib_names: []
+    # annotation: plugin_lib_names: [] (custom BT plugins; built-ins auto-added)
 
     error_code_names:
       - compute_path_error_code
@@ -93,11 +113,6 @@ controller_server:
       required_movement_radius: 0.5
       movement_time_allowance: 10.0
     # Goal checker parameters
-    #precise_goal_checker:
-    #  plugin: "nav2_controller::SimpleGoalChecker"
-    #  xy_goal_tolerance: 0.25
-    #  yaw_goal_tolerance: 0.25
-    #  stateful: True
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
@@ -105,9 +120,9 @@ controller_server:
       yaw_goal_tolerance: 0.25
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
-      time_steps: 56
+      time_steps: 36  # annotation: change from upstream: 56 -> 36
       model_dt: 0.05
-      batch_size: 2000
+      batch_size: 1000  # annotation: change from upstream: 2000 -> 1000
       ax_max: 3.0
       ax_min: -3.0
       ay_max: 3.0
@@ -116,8 +131,8 @@ controller_server:
       vx_std: 0.2
       vy_std: 0.2
       wz_std: 0.4
-      vx_max: 0.5
-      vx_min: -0.35
+      vx_max: 0.25  # annotation: change from upstream: 0.5 -> 0.25
+      vx_min: -0.25  # annotation: change from upstream: -0.35 -> -0.25
       vy_max: 0.5
       wz_max: 1.9
       iteration_count: 1
@@ -189,10 +204,6 @@ controller_server:
         threshold_to_consider: 0.5
         max_angle_to_furthest: 1.0
         mode: 0
-      # TwirlingCritic:
-      #   enabled: true
-      #   twirling_cost_power: 1
-      #   twirling_cost_weight: 10.0
 
 local_costmap:
   local_costmap:
@@ -205,12 +216,12 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      robot_radius: 0.15  # mini: upstream 0.22 -> true DOME radius
+      robot_radius: 0.17  # annotation: change from upstream: 0.22 -> 0.17
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.70
+        inflation_radius: 0.4  # annotation: change from upstream: 0.70 -> 0.4
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
@@ -243,7 +254,7 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
-      robot_radius: 0.15  # mini: upstream 0.22 -> true DOME radius
+      robot_radius: 0.17  # annotation: change from upstream: 0.22 -> 0.17
       resolution: 0.05
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
@@ -266,16 +277,11 @@ global_costmap:
         map_subscribe_transient_local: True
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
+        cost_scaling_factor: 2.5  # annotation: change from upstream: 3.0 -> 2.5
         inflation_radius: 0.7
       always_send_full_costmap: True
 
-# The yaml_filename does not need to be specified since it going to be set by defaults in launch.
-# If you'd rather set it in the yaml, remove the default "map" value in the tb3_simulation_launch.py
-# file & provide full path to map below. If CLI map configuration or launch default is provided, that will be used.
-# map_server:
-#   ros__parameters:
-#     yaml_filename: ""
+# annotation: map_server yaml_filename comes from launch defaults
 
 map_saver:
   ros__parameters:
@@ -344,10 +350,7 @@ waypoint_follower:
 
 route_server:
   ros__parameters:
-    # The graph_filepath does not need to be specified since it going to be set by defaults in launch.
-    # If you'd rather set it in the yaml, remove the default "graph" value in the launch file(s).
-    # file & provide full path to map below. If graph config or launch default is provided, it is used
-    # graph_filepath: $(find-pkg-share nav2_route)/graphs/aws_graph.geojson
+    # annotation: graph_filepath comes from launch defaults
     boundary_radius_to_achieve_node: 1.0
     radius_to_achieve_node: 2.0
     smooth_corners: true
@@ -371,13 +374,13 @@ velocity_smoother:
     stamp_smoothed_velocity_with_smoothing_time: False
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [0.5, 0.0, 2.0]
-    min_velocity: [-0.5, 0.0, -2.0]
+    max_velocity: [0.25, 0.0, 2.0]  # annotation: change from upstream: [0.5, 0.0, 2.0] -> [0.25, 0.0, 2.0]
+    min_velocity: [-0.25, 0.0, -2.0]  # annotation: change from upstream: [-0.5, 0.0, -2.0] -> [-0.25, 0.0, -2.0]
     max_accel: [2.5, 0.0, 3.2]
     max_decel: [-2.5, 0.0, -3.2]
     odom_topic: "odom"
     odom_duration: 0.1
-    deadband_velocity: [0.0, 0.0, 0.0]  # mini: Bug-1-critical, keep [0,0,0]
+    deadband_velocity: [0.0, 0.0, 0.0]  # annotation: same as upstream; do not change (Bug 1 needs zero deadband)
     velocity_timeout: 1.0
 
 collision_monitor:
@@ -391,14 +394,13 @@ collision_monitor:
     source_timeout: 1.0
     base_shift_correction: True
     stop_pub_timeout: 2.0
-    # Polygons represent zone around the robot for "stop", "slowdown" and "limit" action types,
-    # and robot footprint for "approach" action type.
+    # annotation: polygons: stop/slowdown/limit zones; footprint used for approach
     polygons: ["FootprintApproach"]
     FootprintApproach:
       type: "polygon"
       action_type: "approach"
       footprint_topic: "/local_costmap/published_footprint"
-      time_before_collision: 0.5  # mini(E6/E7): UNVERIFIED, upstream 1.2
+      time_before_collision: 1.0  # annotation: change from upstream: 1.2 -> 1.0
       simulation_time_step: 0.1
       min_points: 6
       visualize: False
@@ -443,13 +445,7 @@ docking_server:
       external_detection_rotation_yaw: 0.0
       filter_coef: 0.1
 
-    # Dock instances
-    # The following example illustrates configuring dock instances.
-    # docks: ['home_dock']  # Input your docks here
-    # home_dock:
-    #   type: 'simple_charging_dock'
-    #   frame: map
-    #   pose: [0.0, 0.0, 0.0]
+    # annotation: docks: [] (configure dock instances here)
 
     controller:
       k_phi: 3.0

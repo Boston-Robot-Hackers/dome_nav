@@ -1,10 +1,10 @@
 # F24 — Remove Periodic Map Save from slam_manager
 
 **Priority**: Medium
-**Done:** no
+**Done:** yes
 **Tasks File Created:** yes (TF24)
-**Tests Written:** no
-**Test Passing:** no
+**Tests Written:** yes
+**Test Passing:** yes (220 passed, 4 deselected)
 **Description**: Remove the every-`m`-minutes periodic map save in `slam_manager_node.py`
 (the `save_period_sec` timer added in F16). The periodic save serialized the modern
 posegraph AND exported the legacy PGM/YAML on every tick; both go away. Map

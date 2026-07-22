@@ -1,6 +1,6 @@
 ---
-version: "1.1"
-generated: "2026-07-17"
+version: "1.2"
+generated: "2026-07-18"
 ---
 
 # The Explorer Manager Node
@@ -157,12 +157,20 @@ to be absent, the node writes the `session_start` telemetry event with
 `if self.start_xy is None` block in `explore_tick` above). One owner, one
 capture point — the intent handler never races a half-filled TF buffer.
 
-## Goal selection and the costmap guard
+## Goal selection and the costmap guards
 
-When the algorithm returns a `NEW_GOAL`, the node verifies that the goal maps
-inside the global costmap before sending it to Nav2. The SLAM `/map` can extend
-beyond the planner's costmap, and goals outside the costmap cause Nav2's
-`worldToMap` to fail with `PLAN/NO_VALID_PATH`.
+When the algorithm returns a `NEW_GOAL`, the node runs the candidate through two
+guards before sending it to Nav2 — both on the *final, post-nudge* goal, since the
+algorithm's nudge is what can shift a safe frontier cell onto trouble:
+
+1. **Bounds** (`goal_within_costmap_bounds`) — the SLAM `/map` can extend beyond the
+   planner's costmap, and a goal outside the costmap makes Nav2's `worldToMap` fail
+   with `PLAN/NO_VALID_PATH`.
+2. **Lethality** (`goal_is_lethal`) — even inside the costmap, a cell can be lethal
+   or inscribed (footprint guaranteed in collision), which Nav2 rejects with
+   `GOAL_OCCUPIED`. The check reads the scaled `/global_costmap/costmap` OccupancyGrid,
+   where lethal is `100` and inscribed `99` (Nav2 translates the raw 254/253); the
+   shared `LETHAL_THRESHOLD` (99) treats both as "do not send".
 
 ```python
 rejected: set[XY] = set()
@@ -181,20 +189,22 @@ for _ in range(self.MAX_GOAL_ATTEMPTS):
     if decision.outcome is not GoalOutcome.NEW_GOAL:
         break
     candidate = decision.xy
-    if self.goal_in_global_costmap(candidate):
-        goal_xy = candidate
-        break
-    self.get_logger().warning(
-        f"Goal candidate ({candidate[0]:.3f}, {candidate[1]:.3f}) is "
-        "outside the global costmap — skipping to next candidate."
-    )
-    rejected.add(candidate)
+    if not self.goal_within_costmap_bounds(candidate):
+        # ...warn "outside the global costmap"...
+        rejected.add(candidate)
+        continue
+    if self.goal_is_lethal(candidate):
+        # ...warn "on a lethal costmap cell"...
+        rejected.add(candidate)
+        continue
+    goal_xy = candidate
+    break
 ```
 
-If a candidate is outside the costmap, it is added to a local `rejected` set
-that is unioned into the blacklist *for this tick only*, and the algorithm is
-asked again. The rejection is not persisted: the costmap may grow and make the
-same candidate feasible later, so the next tick re-evaluates with a fresh set.
+A candidate that fails either guard is added to a local `rejected` set that is
+unioned into the blacklist *for this tick only*, and the algorithm is asked again.
+The rejection is not persisted: the costmap may grow or clear and make the same
+candidate feasible later, so the next tick re-evaluates with a fresh set.
 
 ## Handling no usable goal
 

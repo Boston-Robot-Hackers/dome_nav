@@ -1,10 +1,10 @@
 # F25 — Minimal Real-Robot Explore Nav2 Config
 
 **Priority**: Medium
-**Done:** no
+**Done:** yes (config deliverable; live-verify TF25 T02 deferred to hardware / E6–E7)
 **Tasks File Created:** yes (TF25)
 **Tests Written:** n/a (config file)
-**Test Passing:** n/a
+**Test Passing:** n/a (yaml parses clean)
 **Description**: Add `config/nav2_params_explore_real_mini.yaml` — a copy of upstream
 `nav2_bringup/params/nav2_params.yaml` with ONLY surgical, justified deltas, as an
 alternative to the large hand-forked `nav2_params_explore_real.yaml` (400-line rewrite

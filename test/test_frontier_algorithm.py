@@ -4,10 +4,11 @@
 # Open Source Under MIT license
 
 import math
+import pytest
 from dome_nav.explore_context import (
     ExplorationContext, ExploreParams, GoalOutcome,
 )
-from dome_nav.frontier_params import FrontierParams
+from dome_nav.frontier_params import FrontierParams, merge_tuning
 from dome_nav.frontier_algorithm import FrontierAlgorithm
 from dome_nav.frontier_explorer import MapInfo
 
@@ -316,3 +317,26 @@ def test_novelty_off_omits_telemetry_score():
     algo = make_algo(make_frontier_params(use_novelty_scoring=False))
     algo.next_goal(make_ctx(data, info, robot_xy=(0.5, 1.5)))
     assert "novelty_score" not in algo.telemetry_extra()
+
+
+# --- merge_tuning invariant: blacklist_radius must exceed goal_inset_m ---
+
+def test_merge_tuning_rejects_radius_at_or_below_inset():
+    # Exclusion coords are post-nudge, cluster cells raw (goal_inset_m apart);
+    # radius <= inset would let a rejected cell reselect every tick.
+    shared = ExploreParams(blacklist_radius=0.3)
+    frontier = make_frontier_params(goal_inset_m=0.3)
+    with pytest.raises(ValueError, match="blacklist_radius"):
+        merge_tuning(shared, frontier)
+
+
+def test_merge_tuning_accepts_default_radius_and_inset():
+    tuning = merge_tuning(ExploreParams(), make_frontier_params())
+    assert tuning.blacklist_radius > tuning.goal_inset_m
+
+
+def test_session_params_include_novelty_settings():
+    algo = make_algo(make_frontier_params(use_novelty_scoring=True, novelty_top_n=7))
+    params = algo.session_params()
+    assert params["use_novelty_scoring"] is True
+    assert params["novelty_top_n"] == 7

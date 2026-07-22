@@ -1,6 +1,6 @@
 ---
-version: "1.7"
-generated: "2026-07-17"
+version: "1.8"
+generated: "2026-07-22"
 ---
 
 # frontier_explorer.py — Frontier Detection from an Occupancy Grid
@@ -133,10 +133,13 @@ def pick_best_frontier(clusters, info, robot_xy, params, blacklist=None, start_x
 ```
 
 Inside a cluster, `best_cell_in_cluster` scores each cell by
-`abs(d - preferred_goal_distance)` — the F14 change that replaced the old binary
-`prefer_farthest` flag. A `preferred_goal_distance` of 0 reproduces
-nearest-first; a large value reproduces farthest-first; intermediate values aim
-for a comfortable step size. The centroid is used only for the `max_radius`
+`abs((d - goal_inset_m) - preferred_goal_distance)` — the F14 change that
+replaced the old binary `prefer_farthest` flag, refined to score the goal
+*actually dispatched*: `nudge_toward_robot` (below) pulls the chosen cell
+exactly `goal_inset_m` closer along the same ray, so scoring the raw distance
+`d` biased selection about one inset too close. A `preferred_goal_distance` of
+0 reproduces nearest-first; a large value reproduces farthest-first;
+intermediate values aim for a comfortable step size. The centroid is used only for the `max_radius`
 cluster-level filter, never as the goal — because a frontier that *surrounds* the
 robot has a centroid ≈ the robot's own position, useless as a goal, while its
 cells are out at the boundary where the robot must go.
@@ -156,7 +159,9 @@ of **unknown** cells (`-1`) a straight line from the robot to the candidate
 crosses. More unknown cells crossed = more territory revealed by the trip.
 
 It needs the inverse of `cell_to_world` and an integer line. `world_to_cell`
-floors world coordinates back to a `(row, col)`; `bresenham_cells` walks the
+floors world coordinates back to a `(row, col)` — `math.floor`, not `int()`,
+because `int()` truncates toward zero and would land a point just left of the
+origin in cell 0 (in-bounds) instead of −1. `bresenham_cells` walks the
 integer raster line between two cells, both endpoints included:
 
 ```python

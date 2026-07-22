@@ -4,6 +4,7 @@
 # Open Source Under MIT license
 
 import math
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from dome_nav.explore_context import MapInfo
@@ -13,7 +14,7 @@ if TYPE_CHECKING:
 
 
 def find_frontier_clusters(
-    data: list[int], info: MapInfo, buffer_cells: int = 2
+    data: Sequence[int], info: MapInfo, buffer_cells: int = 2
 ) -> list[list[int]]:
     # Returns list[list[int]]: each inner list is a cluster of cell indices (flat
     # offsets into data). row = idx // width, col = idx % width. Convert to world
@@ -111,8 +112,10 @@ def cell_to_world(idx: int, info: MapInfo) -> tuple[float, float]:
 
 def world_to_cell(xy: tuple[float, float], info: MapInfo) -> tuple[int, int]:
     # Inverse of cell_to_world: floor recovers the cell whose centre maps back.
-    col = int((xy[0] - info.origin_x) / info.resolution)
-    row = int((xy[1] - info.origin_y) / info.resolution)
+    # math.floor, not int(): int() truncates toward zero, so a point just left
+    # of the origin would land in cell 0 (in-bounds) instead of -1.
+    col = math.floor((xy[0] - info.origin_x) / info.resolution)
+    row = math.floor((xy[1] - info.origin_y) / info.resolution)
     return (row, col)
 
 
@@ -138,7 +141,7 @@ def bresenham_cells(r0: int, c0: int, r1: int, c1: int):
 
 def path_novelty_score(
     start_xy: tuple[float, float], end_xy: tuple[float, float],
-    data: list[int], info: MapInfo,
+    data: Sequence[int], info: MapInfo,
 ) -> int:
     # Unknown-cell count on the straight-line path start->end. More unknown cells
     # crossed = more new territory revealed by travelling there. Out-of-bounds
@@ -206,7 +209,7 @@ def pick_best_frontier(
 def pick_by_novelty(
     candidates: list[tuple[float, float]],
     robot_xy: tuple[float, float],
-    data: list[int],
+    data: Sequence[int],
     info: MapInfo,
 ) -> tuple[tuple[float, float] | None, int]:
     # Re-rank pre-filtered candidates by unknown-cell count on the straight-line
@@ -252,7 +255,10 @@ def best_cell_in_cluster(
             continue
         if params.max_frontier_dist > 0.0 and d > params.max_frontier_dist:
             continue
-        score = abs(d - preferred)
+        # Score the goal actually dispatched: nudge_toward_robot pulls the cell
+        # exactly goal_inset_m closer along the same ray, so the sent goal sits
+        # at d - inset. Scoring raw d biased selection ~inset_m too close.
+        score = abs((d - params.goal_inset_m) - preferred)
         if score < goal_score:
             goal_score = score
             goal = (wx, wy)

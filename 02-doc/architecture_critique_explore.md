@@ -245,9 +245,9 @@ the original proposals against the new code.
 
 | # | Proposal | Status | Notes |
 |---|----------|--------|-------|
-| 1 | Fix `on_goal_result` race | **NOT FIXED** | `on_goal_result()` still calls `clear_active_goal()` unconditionally. A stale callback from a stuck/timeout-canceled goal can still wipe the state of the next active goal. |
+| 1 | Fix `on_goal_result` race | **FIXED** (2026-07-18) | `on_goal_result()` now early-returns on a stale callback (`not has_active_goal`, `xy != current_goal_xy`, or `goal_start_time is None`) before touching state. Fixed a live `float - None` crash; regression tests added. |
 | 2 | Declare `blacklist_radius` | **NOT FIXED** | `ExploreParams.blacklist_radius` still defaults to `0.5`; the node only declares `max_explore_radius`, `preferred_goal_distance`, and `map_name`. Still not yaml-tunable. |
-| 3 | Ignore result callbacks after user stop | **NOT FIXED** | `stop_exploring()` cancels the goal but does not guard `on_goal_result()`; a deliberate stop can still blacklist the canceled goal and count it as failed. |
+| 3 | Ignore result callbacks after user stop | **FIXED** (2026-07-18) | Same stale-callback guard as #1: after `stop_exploring()` clears goal state, the late `on_goal_result()` early-returns instead of blacklisting/counting the canceled goal. |
 | 4 | Remove frontier vocabulary from node | **PARTIALLY FIXED** | Renamed: `NO_FRONTIER_PATIENCE → NO_TARGET_PATIENCE`, `no_frontier_count → no_target_count`, `find_and_send_frontier → find_and_send_goal`, `dump_frontier_exhaustion → dump_exhaustion`, `handle_no_frontier → handle_no_target`. Telemetry/status keys `"no_frontier"` / `"no_frontier_ticks"` are intentionally kept as wire contracts with migration comments. |
 | 5 | Type optional hooks in Protocol | **NOT FIXED** | Hooks are still called via `getattr` with magic strings; `ExplorationAlgorithm` Protocol only lists `next_goal` and `declare_params`. |
 | 6 | Move `MapInfo` out of `frontier_explorer.py` | **FIXED** | `MapInfo` now lives in `explore_context.py`. |

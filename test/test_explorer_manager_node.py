@@ -9,6 +9,7 @@ import time
 from unittest.mock import MagicMock, patch
 import pytest
 import rclpy
+from action_msgs.msg import GoalStatus
 from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import String
 from dome_nav.explore_context import ExploreParams, GoalDecision, GoalOutcome
@@ -469,7 +470,7 @@ def test_shared_only_plugin_ticks_without_frontier_params(node):
     node.send_nav_goal.assert_called_once()
 
 
-# --- goal_in_global_costmap bounds check (worldToMap guard) ---
+# --- goal_within_costmap_bounds bounds check (worldToMap guard) ---
 
 def costmap_2m(resolution=0.05):
     # 40x40 cell costmap (2m x 2m) with origin at (0,0), all free.
@@ -486,20 +487,101 @@ def costmap_2m(resolution=0.05):
 def test_goal_in_costmap_true_when_no_costmap_yet(node):
     # Startup must not be blocked before the first costmap arrives.
     node.latest_global_costmap = None
-    assert node.goal_in_global_costmap((5.0, 5.0)) is True
+    assert node.goal_within_costmap_bounds((5.0, 5.0)) is True
 
 
 def test_goal_in_costmap_true_for_interior_goal(node):
     node.latest_global_costmap = costmap_2m()
-    assert node.goal_in_global_costmap((1.0, 1.0)) is True
+    assert node.goal_within_costmap_bounds((1.0, 1.0)) is True
 
 
 def test_goal_in_costmap_false_for_goal_past_edge(node):
     # 2m-wide costmap; a goal at x=2.05m maps one cell past the east edge, the
     # exact worldToMap failure that aborted planning with PLAN/NO_VALID_PATH.
     node.latest_global_costmap = costmap_2m()
-    assert node.goal_in_global_costmap((2.05, 1.0)) is False
-    assert node.goal_in_global_costmap((1.0, -0.1)) is False
+    assert node.goal_within_costmap_bounds((2.05, 1.0)) is False
+    assert node.goal_within_costmap_bounds((1.0, -0.1)) is False
+
+
+# --- goal_is_lethal guard (F27 T02) ---
+
+def set_cell(cm, xy, cost):
+    info = cm.info
+    col = int((xy[0] - info.origin.position.x) / info.resolution)
+    row = int((xy[1] - info.origin.position.y) / info.resolution)
+    cm.data[row * info.width + col] = cost
+
+
+class SequenceAlgorithm:
+    # Yields a fixed sequence of decisions, one per next_goal call, so a test can
+    # exercise the reselect loop across multiple candidates.
+    frontier_params = None
+
+    def __init__(self, decisions):
+        self.decisions = list(decisions)
+
+    def declare_params(self, node):
+        pass
+
+    def next_goal(self, ctx):
+        return self.decisions.pop(0) if self.decisions else GoalDecision.blocked()
+
+
+def test_goal_is_lethal_false_when_no_costmap(node):
+    # Startup stays permissive before the first costmap arrives.
+    node.latest_global_costmap = None
+    assert node.goal_is_lethal((1.0, 1.0)) is False
+
+
+def test_goal_is_lethal_false_for_free_cell(node):
+    node.latest_global_costmap = costmap_2m()
+    assert node.goal_is_lethal((1.0, 1.0)) is False
+
+
+def test_goal_is_lethal_true_for_lethal_cell(node):
+    cm = costmap_2m()
+    set_cell(cm, (1.0, 1.0), 100)  # scaled OccupancyGrid lethal
+    node.latest_global_costmap = cm
+    assert node.goal_is_lethal((1.0, 1.0)) is True
+
+
+def test_goal_is_lethal_true_for_inscribed_cell(node):
+    # Inscribed (99) = footprint guaranteed in collision -> treated as lethal.
+    cm = costmap_2m()
+    set_cell(cm, (1.0, 1.0), 99)
+    node.latest_global_costmap = cm
+    assert node.goal_is_lethal((1.0, 1.0)) is True
+
+
+def test_goal_is_lethal_false_for_inflation_below_threshold(node):
+    cm = costmap_2m()
+    set_cell(cm, (1.0, 1.0), 98)  # high inflation but not lethal/inscribed
+    node.latest_global_costmap = cm
+    assert node.goal_is_lethal((1.0, 1.0)) is False
+
+
+def test_goal_is_lethal_false_out_of_bounds(node):
+    # None cost (out of bounds) is not lethal; bounds are the bounds guard's job.
+    node.latest_global_costmap = costmap_2m()
+    assert node.goal_is_lethal((2.05, 1.0)) is False
+
+
+def test_find_and_send_goal_skips_lethal_candidate(node):
+    # A lethal (post-nudge) candidate is excluded and next_goal is re-asked; the
+    # next free candidate is dispatched instead of aborting on a lethal goal.
+    node.state = "exploring"
+    node.latest_map = make_map()
+    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
+    node.send_nav_goal = MagicMock()
+    cm = costmap_2m()
+    set_cell(cm, (1.0, 1.0), 100)  # first candidate lands on lethal
+    node.latest_global_costmap = cm
+    node.algorithm = SequenceAlgorithm([
+        GoalDecision.new_goal((1.0, 1.0)),   # lethal -> skipped
+        GoalDecision.new_goal((0.5, 0.5)),   # free  -> sent
+    ])
+    node.find_and_send_goal()
+    node.send_nav_goal.assert_called_once_with((0.5, 0.5))
 
 
 # --- F22 T03: runtime algorithm selector ---
@@ -538,3 +620,153 @@ def test_unknown_explore_algorithm_param_falls_back_to_frontier(ros):
     assert isinstance(n.algorithm, FrontierAlgorithm)
     mock_get_logger.return_value.warning.assert_called_once()
     n.destroy_node()
+
+
+# --- failure counter covers watchdog paths (telemetry honesty regression) ---
+
+def test_timeout_increments_goals_failed(node):
+    node.has_active_goal = True
+    node.goal_start_time = 0.0
+    node.goal_handle = MagicMock()
+    node.current_goal_xy = (4.7, 5.0)
+    node.goals_failed = 0
+    node.check_goal_timeout()
+    assert node.goals_failed == 1
+
+
+def test_stuck_increments_goals_failed(node):
+    node.has_active_goal = True
+    node.goal_start_time = 0.0
+    node.goal_handle = MagicMock()
+    node.current_goal_xy = (5.0, 0.0)
+    node.robot_xy_in_map = lambda: (0.0, 0.0)
+    node.best_dist_to_goal = 5.0
+    node.last_progress_xy = (0.0, 0.0)
+    node.last_progress_time = 0.0  # ancient → stuck window expired
+    node.goals_failed = 0
+    node.check_stuck()
+    assert node.goals_failed == 1
+
+
+# --- wedge detector: consecutive same-pose stucks stop the session ---
+
+def make_stuck(node, goal_xy, robot_xy):
+    node.has_active_goal = True
+    node.goal_start_time = 0.0
+    node.goal_handle = MagicMock()
+    node.current_goal_xy = goal_xy
+    node.robot_xy_in_map = lambda: robot_xy
+    node.best_dist_to_goal = math.dist(robot_xy, goal_xy)  # no progress made
+    node.last_progress_xy = robot_xy
+    node.last_progress_time = 0.0
+    node.check_stuck()
+
+
+def test_wedge_same_pose_stucks_stop_session(node):
+    node.state = "exploring"
+    for i in range(node.WEDGED_STUCK_LIMIT):
+        make_stuck(node, (5.0 + i, 0.0), (1.0, 1.0))
+    assert node.state == "idle"
+    assert node.stuck_streak == node.WEDGED_STUCK_LIMIT
+
+
+def test_wedge_streak_resets_when_pose_changes(node):
+    node.state = "exploring"
+    make_stuck(node, (5.0, 0.0), (1.0, 1.0))
+    make_stuck(node, (6.0, 0.0), (2.0, 2.0))  # moved — streak restarts
+    make_stuck(node, (7.0, 0.0), (2.0, 2.0))
+    assert node.state == "exploring"
+    assert node.stuck_streak == 2
+
+
+def test_wedge_streak_resets_on_reached_goal(node):
+    node.state = "exploring"
+    make_stuck(node, (5.0, 0.0), (1.0, 1.0))
+    make_stuck(node, (6.0, 0.0), (1.0, 1.0))
+    assert node.stuck_streak == 2
+    node.has_active_goal = True
+    node.current_goal_xy = (2.0, 2.0)
+    node.goal_start_time = time.monotonic()
+    node.on_goal_result(
+        goal_result_future(GoalStatus.STATUS_SUCCEEDED), xy=(2.0, 2.0)
+    )
+    assert node.stuck_streak == 0
+    assert node.state == "exploring"
+
+
+# --- goal rejection clears full active-goal state (stale status regression) ---
+
+def test_rejected_goal_clears_all_active_state(node):
+    node.has_active_goal = True
+    node.current_goal_xy = (3.0, 4.0)
+    node.goal_start_time = time.monotonic()
+    node.latest_global_costmap = None
+    node.robot_xy_in_map = lambda: None
+    future = MagicMock()
+    future.result.return_value.accepted = False
+    node.on_goal_accepted(future, xy=(3.0, 4.0))
+    assert node.has_active_goal is False
+    assert node.current_goal_xy is None
+    assert node.goal_start_time is None
+    assert (3.0, 4.0) in node.blacklist
+
+
+# --- on_goal_result stale-callback guard (race regression) ---
+
+def test_on_goal_result_ignores_cleared_goal(node):
+    # A goal canceled by the watchdog/stop clears goal_start_time to None; the late
+    # result callback must not crash (was: float - None TypeError) or mutate state.
+    node.has_active_goal = False
+    node.current_goal_xy = None
+    node.goal_start_time = None
+    node.goals_failed = 0
+    node.blacklist = set()
+    node.on_goal_result(MagicMock(), xy=(1.0, 2.0))  # must not raise
+    assert node.goals_failed == 0
+    assert node.blacklist == set()
+
+
+def test_on_goal_result_ignores_superseded_goal(node):
+    # A newer goal is active; the previous goal's late callback must not blacklist
+    # its own xy or touch the current goal's state.
+    node.has_active_goal = True
+    node.current_goal_xy = (9.0, 9.0)
+    node.goal_start_time = time.monotonic()
+    node.goals_failed = 0
+    node.blacklist = set()
+    node.on_goal_result(MagicMock(), xy=(1.0, 2.0))
+    assert node.goals_failed == 0
+    assert (1.0, 2.0) not in node.blacklist
+
+
+def goal_result_future(status: int) -> MagicMock:
+    future = MagicMock()
+    future.result.return_value.status = status
+    return future
+
+
+def test_on_goal_result_reached_not_blacklisted(node):
+    # Regression: successes were blacklisted too, and the blacklist_radius circle
+    # around every reached goal killed live frontier cells — over-accumulation
+    # ended sessions prematurely. Only failures blacklist.
+    node.has_active_goal = True
+    node.current_goal_xy = (1.0, 2.0)
+    node.goal_start_time = time.monotonic()
+    node.blacklist = set()
+    node.on_goal_result(
+        goal_result_future(GoalStatus.STATUS_SUCCEEDED), xy=(1.0, 2.0)
+    )
+    assert node.goals_reached == 1
+    assert node.blacklist == set()
+
+
+def test_on_goal_result_failure_still_blacklisted(node):
+    node.has_active_goal = True
+    node.current_goal_xy = (1.0, 2.0)
+    node.goal_start_time = time.monotonic()
+    node.blacklist = set()
+    node.on_goal_result(
+        goal_result_future(GoalStatus.STATUS_CANCELED), xy=(1.0, 2.0)
+    )
+    assert node.goals_failed == 1
+    assert (1.0, 2.0) in node.blacklist

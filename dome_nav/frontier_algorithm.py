@@ -126,4 +126,6 @@ class FrontierAlgorithm:
             "max_frontier_dist": fp.max_frontier_dist,
             "goal_inset": fp.goal_inset_m,
             "min_frontier_size": fp.min_frontier_size,
+            "use_novelty_scoring": fp.use_novelty_scoring,
+            "novelty_top_n": fp.novelty_top_n,
         }

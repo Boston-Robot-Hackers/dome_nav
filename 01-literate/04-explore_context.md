@@ -1,6 +1,6 @@
 ---
-version: "1.0"
-generated: "2026-07-17"
+version: "1.1"
+generated: "2026-07-22"
 ---
 
 # The Exploration Algorithm Contract
@@ -96,7 +96,7 @@ object:
 ```python
 @dataclass
 class ExplorationContext:
-    map_data: list[int]
+    map_data: Sequence[int]
     map_info: MapInfo
     robot_xy: tuple[float, float]
     blacklist: set[tuple[float, float]]
@@ -106,8 +106,10 @@ class ExplorationContext:
 
 A few design choices are worth calling out:
 
-- `map_data` is a flat copy of the `OccupancyGrid.data` array. Passing a plain
-  `list[int]` keeps the algorithm implementations free of ROS message imports.
+- `map_data` is typed `Sequence[int]`, and the node passes the
+  `OccupancyGrid`'s `array.array` **uncopied** — a read-only view, not a
+  defensive copy. The abstract type keeps algorithm implementations free of
+  ROS message imports while avoiding a per-tick copy of the whole grid.
 - `MapInfo` is a tiny dataclass with just the grid geometry. It originally lived
   in `frontier_explorer.py`, but that created a dependency from the generic
   protocol into a frontier-specific module, so it was moved here.

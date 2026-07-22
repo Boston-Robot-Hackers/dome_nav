@@ -271,6 +271,22 @@ def test_pick_preferred_dist_intermediate_picks_closest_to_target():
     assert abs(result[0] - 5.5) < 1e-6
 
 
+def test_pick_scores_post_nudge_distance():
+    # Regression: score used raw cell distance, but the dispatched goal is
+    # goal_inset_m closer (nudge_toward_robot). Cells at d=4.5 and d=5.5,
+    # preferred=4.7, inset=0.5: raw scoring picks 4.5 (|4.5-4.7|=0.2 <
+    # |5.5-4.7|=0.8); post-nudge scoring picks 5.5 (dispatched 5.0, score 0.3,
+    # vs dispatched 4.0, score 0.7).
+    info = make_info(10, 1, resolution=1.0)
+    cluster = [4, 5]  # world x=4.5, 5.5
+    result = pick_best_frontier(
+        [cluster], info, (0.0, 0.5),
+        filters(preferred_goal_distance=4.7, goal_inset_m=0.5),
+    )
+    assert result is not None
+    assert abs(result[0] - 5.5) < 1e-6
+
+
 def test_pick_preferred_dist_respects_blacklist():
     info = make_info(10, 1, resolution=1.0)
     cluster = [1, 5, 8]  # world x=1.5, 5.5, 8.5
@@ -543,6 +559,24 @@ def test_world_to_cell_inverts_cell_to_world():
     for idx in (0, 3, 27, 99):
         row, col = world_to_cell(cell_to_world(idx, info), info)
         assert row * info.width + col == idx
+
+
+def test_map_data_accepts_uncopied_occupancy_grid_array():
+    # Regression: the node now passes OccupancyGrid.data (array.array('b'))
+    # uncopied instead of list(m.data); pure functions must accept any Sequence.
+    import array
+    info = make_info(5, 1, resolution=1.0)
+    data = array.array("b", [0, 0, -1, -1, -1])
+    clusters = find_frontier_clusters(data, info, buffer_cells=0)
+    assert clusters == [[1]]
+    assert path_novelty_score((0.5, 0.5), (4.5, 0.5), data, info) == 3
+
+
+def test_world_to_cell_floors_negative_coords():
+    # Regression: int() truncates toward zero, so a point just left/below the
+    # origin landed in cell (0, 0) — in-bounds — instead of (-1, -1).
+    info = make_info(10, 10, resolution=0.5)
+    assert world_to_cell((-0.01, -0.01), info) == (-1, -1)
 
 
 def test_novelty_horizontal_counts_only_unknown():

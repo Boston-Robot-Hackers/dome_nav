@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-# sim_explore_node.launch.py — Starts explorer_manager_node, same config
-# as sim_explore.launch.py. One piece of the manual debug stack — requires
-# sim_robot.launch.py and sim_nav.launch.py already running (needs /map and an
+# sim_explore_node.launch.py — Starts explorer_manager_node, same sim-only
+# exploration defaults as sim_nav_full.launch.py. One piece of the manual debug
+# stack — requires sim_robot.launch.py, sim_slam.launch.py, and sim_nav2.launch.py
+# already running (needs /map and an
 # active Nav2 stack to send goals to). Once running, publish an
 # "exploration_start" intent on /intent to begin exploring — see
 # 02-doc/current.md's Intent contract table for the full payload format.
@@ -11,8 +12,8 @@
 from better_launch import BetterLaunch, launch_this
 
 
-# Sim-only exploration defaults, kept identical across sim_explore.launch.py,
-# sim_explore_node.launch.py, and sim_nav_full.launch.py. Can't be shared via an
+# Sim-only exploration defaults, kept identical across
+# sim_explore_node.launch.py and sim_nav_full.launch.py. Can't be shared via an
 # imported constant: bl's CLI statically parses launch function signatures via
 # AST without importing the module (better_launch/utils/introspection.py), so a
 # non-literal default like `= SOME_IMPORTED_NAME` fails with "not a valid float"

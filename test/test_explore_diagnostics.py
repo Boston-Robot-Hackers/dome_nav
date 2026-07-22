@@ -87,6 +87,21 @@ def test_costmap_radius_negative_renders_unknown():
     assert "???" in costmap_radius_costs(cm, (2.5, 2.5), radius_cells=1)
 
 
+def test_costmap_radius_lethal_renders_xxx():
+    # Scaled OccupancyGrid: lethal is 100 (Nav2 translates raw 254 -> 100). XXX must
+    # fire on 100, not the raw 254 — regression for the wrong-scale diagnostics bug.
+    cm = make_costmap(fill=100)
+    assert "XXX" in costmap_radius_costs(cm, (2.5, 2.5), radius_cells=1)
+
+
+def test_failure_diagnostics_legend_uses_scaled_values():
+    cm = make_costmap(fill=100)
+    out = format_failure_diagnostics(
+        (2.5, 2.5), (2.5, 2.5), "aborted", 1.0, 1, cm, None, set(),
+    )
+    assert "lethal=100 inscribed=99 unknown=-1" in out
+
+
 def test_exhaustion_reason_too_small():
     params = tuning(min_frontier_size=10, min_frontier_dist=0.0)
     assert "too_small" in exhaustion_reason(3, 5.0, params)

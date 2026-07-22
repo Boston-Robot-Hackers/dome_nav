@@ -32,6 +32,7 @@ from dome_nav.explore_context import (
 )
 from dome_nav.explore_telemetry import TelemetryWriter
 from dome_nav.explore_diagnostics import (
+    LETHAL_THRESHOLD,
     costmap_cell_cost,
     format_failure_diagnostics,
 )
@@ -72,10 +73,12 @@ class ExplorerManagerNode(Node):
     # Cancel active goal after this many seconds to break Nav2 BT recovery loops.
     GOAL_TIMEOUT_S = 25.0
 
-    # Fail-fast: abandon a goal after this many seconds of NO progress (robot
-    # wedged / collision-monitor-gated), well before GOAL_TIMEOUT_S. Progress =
-    # distance-to-goal dropped by STUCK_PROGRESS_EPS or robot moved STUCK_MOVE_EPS.
-    STUCK_T_S = 7.0
+    # Abandon a goal after this many seconds of NO progress (robot wedged /
+    # collision-monitor-gated). Raised 7->20 so Nav2's own progress_checker
+    # (movement_time_allowance 10s) fails first and its BT recovery (BackUp/Spin)
+    # can run before the explorer cancels. Progress = distance-to-goal dropped by
+    # STUCK_PROGRESS_EPS or robot moved STUCK_MOVE_EPS.
+    STUCK_T_S = 20.0
     STUCK_MOVE_EPS = 0.05
     STUCK_PROGRESS_EPS = 0.10
 
@@ -83,6 +86,13 @@ class ExplorerManagerNode(Node):
     # global costmap. Each rejected goal is excluded and next_goal is re-asked, so
     # a run of edge goals near the growing map boundary can't wedge the tick.
     MAX_GOAL_ATTEMPTS = 8
+
+    # Consecutive stuck-goal failures from the same robot pose before the robot
+    # is declared wedged and the session stops. Reselecting goals cannot fix a
+    # wedged pose: 2026-07-20 telemetry shows 12- and 20-goal stuck runs with a
+    # bit-identical robot_xy, each burning STUCK_T_S. Same-pose = within
+    # STUCK_MOVE_EPS.
+    WEDGED_STUCK_LIMIT = 3
 
     def __init__(self, algorithm: ExplorationAlgorithm | None = None):
         super().__init__("explore_manager_node")
@@ -160,7 +170,7 @@ class ExplorerManagerNode(Node):
         )
         return msg if ok else None
 
-    def goal_in_global_costmap(self, xy: XY) -> bool:
+    def goal_within_costmap_bounds(self, xy: XY) -> bool:
         # True if xy maps inside the current global costmap extent. When no
         # global costmap has been received yet, returns True so startup is not
         # blocked. Guards against dispatching goals outside the costmap, which the
@@ -169,6 +179,20 @@ class ExplorerManagerNode(Node):
         if self.latest_global_costmap is None:
             return True
         return costmap_cell_cost(self.latest_global_costmap, xy) is not None
+
+    def goal_is_lethal(self, xy: XY) -> bool:
+        # True if xy lands on a lethal/inscribed global-costmap cell — the footprint
+        # is guaranteed in collision there, so Nav2 rejects the goal. A None cost
+        # (no costmap yet, or out of bounds) is not treated as lethal: startup stays
+        # permissive and bounds are goal_within_costmap_bounds' job.
+        cost = costmap_cell_cost(self.latest_global_costmap, xy)
+        is_lethal = cost is not None and cost >= LETHAL_THRESHOLD
+        if is_lethal:
+            self.get_logger().warning(
+                f"Goal ({xy[0]:.3f}, {xy[1]:.3f}) on lethal costmap cell "
+                f"(cost={cost})."
+            )
+        return is_lethal
 
     def render_context(self, robot_xy: XY | None = None) -> RenderContext:
         return RenderContext(
@@ -213,7 +237,10 @@ class ExplorerManagerNode(Node):
             self.latest_global_costmap, self.latest_local_costmap, self.blacklist,
             nav2_error_code, nav2_error_msg, algorithm_report=report,
         ))
-        self.paused_on_failure = True
+        # Dump diagnostics but do not halt: while frontiers remain the tick loop
+        # blacklists the failed goal and reselects; NO_TARGETS_BLOCKED patience is
+        # the real stop. Flag/resume intent kept for manual pause paths.
+        self.paused_on_failure = False
 
     def on_intent(self, msg: String):
         try:
@@ -301,8 +328,35 @@ class ExplorerManagerNode(Node):
         self.get_logger().warning(
             f"No progress for {self.STUCK_T_S}s — abandoning goal, blacklisting."
         )
+        self.goals_failed += 1
         self.write_goal_result(self.current_goal_xy, robot_xy, "stuck", elapsed)
         self.abandon_active_goal()
+        self.note_stuck(robot_xy)
+
+    def note_stuck(self, robot_xy: XY):
+        # Wedge detector: consecutive stuck failures from the same pose mean the
+        # robot itself cannot move (collision-monitor gated / against an
+        # obstacle); goal reselection is provably futile, so stop cleanly rather
+        # than cycle goals until patience or shutdown. The streak resets whenever
+        # the robot gets stuck somewhere new or reaches a goal.
+        same_pose = (
+            self.stuck_streak_xy is not None
+            and dist(robot_xy, self.stuck_streak_xy) <= self.STUCK_MOVE_EPS
+        )
+        self.stuck_streak = self.stuck_streak + 1 if same_pose else 1
+        self.stuck_streak_xy = robot_xy
+        if self.stuck_streak < self.WEDGED_STUCK_LIMIT:
+            return
+        self.get_logger().error(
+            f"Robot wedged: {self.stuck_streak} consecutive stuck goals from "
+            f"({robot_xy[0]:.2f}, {robot_xy[1]:.2f}) — stopping exploration."
+        )
+        self.telemetry.write(
+            "wedged", robot_xy=rounded(robot_xy), stuck_streak=self.stuck_streak,
+            goals_sent=self.goal_count,
+        )
+        self.dump_exhaustion(robot_xy)
+        self.stop_exploring("idle")
 
     def check_goal_timeout(self):
         # Caller guarantees an active goal (goal_start_time seeded in send_nav_goal).
@@ -312,6 +366,7 @@ class ExplorerManagerNode(Node):
         self.get_logger().warning(
             f"Goal timed out after {elapsed}s — cancelling and blacklisting."
         )
+        self.goals_failed += 1
         self.write_goal_result(self.current_goal_xy, None, "timeout", elapsed)
         self.abandon_active_goal()
 
@@ -330,11 +385,14 @@ class ExplorerManagerNode(Node):
             origin_x=m.info.origin.position.x, origin_y=m.info.origin.position.y,
         )
         self.latest_map_info = info
-        map_data = list(m.data)
-        # Ask the algorithm for a goal; if the candidate maps outside the global
-        # costmap the planner would reject it (worldToMap failure), so exclude it
-        # and re-ask for the next-best goal. rejected is local to this tick —
-        # next tick re-evaluates fresh in case the costmap has since grown.
+        # m.data (array.array) is passed uncopied: every consumer is read-only
+        # indexing/iteration, and a full-map list() copy per tick is pure waste.
+        map_data = m.data
+        # Ask the algorithm for a goal; exclude candidates the planner would reject —
+        # outside the global costmap (worldToMap failure) or on a lethal/inscribed
+        # cell — and re-ask for the next-best goal. Both checks run on the final
+        # post-nudge candidate. rejected is local to this tick; next tick re-evaluates
+        # fresh in case the costmap has since grown or cleared.
         rejected: set[XY] = set()
         goal_xy = None
         decision = None
@@ -351,14 +409,18 @@ class ExplorerManagerNode(Node):
             if decision.outcome is not GoalOutcome.NEW_GOAL:
                 break
             candidate = decision.xy
-            if self.goal_in_global_costmap(candidate):
-                goal_xy = candidate
-                break
-            self.get_logger().warning(
-                f"Goal candidate ({candidate[0]:.3f}, {candidate[1]:.3f}) is "
-                "outside the global costmap — skipping to next candidate."
-            )
-            rejected.add(candidate)
+            if not self.goal_within_costmap_bounds(candidate):
+                self.get_logger().warning(
+                    f"Goal candidate ({candidate[0]:.3f}, {candidate[1]:.3f}) is "
+                    "outside the global costmap — skipping to next candidate."
+                )
+                rejected.add(candidate)
+                continue
+            if self.goal_is_lethal(candidate):
+                rejected.add(candidate)
+                continue
+            goal_xy = candidate
+            break
         if goal_xy is not None:
             self.no_target_count = 0
             self.send_nav_goal(goal_xy)
@@ -410,6 +472,8 @@ class ExplorerManagerNode(Node):
         self.goal_count = 0
         self.goals_reached = 0
         self.goals_failed = 0
+        self.stuck_streak = 0
+        self.stuck_streak_xy: XY | None = None
 
     def clear_active_goal(self):
         self.goal_handle = None
@@ -462,10 +526,14 @@ class ExplorerManagerNode(Node):
             f"Goal #{self.goal_count}: ({xy[0]:.2f},{xy[1]:.2f})"
             f" dist={goal_dist:.2f}m blacklisted={len(self.blacklist)}"
         )
+        # telemetry_extra rides along so per-goal algorithm state (e.g.
+        # novelty_score) is visible on the goals themselves, not only on
+        # no_frontier ticks.
         self.telemetry.write(
             "goal_sent", goal_num=self.goal_count, goal_xy=rounded(xy),
             dist_m=round(goal_dist, 3), robot_xy=rounded(robot_xy),
             blacklisted=len(self.blacklist),
+            **self.call_hook("telemetry_extra", default={}),
         )
         future = self.nav_client.send_goal_async(goal)
         future.add_done_callback(
@@ -479,7 +547,10 @@ class ExplorerManagerNode(Node):
                 f"Goal rejected at ({xy[0]:.2f}, {xy[1]:.2f}) — blacklisting."
             )
             self.blacklist.add(xy)
-            self.has_active_goal = False
+            # Full clear, not just has_active_goal: a dangling current_goal_xy /
+            # goal_start_time showed the dead goal in status and markers until
+            # the next tick overwrote it.
+            self.clear_active_goal()
             self.dump_failure_diagnostics(xy, self.robot_xy_in_map(), "rejected", 0.0)
             return
         self.goal_handle = handle
@@ -489,13 +560,20 @@ class ExplorerManagerNode(Node):
         )
 
     def on_goal_result(self, future, xy: XY):
-        # goal_start_time is seeded in send_nav_goal for any goal that reaches here.
+        # Ignore stale callbacks. A goal canceled by the stuck/timeout watchdog or by
+        # exploration_stop has already cleared its state; its late result must not run
+        # against None goal_start_time or against a superseding goal's state.
+        if (not self.has_active_goal or xy != self.current_goal_xy
+                or self.goal_start_time is None):
+            return
         elapsed = round(time.monotonic() - self.goal_start_time, 1)
         self.clear_active_goal()
         result = future.result()
         robot_xy = self.robot_xy_in_map()
         if result.status == GoalStatus.STATUS_SUCCEEDED:
             self.goals_reached += 1
+            self.stuck_streak = 0
+            self.stuck_streak_xy = None
             status_name = "reached"
             self.get_logger().info(
                 f"Goal #{self.goal_count} REACHED"
@@ -514,8 +592,13 @@ class ExplorerManagerNode(Node):
                     nav2_error_code=result.result.error_code,
                     nav2_error_msg=result.result.error_msg,
                 )
+            # Failures only: a reached goal's frontier disappears on the next map
+            # update, and blacklisting it (blacklist_radius circle) killed live
+            # frontier cells around every success — over-accumulation ended
+            # sessions prematurely. If the frontier does persist, the reselected
+            # goal fails and is blacklisted then.
+            self.blacklist.add(xy)
         self.write_goal_result(xy, robot_xy, status_name, elapsed)
-        self.blacklist.add(xy)
 
     def stop_exploring(self, new_state: str):
         if self.goal_handle is not None:

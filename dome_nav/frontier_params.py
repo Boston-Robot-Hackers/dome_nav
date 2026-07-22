@@ -39,6 +39,15 @@ class FrontierTuning:
 
 
 def merge_tuning(shared: ExploreParams, frontier: FrontierParams) -> FrontierTuning:
+    # Exclusion coords (blacklist/rejected) are post-nudge; cluster cells are raw,
+    # goal_inset_m apart. A radius at or below the inset lets an excluded cell
+    # reselect every tick, so the invariant is enforced here at the merge boundary.
+    if shared.blacklist_radius <= frontier.goal_inset_m:
+        raise ValueError(
+            f"blacklist_radius ({shared.blacklist_radius}) must exceed "
+            f"goal_inset_m ({frontier.goal_inset_m}); exclusion is stored "
+            "post-nudge but filtered against raw cells."
+        )
     # Deprecated prefer_farthest maps to farthest-first selection: preferred goal
     # distance becomes max_frontier_dist (or a large sentinel when unlimited).
     preferred = shared.preferred_goal_distance

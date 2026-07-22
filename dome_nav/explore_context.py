@@ -3,6 +3,7 @@
 # Author: Pito Salas and Claude Code
 # Open Source Under MIT license
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Protocol
@@ -57,7 +58,8 @@ class ExploreParams:
 
 @dataclass
 class ExplorationContext:
-    map_data: list[int]
+    # Read-only view; the node passes the OccupancyGrid's array.array uncopied.
+    map_data: Sequence[int]
     map_info: MapInfo
     robot_xy: tuple[float, float]
     blacklist: set[tuple[float, float]]

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # sim_nav_full.launch.py — single-command full sim stack, composed from the
 # existing single-purpose sim_*.launch.py files via bl.include() rather than
-# duplicating their logic (as sim_explore.launch.py currently does). Includes,
+# duplicating their logic. Includes,
 # in the dependency order established during F13 T04 debugging: sim_robot
 # (Gazebo/spawn/bridge/RSP/laser TF), sim_slam (must be up before Nav2 so the
 # "map" TF frame exists), sim_nav2, then sim_explore_node. RViz is intentionally
@@ -12,7 +12,7 @@
 # lifecycle_manager aborts the whole bringup (F13 T04t).
 # Also starts slam_manager_node directly (not via an include, since none of
 # the split files own it) so maps built through this single-command launch
-# actually get persisted to ~/.dome/slam_maps/ like sim_explore.launch.py's do.
+# actually get persisted to ~/.dome/slam_maps/.
 # Author: Pito Salas and Claude Code
 # Open Source Under MIT license
 
@@ -62,8 +62,8 @@ def wait_for_map_odom_tf(bl: BetterLaunch, timeout_s: float = 30.0) -> None:
     )
 
 
-# Sim-only exploration defaults, kept identical across sim_explore.launch.py,
-# sim_explore_node.launch.py, and sim_nav_full.launch.py. Can't be shared via an
+# Sim-only exploration defaults, kept identical across
+# sim_explore_node.launch.py and sim_nav_full.launch.py. Can't be shared via an
 # imported constant: bl's CLI statically parses launch function signatures via
 # AST without importing the module (better_launch/utils/introspection.py), so a
 # non-literal default like `= SOME_IMPORTED_NAME` fails with "not a valid float"

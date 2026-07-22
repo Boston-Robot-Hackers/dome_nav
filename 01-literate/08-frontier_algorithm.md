@@ -1,6 +1,6 @@
 ---
-version: "1.1"
-generated: "2026-07-17"
+version: "1.2"
+generated: "2026-07-22"
 ---
 
 # The Frontier Algorithm
@@ -73,6 +73,13 @@ def declare_params(self, node):
 value in the node's namespace. Launch files and yaml configs can override them
 with the same names as before, but the manager node has no hardcoded knowledge
 of those names.
+
+`merge_tuning` also enforces one cross-parameter invariant at the merge
+boundary: `blacklist_radius` must exceed `goal_inset_m`. Exclusion coordinates
+are stored *post-nudge* but filtered against *raw* cluster cells, which sit
+`goal_inset_m` further out — a radius at or below the inset would let an
+excluded cell reselect every tick. Violation raises `ValueError` rather than
+silently clamping.
 
 ## The decision loop
 
@@ -167,6 +174,8 @@ def session_params(self) -> dict:
         "max_frontier_dist": fp.max_frontier_dist,
         "goal_inset": fp.goal_inset_m,
         "min_frontier_size": fp.min_frontier_size,
+        "use_novelty_scoring": fp.use_novelty_scoring,
+        "novelty_top_n": fp.novelty_top_n,
     }
 ```
 

@@ -12,7 +12,9 @@ exactly as they are, both still routing through `save_map_async`/`save_map_sync`
 `test_activate_creates_no_timer`. Full suite green.
 
 ## T02 — Update docs/literate
-**Status**: not done
+**Status**: done
 **Description**: `02-doc/current.md` key-params + F16 note reference the 120 s
 periodic save; add a line that F24 removed it (saves now first-map + shutdown only).
 Regenerate `01-literate/` for `slam_manager_node.py` before PR.
+**Done**: current.md F16 refs annotated with F24 removal; literate
+`02-slam_manager_node.md` (v3.4) already reflects the timer removal.

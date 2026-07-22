@@ -3,144 +3,120 @@
 Concise cold-start orientation. Detailed history lives in git log and the
 `04-tasks/` files — do **not** re-narrate it here.
 
-**Date:** 2026-07-17 · **Branch:** main
+**Date:** 2026-07-22 · **Branch:** main
 
-## This session (2026-07-17)
+## This session (2026-07-22) — collision_monitor gate probe (preliminary)
 
-- **F15 path novelty scoring — landed (code+tests), live-verify (TF15 T05) pending.**
-  Pure `path_novelty_score`/`best_frontier_candidates`/`pick_by_novelty` in
-  `frontier_explorer.py`; opt-in `use_novelty_scoring`/`novelty_top_n` in
-  `FrontierParams`; `FrontierAlgorithm.select_target` branch; novelty rides the opaque
-  `telemetry_extra` (`novelty_score`) — node untouched (F23 intact). Off by default.
-- **F24 remove periodic map save — landed.** Stripped the `save_period_sec` timer +
-  `periodic_save` from `slam_manager_node.py` (reverses F16's periodic save only; keeps
-  first-map + shutdown saves, both still modern+legacy). Dropped `save_period_sec`
-  overrides in `sim_nav_full`/`sim_explore` launches. **`kill -9` now keeps only the
-  first-map save** (no periodic fallback).
-- **F25 minimal real explore config — file added.** `config/nav2_params_explore_real_mini.yaml`
-  = upstream `nav2_params.yaml` + 3 surgical deltas: `robot_radius` 0.22→0.15 (×2),
-  `time_before_collision` 1.2→0.5 (E6/E7, **UNVERIFIED**), deadband kept [0,0,0]. Not
-  wired into any launch; opt-in via `--nav2_config`.
-- **Deleted `experiments.md` + `experiments/` (5 yamls).** Full run logs in git history
-  (`git show 3d1b187:experiments.md`). Durable findings (Bug 1, Bug 2 3-gate deadlock,
-  Pi CPU campaign C1–C4) migrated to `02-doc/notes.md`.
-- Literate refreshed: `02-slam_manager_node` (v3.4), `06-frontier_explorer` (v1.7),
-  `08-frontier_algorithm` (v1.1). Full suite: **224 passed, 4 deselected**.
-- **F26 created (+TF26): indoor-survey algorithms paper.** Feature
-  `03-features/notdone/F26-indoor-survey-paper.md` + task list TF26 (T01–T05:
-  background synthesis → literature survey → paper plan → runbook → draft).
-  Algorithm-centric, not ROS2-centric; the two new algorithms are **F14
-  (preferred-goal-distance) + F15 (path novelty)**; venue = arXiv/tech report.
-  ROS2 + pluggable-architecture appear as small sections only.
-- **Chore: explorer_manager_node DRY/YAGNI pass** (644→625 lines). Extracted
-  `dist()`/`rounded()`, `call_hook()` (single optional-hook dispatch),
-  `abandon_active_goal()`, `write_goal_result()`; dropped state-machine-guaranteed
-  guards, the double algorithm-name check (`resolve_algorithm` removed — node
-  warns + falls back once), the dead `start_xy` pre-capture, and the duplicate
-  `session_end` on shutdown. Deleted 4 tests encoding removed defensiveness.
-  **Suite now 220 passed, 4 deselected.**
+Goal: pin down **which gate** stops the wedged robot (F29 mandatory probe).
 
+- `ros2 topic echo /collision_monitor_state` while wedged shows alternating
+  `action_type: 3` / `polygon_name: FootprintApproach` ↔ `action_type: 0` (empty).
+- Enum verified against jazzy `nav2_msgs/CollisionMonitorState.msg`:
+  **3 = APPROACH** (not LIMIT — LIMIT is 4). So the gate is confirmed
+  **FootprintApproach APPROACH**, and **no `STOP` (1) appears ⇒ the
+  invalid-source / TF-starvation stop is ruled out** for this stall.
+- Toggling 3↔0 = publish-on-change: Nav2 commands motion → zeroed → command
+  drops → retry. Classic wedge loop.
+- **Still open — static check vs approach simulation** (the F29 go/no-go):
+  APPROACH covers both the velocity-blind static check (≥ `min_points` 6 scan
+  points inside the 0.17 m footprint ⇒ ALL cmd_vel zeroed incl. reverse) and the
+  forward simulation (only motion toward points gated). Next measurements:
+  - `ros2 topic echo /collision_monitor/collision_points_marker` (lazy topic) —
+    count points within 0.17 m of base center.
+  - Compare monitor input vs output cmd_vel `linear.x`: ratio 0.0 ⇒ full gate
+    (static check likely); 0<r<1 ⇒ simulation throttle.
+  - While wedged, publish a small negative-x cmd_vel into the monitor and watch
+    the output — direct test whether reverse passes.
+  - Decision: ≥6 points inside footprint ⇒ static check ⇒ F29 BackUp escape
+    needs the `FootprintApproach.enabled false` dynamic toggle; <6 ⇒ plain
+    BackUp viable.
+- F29 has **no task file yet** (TF29 needed before code; probe should be T01).
+
+Also this session — `nav2_params_explore_real_mini.yaml` review + wall-hug fix:
+
+- **Header CHANGES table was stale** (claimed local inflation 0.15 and a global
+  0.5 that was never in the file). Synced to the in-place annotations; rule-6
+  stripped diff vs upstream now clean.
+- **Robot drove too close to walls.** Local costmap `cost_scaling_factor`
+  5.0 → 3.0 (back to upstream): higher scaling = faster cost decay = cheaper
+  near-wall cells = MPPI hugs. If still too close next lever is local
+  `inflation_radius` 0.4 → 0.55. Needs `colcon build` + real-robot retest.
+- Literate docs synced to pending source changes: 04 (`Sequence[int]` uncopied
+  map view), 06 (`world_to_cell` floor fix, inset-adjusted cluster scoring),
+  08 (merge_tuning invariant, novelty telemetry keys); deleted
+  `11-sim_explore_launch.md` (source launch file removed).
+
+## Prior sessions (2026-07-18/20/21) — shipped + diagnosed
+
+- **F27 lethal-goal guard shipped + verified live** (code/tests done; sim T06 /
+  live T07 verification tasks still open). Robot no longer sends goals onto
+  lethal cells. Fixed the `on_goal_result` stale-callback race (live `TypeError`
+  crash) with regression tests.
+- **Mini-config crash tuning** (`nav2_params_explore_real_mini.yaml`):
+  `time_before_collision` 0.5→1.0, `robot_radius` 0.15→0.17 (true 0.16 + flared
+  post base), MPPI+smoother linear speed 0.5→0.25. `STUCK_T_S` 7→20 so the
+  explorer stops pre-empting Nav2 recovery.
+- **Wedge diagnosis:** start-wedged robot never moves; Nav2's inner recovery is
+  ClearLocalCostmap+retry (useless vs a real obstacle); Spin/BackUp live in the
+  outer recovery it never reaches within the stuck window. → **F29** custom
+  BackUp escape (feature written; collision_monitor source read 2026-07-21
+  upgraded the probe to mandatory — reverse may be gated by the static check).
+- **F28** (reason-tagged goal exclusion, per-reason TTL) and **F30**
+  (path-distance Dijkstra frontier ranking, replaces Euclidean — kills
+  through-wall goal picks) feature files written 2026-07-20/21. Neither has a
+  task file yet.
+- Pi is CPU-starved during nav: MPPI 8.6 Hz vs 20 desired; slam_toolbox TF
+  queue-full drops. Throughput problem, upstream of any tolerance tuning.
 
 ## Status
 
-Sim exploration works and the robot **drives and covers the map** (observed ~16
-goals over a ~9×9 m area in one run). Full sim stack (Gazebo + slam_toolbox +
-Nav2 + explore) comes up healthy. Real-robot Modes A/B/E have **not** been
-live-run — treat them as unverified.
+Sim exploration works; robot drives and covers the map (~16 goals over ~9×9 m).
+Full sim stack healthy. Real robot: explore runs but **start-wedged near an
+obstacle it stalls** (this session's investigation). Modes A/B not live-verified.
 
-**Performance ceiling — the dev VM has only 1 core** (`nproc` = 1, on an M2 Mac).
-Nav2 is multi-process and MPPI parallelizes across cores, so a single core (however
-fast) serializes everything: MPPI/NavFn solves block the action-server ACK
-callbacks → intermittent `Timed out while waiting for action server to acknowledge`
-aborts. **Highest-impact fix is to give the VM more vCPUs (→4–6), not more YAML.**
+**Dev VM has 1 core** — Nav2 is multi-process, so everything serializes:
+intermittent action-ACK timeouts. Highest-impact fix = more vCPUs (4–6), not YAML.
 
-Recent changes (2026-07-16, this session — **F23 T01–T03 decoupling landed**, no nav behavior change):
-- **F23 T01 — intent-carrying result:** `next_goal(ctx) -> GoalDecision`
-  (`NEW_GOAL(xy)/NO_TARGETS_BLOCKED/EXPLORED_DONE`, in `explore_context.py`).
-  Algorithm owns the done-condition; node dropped its `latest_clusters` done-peek.
-  `EXPLORED_DONE` ends the session immediately (hello no longer waits out patience).
-- **F23 T02 — viz/diag off the protocol:** protocol requires only `next_goal`.
-  Markers/exhaustion/failure/telemetry are OPTIONAL opaque hooks the node calls via
-  `getattr` (`render_markers`/`exhaustion_report`/`failure_report`/`telemetry_extra`/
-  `session_params`); new `RenderContext` carries node-general session state only.
-  Node reads **zero** algorithm internals; `latest_clusters`/`latest_diag` are now
-  private to `FrontierAlgorithm`.
-- **F23 T03 — split params:** new `frontier_params.FrontierParams` owns frontier
-  tuning; `ExploreParams` keeps only the shared set. Algorithm self-declares its ROS
-  params via `declare_params(node)`; the node declares **no** frontier param names.
-- **Node has no frontier params/tuning left** (session telemetry routes through the
-  opaque `session_params` hook). Remaining `frontier`/`cluster` hits in the node are
-  naming only (`no_frontier_count`, `NO_FRONTIER_PATIENCE`) + the registry default —
-  T04 audit / rename chore. `STUCK_T_S`/`GOAL_TIMEOUT_S` are navigation, node-owned.
-- Earlier this session: node renamed
-  `pluggable_explore_manager_node.py` → `explorer_manager_node.py`.
-  (`experiments.md` + `experiments/` were later deleted — see git history for the
-  Bug 1/Bug 2/CPU investigation log.)
-- **F22 (hello-world plugin):** T01–T02 done; hello updated for the F23 protocol
-  (declare_params no-op, no faked cluster state). T03–T05 pending.
-
-Earlier changes (2026-07-10):
-- **Feature files F14–F17 added** (no code changes):
-  - F14: `preferred_goal_distance` param replaces binary `prefer_farthest`; ranks
-    frontiers by `|d - preferred_dist|` instead of nearest/farthest.
-  - F15: path novelty scoring — Bresenham unknown-cell count on straight line to each
-    candidate; opt-in via `use_novelty_scoring` param.
-  - F16: periodic map save every 2 min (change default) + legacy PNG/YAML export via
-    `/slam_toolbox/save_map` service after each save.
-  - F17: telemetry filename rename — `e<map_name><dd-mmm>.json` replaces `exp-NNNN.json`;
-    dome_control CSV rename (`t<dd-mmm>.csv`) also documented here (change lives in dome_control).
-- **Real-robot telemetry analysis (`exp-0004.json`)**: identified that y≈0.7 corridor
-  is physically blocked on the real map; blacklist over-accumulation (radius 0.5 m)
-  caused premature "done". `controller_server` 70% CPU from MPPI (expected on Pi).
-  `nav2_params_explore_real.yaml` already runs `batch_size 1000` (halved from 2000 on
-  2026-07-09); remaining candidate fix: lower `controller_frequency` 20→10 Hz (and,
-  if still CPU-bound, `batch_size` 1000→500) for the real-robot explore config.
-
-Earlier 2026-07-09 changes: frontier buffer 1→2 cells, costmap-bounds goal reject,
-`prefer_farthest=True` (real), sequential telemetry, `dump_failure_diagnostics`,
-`paused_on_failure` + `exploration_resume`, MPPI/motion fixes.
-
-Known-but-unfixed nav tuning issues (none block basic exploration):
-- Intermittent action-ACK timeouts under load — **root cause is the 1-core VM** (above).
-- Planner choice unsettled: `nav2_params_explore_real.yaml` and `nav2_params_real.yaml` use
-  SmacPlanner2D; `nav2_params_explore_sim.yaml` uses NavFn.
-- `prefer_farthest=True` in sim; F14 will replace this with `preferred_goal_distance`.
-- Real-robot MPPI CPU load high (70%); candidate: `batch_size` 2000→500, freq 20→10 Hz.
+Known-but-unfixed nav tuning:
+- Planner choice unsettled: real configs SmacPlanner2D, sim NavFn.
+- Real-robot MPPI CPU high; candidates `batch_size` 1000→500, freq 20→10 Hz.
+- `FootprintApproach` `enabled: true` needs restoring in
+  `nav2_params_explore_sim.yaml` + `nav2_params_explore_real.yaml` (disabled for
+  diagnostics).
 
 ## Architecture essentials
 
 - **One explorer node for sim and real:** `explorer_manager_node.py`
-  (injected `ExplorationAlgorithm`, default `FrontierAlgorithm`). The old
-  `explore_manager_node.py` was deleted. Sim vs real differ only by ROS params.
-- **No YAML patching.** `config/` holds six standalone, commented copies of the
-  upstream defaults: `mapper_params_online_async.yaml`, `mapper_params_online_async_sim.yaml`, `nav2_params_real.yaml`
-  (Modes A/B nav), `nav2_params_localization_real.yaml` (Mode B AMCL),
-  `nav2_params_explore_real.yaml`, `nav2_params_explore_sim.yaml`. Launch files load these
-  verbatim via the standard `bl.include(...)`. `utils.py` config helpers are down
-  to `write_config` (+ `dome_home`/world helpers).
-- **slam** runs via standard `online_async_launch.py`. No `map_file_name` — maps
-  are persisted by `slam_manager_node` (`map_persist_path` = `--map_name`). Note:
-  re-running an existing `--map_name` **overwrites** rather than resumes.
-- **Gotcha — copy-install:** run `colcon build --packages-select dome_nav` after
-  every source edit before `bl`/`ros2 run` sees it.
-- **Gotcha — orphan processes:** stale nodes/`gz sim` across runs cause TF/clock
-  collisions. `ps` audit + explicit `kill -9` beats trusting `pkill -f`.
+  (injected `ExplorationAlgorithm`, default `FrontierAlgorithm`). Sim vs real
+  differ only by ROS params.
+- **F23 decoupling:** node knows nothing about frontiers. Protocol =
+  `next_goal(ctx) -> GoalDecision` (`NEW_GOAL/NO_TARGETS_BLOCKED/EXPLORED_DONE`);
+  viz/diag/telemetry are optional opaque hooks via `getattr`. Frontier params
+  self-declared by the algorithm (`frontier_params.FrontierParams`).
+- **No YAML patching.** `config/` holds standalone commented copies of upstream
+  defaults; launch files load them verbatim. Derived configs mark deltas with
+  `# UPSTREAM <val>: why`.
+- **slam** runs via upstream `online_async_launch.py`; maps persisted by
+  `slam_manager_node` (`--map_name`). Re-running an existing name **overwrites**.
+- **Gotcha — copy-install:** `colcon build --packages-select dome_nav` after
+  every source edit.
+- **Gotcha — orphan processes:** stale nodes/`gz sim` cause TF/clock collisions;
+  `ps` audit + `kill -9` beats `pkill -f`.
 
-## Key params (ROS params; real default / sim override)
+## Key params (real default / sim override)
 
-**Since F23 T03 the frontier params are owned + self-declared by `FrontierAlgorithm`**
-(`frontier_params.FrontierParams` / `declare_frontier_params`), not the node. Same
-ROS names, still yaml/launch-settable; the node declares only the shared set.
+Frontier params owned + self-declared by `FrontierAlgorithm`; node declares only
+the shared set.
 
-- `min_frontier_dist`: 0.5 / **0.9** m (raw frontier-cell floor; `goal_inset` 0.3 pulls the sent goal 0.3 m closer) — *frontier*
-- `max_frontier_dist`: 0.0 (unlimited) / **15.0** m — *frontier*
-- `min_frontier_size`: 15 default / **5** sim / launch overrides to 10 real — *frontier*
-- `frontier_buffer_cells`: 2 (known-cell rings between a frontier goal and unknown) — *frontier*
-- `goal_inset_m`: 0.3 — *frontier*
-- `preferred_goal_distance`: **1.0 m** (real) / **2.0 m** (sim) — *shared*; selects frontier cell with `min |d - preferred_dist|`; `prefer_farthest` deprecated (frontier)
-- `max_explore_radius`: 0.0 (unlimited); `blacklist_radius`: 0.5 m — *shared*
-- Node constants (navigation/session, not frontier): `EXPLORE_HZ` 1, `NO_FRONTIER_PATIENCE` 14 ticks (must exceed slam's 5 s `map_update_interval`), `GOAL_TIMEOUT_S` 25 s, `STUCK_T_S` 7 s, `MAX_GOAL_ATTEMPTS` 8
-- Sim goal checker: `yaw_goal_tolerance` ~π (goals sent with identity orientation; exploration doesn't care about final heading)
+- `min_frontier_dist`: 0.5 / **0.9** m; `max_frontier_dist`: 0.0 / **15.0** m
+- `min_frontier_size`: 15 default / **5** sim / 10 real (launch)
+- `frontier_buffer_cells`: 2; `goal_inset_m`: 0.3
+- `preferred_goal_distance`: 1.0 real / 2.0 sim — `min |d - preferred|`
+- `use_novelty_scoring`: False (F15, opt-in); `novelty_top_n`: 5
+- `max_explore_radius`: 0.0; `blacklist_radius`: 0.5 m
+- Node constants: `EXPLORE_HZ` 1, `NO_FRONTIER_PATIENCE` 14,
+  `GOAL_TIMEOUT_S` 25, `STUCK_T_S` 20, `MAX_GOAL_ATTEMPTS` 8,
+  `LETHAL_THRESHOLD` 99 (scaled OccupancyGrid — one scale, node + diagnostics)
 
 ## Launch
 
@@ -148,50 +124,66 @@ ROS names, still yaml/launch-settable; the node declares only the shared set.
 # Real robot — base stack first (no nav), then a mode:
 bl dome2 robot.launch.py --options "drivers control vision voice"
 bl dome_nav robot_map.launch.py --map_name <name>      # Mode A: mapping (slam)
-bl dome_nav robot_nav.launch.py                        # Mode B: AMCL nav (uses saved basement1 map)
+bl dome_nav robot_nav.launch.py                        # Mode B: AMCL nav
 bl dome_nav robot_explore.launch.py --map_name <name>  # Mode E: autonomous explore
 
-# Sim — single command (Gazebo launched inside sim_robot.launch.py):
+# Sim — single command:
 bl dome_nav sim_nav_full.launch.py --map_name <name> --world_name multi_room
-# sim_rviz.launch.py is a separate optional window.
+# sim_rviz.launch.py separate optional window.
+
+# Experiment harness (trimmed nav2, C2 CPU fix):
+bl dome_nav nav_experiment.launch.py
 ```
+
+`just_explorer.launch.py` is new + untracked (explorer node alone).
 
 ## Exploration control
 
 ```bash
-# start / stop (dome_control sends these; or by hand):
 ros2 topic pub --once /intent std_msgs/msg/String 'data: "{\"name\": \"exploration_start\", \"source\": \"cli\", \"slots\": {}}"'
 ros2 topic pub --once /intent std_msgs/msg/String 'data: "{\"name\": \"exploration_stop\",  \"source\": \"cli\", \"slots\": {}}"'
-ros2 topic echo /explore/status          # {"state","reached","failed",... goal_xy,dist_m,elapsed_s}
-tail -f ~/.dome/telemetry/e*.json       # e<mapname><dd-mmm>.json (F17); old exp-NNNN.json also present
+ros2 topic echo /explore/status
+tail -f ~/.dome/telemetry/e*.json       # e<mapname><dd-mmm>.json (F17)
 ```
 
-Intent contract: `nav go <label>`→`navigation_go {label}`, `nav cancel`→`navigation_cancel`,
-`nav explore`→`exploration_start`, `nav explore stop`→`exploration_stop`.
-`/explore/markers` (MarkerArray): frontiers (yellow), blacklist (red), goal (cyan).
+Intent contract: `nav go <label>`→`navigation_go {label}`, `nav cancel`→
+`navigation_cancel`, `nav explore`→`exploration_start`, `nav explore stop`→
+`exploration_stop`. `/explore/markers`: frontiers yellow, blacklist red, goal cyan.
+
+## Collision monitor probe commands (this investigation)
+
+```bash
+ros2 topic echo /collision_monitor_state                      # action change; 3=APPROACH, 1=STOP
+ros2 topic echo /collision_monitor/collision_points_marker    # base-frame points (lazy)
+# throttle = out/in cmd_vel linear.x ratio
+ros2 param set /collision_monitor FootprintApproach.enabled false   # dynamic escape toggle
+```
 
 ## Next steps
 
-1. **Give the dev VM 4–6 vCPUs** (currently 1) — single biggest reliability win.
-2. **Restore `FootprintApproach` `enabled: true`** in both `nav2_params_explore_sim.yaml`
-   and `nav2_params_explore_real.yaml` (currently disabled for diagnostics in both).
-3. **Delete `launch/sim_nav_default.launch.py`** (experimental bisect artifact).
-4. **F17 done** — telemetry files now named `e<map_name><dd-mmm>.json`; old `exp-NNNN.json` files coexist untouched. dome_control CSV rename (`t<dd-mmm>.csv`) still pending in dome_control.
-5. **F14 done** — `preferred_goal_distance` param replaces `prefer_farthest`; selection is `min |d - preferred_dist|`. `prefer_farthest` kept as deprecated alias (logs warning, maps True→max_frontier_dist). Sim default 2.0 m, real 1.0 m.
-6. **F16 done** — `save_period_sec` default 60→120 s; `export_legacy_map: bool = True` param; `/slam_toolbox/save_map` called after each posegraph save (best-effort).
-7. **F15 code done** — novelty scoring landed opt-in (`use_novelty_scoring`);
-   live verification (TF15 T05) pending.
-8. **Reduce MPPI CPU on real robot** — try `batch_size` 2000→500, `controller_frequency`
-   20→10 Hz in `nav2_params_explore_real.yaml`.
-9. **Real-robot verification (F10 T07)** — Modes A/B/E never run on hardware.
-10. *(none — F22 and F23 are closed)*
+1. **Finish gate probe** (points-in-footprint count + cmd_vel ratio + reverse
+   test) → decides F29 design. Then write TF29 with probe as T01.
+2. **Write TF30** (path-distance ranking, High) — biggest stall-input fix.
+3. **Give the dev VM 4–6 vCPUs.**
+4. **Restore `FootprintApproach` enabled** in both explore configs.
+5. TF27 T06 sim verify (lethal-goal guard skip log).
+6. TF15 T05 live verify (novelty on vs off).
+7. Real-robot retest of wall standoff (local `cost_scaling_factor` 5.0→3.0).
 
 ## In-flight features
 
-- **F22** hello-world plugin: **T01–T05 done**, feature closed.
-- **F23** decouple manager from frontier: **T01–T05 done**, feature closed.
-- **F26** indoor-survey algorithms paper: feature + TF26 created; T01–T05 not started.
+- **F27** lethal-goal guard: code+tests done, live-observed; T06 sim + T07 live
+  verification pending — feature open.
+- **F29** BackUp escape: feature file only; probe in progress (this session);
+  no TF29 yet.
+- **F30** path-distance ranking: feature file only; no TF30 yet.
+- **F28** reason-tagged exclusion: feature file only; no TF28 yet.
+- **F26** survey-algorithms paper: TF26 T01–T05 not started.
+- **F15** novelty scoring: code done; T05 live verify + literate regen pending.
+- **F10** exploration: T06 hardware questions + T07 live smoke pending.
+- **F09** dome_control integration: T04 live smoke pending.
+- **F05** rosbag integration test: not started, no task file.
 
 ## Open issues
 
-`05-issues/open/` is empty. I12 (interface leak) closed → converted to F23.
+`05-issues/open/` is empty.

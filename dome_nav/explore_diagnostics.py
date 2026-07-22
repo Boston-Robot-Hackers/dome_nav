@@ -13,6 +13,15 @@ from dome_nav.frontier_explorer import cell_to_world
 XY = tuple[float, float]
 SEP = "=" * 60
 
+# /global_costmap/costmap and /local_costmap/costmap are nav_msgs/OccupancyGrid:
+# Nav2 scales the raw 0-255 costmap onto this topic (lethal 254->100,
+# inscribed 253->99, unknown 255->-1). All cost reads here are on that scaled grid.
+LETHAL_COST = 100
+INSCRIBED_COST = 99
+# A goal on a lethal or inscribed cell puts the footprint in guaranteed collision,
+# so the planner rejects it — treat both as "do not send".
+LETHAL_THRESHOLD = INSCRIBED_COST
+
 # ComputePathToPose error codes (200 range), FollowPath error codes (100 range).
 NAV2_ERROR_CODES = {
     0: "NONE",
@@ -61,9 +70,9 @@ def costmap_radius_costs(
                 row.append("    ")
                 continue
             v = costmap.data[r * info.width + col]
-            if v == 254:
+            if v >= LETHAL_COST:
                 row.append("XXX")
-            elif v == 255 or v < 0:
+            elif v < 0:
                 row.append("???")
             elif dc == 0 and dr == 0:
                 row.append(f"[{v:3d}]")
@@ -201,7 +210,7 @@ def failure_costmap_lines(
     rc = costmap_cell_cost(cm, robot_xy) if robot_xy else None
     lines = [
         f"  {label:6s} costmap @ goal={gc!s:>4}  @ robot={rc!s:>4}"
-        f"  (lethal=254 inscribed=253 unknown=255)",
+        f"  (lethal={LETHAL_COST} inscribed={INSCRIBED_COST} unknown=-1)",
         f"  {label:6s} costmap 4-cell radius around GOAL (XXX=lethal ???=unknown):",
         f"      {costmap_radius_costs(cm, goal_xy, 4)}",
     ]
