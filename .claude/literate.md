@@ -18,6 +18,13 @@ Guidelines:
   are discussed
 - Each code block should be preceded by prose that motivates it
 - Call out any non-obvious choices, tradeoffs, or assumptions
+- Where appropriate, go beyond the source code and its comments: add insights or
+  explanations of the underlying algorithms or data structures (e.g. the theory,
+  complexity, or the classic technique the code implements) that a reader would
+  benefit from but that the code itself does not spell out
+- For more complex packages, where appropriate include a technical and
+  architectural design overview (how the pieces fit together, the key
+  abstractions, and the data/control flow across modules)
 
 Output format: a single Markdown document with alternating prose and fenced Python code blocks. Include diagrams of flow, algorithm, interesting or tricky data structures. Do not include the full program text. Put the file in the `01-literate/` directory.
 

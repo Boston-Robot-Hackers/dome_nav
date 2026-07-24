@@ -1,54 +1,112 @@
 ---
-version: "1.8"
-generated: "2026-07-22"
+version: "1.1"
+generated: "2026-07-24"
 ---
 
-# frontier_explorer.py — Frontier Detection from an Occupancy Grid
+# Frontier Detection and Goal Scoring — `frontier_explorer.py`
 
-This is the algorithmic heart of autonomous exploration, and it is deliberately
-pure: it takes a flat list of occupancy values plus grid geometry and returns
-where to go next, with no ROS, no TF, and no I/O. That purity is what lets the
-whole thing be tested against hand-drawn grids. The module answers three
-questions in sequence — *where are the frontiers?*, *which one should we drive
-to?*, and *where exactly should the goal go?* — plus a diagnostic helper for when
-the answer is "none."
+This is the algorithmic heart of the package: the pure-Python machinery that
+turns an occupancy grid into "where should the robot go next to see the most new
+world?" It has no ROS dependencies and no class hierarchy — just a family of
+functions over grids and coordinates, which makes every one of them directly
+testable (see `test/test_frontier_explorer.py`). `frontier_algorithm.py` wraps
+these functions behind the exploration protocol; here we study the ideas.
 
-## The grid model
+Frontier-based exploration is a classic robotics technique (Yamauchi, 1997): the
+*frontier* is the boundary between known-free space and the unknown beyond it.
+Drive to a frontier and your sensors reveal what lies past it, pushing the
+boundary outward. Repeat until no frontiers remain and the space is mapped. The
+file breaks the problem into four stages.
 
-A ROS `OccupancyGrid` is a 1-D array; `MapInfo` carries the geometry needed to
-map between a flat index and world coordinates.
-
-```python
-@dataclass
-class MapInfo:
-    width: int
-    height: int
-    resolution: float
-    origin_x: float
-    origin_y: float
+```mermaid
+flowchart TD
+    A["OccupancyGrid data"] --> B["1. find_frontier_clusters<br/>where is the unknown edge?"]
+    B --> C["2. build_registry<br/>which filters + scorers apply?"]
+    C --> D["3. cell_contexts<br/>flatten clusters to candidate cells"]
+    D --> E["4. select_cell<br/>normalize, weight, pick the min-cost cell"]
+    E --> F["goal world_xy"]
 ```
 
-Cells encode `0` = free, `-1` = unknown, `>0` = occupied. Index arithmetic is the
-recurring idiom: `row = idx // width`, `col = idx % width`, and back with
-`cell_to_world`, which returns the *center* of the cell:
+## Algorithmic background and complexity
+
+A few classic techniques hide behind these functions; naming them makes the code
+easier to reason about and to cost.
+
+- **Frontier-based exploration** (Yamauchi, 1997) rests on one insight: the most
+  information-rich place to go is the boundary of what you know, because that is
+  where a sensor sweep converts unknown cells to known ones fastest. Everything
+  here serves that idea.
+- **Multi-source BFS as a distance transform.** `clearance_field` seeds *every*
+  wall cell at distance 0 and relaxes outward. Seeding all sources at once yields
+  the distance to the *nearest* wall for every cell in a single sweep — the same
+  trick as a brushfire/`cv2.distanceTransform`, done on a graph. With diagonal
+  moves weighted √2 it approximates true Euclidean distance far better than a
+  4-connected (Manhattan) transform would.
+- **Bresenham line rasterization** (novelty, and line-of-sight in the demo) walks
+  a grid line using only integer additions — no floating point, no per-step
+  `sqrt` — which is why novelty scoring is cheap enough to run per candidate.
+- **Min-max feature normalization** is the standard fix for combining
+  incommensurable scores (meters vs cell-counts vs clearance) into one weighted
+  sum; without it the largest-magnitude term silently dominates.
+
+Rough per-tick cost, for a grid of `N = width·height` cells with `F` frontier
+cells and `C` surviving candidates and `S` scorers:
+
+| Stage | Work | Cost |
+|-------|------|------|
+| `find_frontier_clusters` | full-grid scan + ring walk + flood fill | `O(N)` |
+| `clearance_field` | multi-source relaxation BFS (8-conn) | `~O(N)` (cells re-enqueued a bounded number of times) |
+| `path_novelty_score` | Bresenham per candidate | `O(C · max(w,h))` |
+| `select_cell` | normalize + weighted sum | `O(S · C)` |
+
+The dominant term on a large map is the pair of `O(N)` grid sweeps
+(`find_frontier_clusters` and `clearance_field`), which is why the improvements at
+the end target *avoiding recomputation* rather than shaving constants.
+
+## Grid conventions
+
+The SLAM `/map` uses the standard occupancy encoding: `-1` unknown, `0` free,
+`100` occupied. We treat anything at or above a threshold as a wall:
 
 ```python
-def cell_to_world(idx, info):
+OCCUPIED_THRESHOLD = 65
+```
+
+Cells are stored as a flat row-major array; index `idx` is row `idx // width`,
+column `idx % width`. Two conversions bridge grid and world space:
+
+```python
+def cell_to_world(idx: int, info: MapInfo) -> tuple[float, float]:
     r, c = divmod(idx, info.width)
-    x = info.origin_x + (c + 0.5) * info.resolution
+    x = info.origin_x + (c + 0.5) * info.resolution   # +0.5 → cell center
     y = info.origin_y + (r + 0.5) * info.resolution
     return (x, y)
+
+
+def world_to_cell(xy, info):
+    # math.floor, not int(): int() truncates toward zero, so a point just left
+    # of the origin would land in cell 0 (in-bounds) instead of -1.
+    col = math.floor((xy[0] - info.origin_x) / info.resolution)
+    row = math.floor((xy[1] - info.origin_y) / info.resolution)
+    return (row, col)
 ```
 
-## What counts as a frontier (the buffer-ring definition)
+The `math.floor` vs `int()` note is a genuine correctness bug waiting to happen:
+`int(-0.3)` is `0`, silently placing an out-of-bounds point *inside* the grid.
 
-The classic definition of a frontier is "a free cell adjacent to unknown." This
-module uses a deliberately stricter one, and it is now *tunable* by depth. First
-we find the **boundary ring**: free cells that directly touch unknown. Then we
-walk `buffer_cells` rings of free cells *inward* from that boundary, each ring
-being the free cells 4-adjacent to the previous one that no shallower ring has
-already claimed. The last ring reached is the frontier — so every candidate goal
-sits exactly `buffer_cells` confirmed-known cells away from the ragged edge.
+## Stage 1 — finding frontier clusters (with a buffer)
+
+The naive frontier is any free cell touching an unknown cell. This code does
+something more deliberate: it walks *`buffer_cells` rings inward* from that raw
+boundary and treats the innermost ring as the frontier. Why? A goal placed right
+on the unknown edge tends to fail Nav2's `worldToMap` (it can fall just outside
+the costmap), and cells right at the seam are noisy. Backing off a couple of
+cells gives goals that sit safely in known-free space while still adjacent to the
+unknown.
+
+The algorithm proceeds in three moves:
+
+**Find the depth-0 boundary** — free cells 4-adjacent to any unknown:
 
 ```python
 boundary: set[int] = set()
@@ -59,11 +117,17 @@ for idx in range(width * height):
         if data[nb] == -1:
             boundary.add(idx)
             break
+```
 
+**Walk `buffer_cells` free-cell rings inward** — each ring is the set of
+unclaimed free cells adjacent to the previous ring. The *last* ring reached
+becomes the frontier:
+
+```python
 claimed: set[int] = set(boundary)
 ring: set[int] = boundary
-is_frontier: set[int] = set()
-for _ in range(max(1, buffer_cells)):
+is_frontier: set[int] = boundary
+for _ in range(buffer_cells):
     next_ring = set()
     for idx in ring:
         for nb in neighbors4(idx):
@@ -74,98 +138,73 @@ for _ in range(max(1, buffer_cells)):
     is_frontier = next_ring
 ```
 
-Why the extra step? Goals sitting *directly* on the ragged known/unknown boundary
-are exactly where Nav2's planners were historically unreliable (the NavFn "legal
-potential" bug) and where costmap geometry is most ambiguous. Keeping every
-candidate deeper into confirmed-known space made goals more reliably plannable —
-a real, hard-won design choice, not a cosmetic one.
-
-The default is now **`buffer_cells=2`** (was hard-coded to 1). The reason is
-concrete: the frontier detector reads the SLAM `/map`, but the goal is ultimately
-handed to Nav2's *global costmap*, which can lag the map by a cell or more at the
-growing edge. A goal one cell inside the map could still map *outside* the
-costmap, and the planner rejects it (`worldToMap` failure → `PLAN/NO_VALID_PATH`).
-A 2-cell buffer keeps goals further inside that seam. The tradeoff: a free region
-narrower than `2*buffer_cells+1` cells has no cell far enough from unknown and
-yields no frontier there — acceptable for a robot that can't fit such gaps
-anyway. `buffer_cells=1` reproduces the original single-ring behaviour.
-
-Adjacent frontier cells are then grouped into clusters by an 8-connectivity
-flood-fill, so a long wall-opening becomes one cluster rather than dozens of
-singletons:
+**Cluster the frontier cells** with a flood fill (8-connected), so each connected
+patch of frontier becomes one candidate region:
 
 ```python
 for seed in is_frontier:
-    if seed in visited: continue
+    if seed in visited:
+        continue
     cluster, stack = [], [seed]
     while stack:
         cell = stack.pop()
-        if cell in visited or cell not in is_frontier: continue
-        visited.add(cell); cluster.append(cell)
+        if cell in visited or cell not in is_frontier:
+            continue
+        visited.add(cell)
+        cluster.append(cell)
         for nb in neighbors8(cell):
             if nb not in visited and nb in is_frontier:
                 stack.append(nb)
     clusters.append(cluster)
 ```
 
-```mermaid
-flowchart TD
-    A["grid cells"] --> B["free cells touching unknown"]
-    B --> C["their known free neighbors = frontier cells"]
-    C --> D["8-connectivity flood fill"]
-    D --> E["clusters of frontier cell indices"]
-```
+The default `buffer_cells = 2` is the empirically chosen compromise between
+"close enough to the unknown to be worth visiting" and "far enough in to be a
+valid, reachable goal."
 
-## Picking the goal: nearest cell, not centroid
+## The clearance field — a distance transform
 
-`pick_best_frontier` chooses among clusters, and its most important decision is
-what point *within* a cluster to aim at. It uses a qualifying **cell**, not the
-cluster centroid. As of F23 the picker is a thin wrapper over
-`best_frontier_candidates`, which returns the top-`n` cells ranked by score (one
-best cell per surviving cluster); `pick_best_frontier` just takes the first:
+Some scorers want to know how *open* a cell is: a goal in the middle of a room is
+easier to reach than one wedged against a wall. `clearance_field` computes, for
+every cell, the distance (in cells) to the nearest wall. It is a **multi-source
+BFS distance transform**: seed the queue with every wall cell at distance 0, then
+relax outward, 8-connected, with diagonal steps costing √2.
 
 ```python
-def pick_best_frontier(clusters, info, robot_xy, params, blacklist=None, start_xy=None):
-    candidates = best_frontier_candidates(
-        clusters, info, robot_xy, params, blacklist, start_xy, top_n=1
-    )
-    return candidates[0] if candidates else None
+def clearance_field(data, info):
+    dist = [float("inf")] * (width * height)
+    queue = deque()
+    for idx, value in enumerate(data):
+        if value >= OCCUPIED_THRESHOLD:
+            dist[idx] = 0.0
+            queue.append(idx)
+    steps = ((-1,0,1.0),(1,0,1.0),(0,-1,1.0),(0,1,1.0),
+             (-1,-1,SQRT2),(-1,1,SQRT2),(1,-1,SQRT2),(1,1,SQRT2))
+    while queue:
+        idx = queue.popleft()
+        base = dist[idx]
+        for dr, dc, step in steps:
+            ...
+            if base + step < dist[nidx]:
+                dist[nidx] = base + step
+                queue.append(nidx)
+    return dist
 ```
 
-Inside a cluster, `best_cell_in_cluster` scores each cell by
-`abs((d - goal_inset_m) - preferred_goal_distance)` — the F14 change that
-replaced the old binary `prefer_farthest` flag, refined to score the goal
-*actually dispatched*: `nudge_toward_robot` (below) pulls the chosen cell
-exactly `goal_inset_m` closer along the same ray, so scoring the raw distance
-`d` biased selection about one inset too close. A `preferred_goal_distance` of
-0 reproduces nearest-first; a large value reproduces farthest-first;
-intermediate values aim for a comfortable step size. The centroid is used only for the `max_radius`
-cluster-level filter, never as the goal — because a frontier that *surrounds* the
-robot has a centroid ≈ the robot's own position, useless as a goal, while its
-cells are out at the boundary where the robot must go.
+A cell keeps `inf` only if *no* wall is reachable from it (a map with no walls at
+all) — callers read `inf` as "maximally open." Note this is a relaxation BFS, not
+strict Dijkstra, so a cell can be enqueued more than once; for the grid sizes
+here that is cheap and simpler than a priority queue.
 
-The filters stack per cell: **blacklist** (within `blacklist_radius` of a failed
-point) and the **`min_dist`/`max_dist`** distance band, plus cluster-level
-`min_size` and `max_radius`. Splitting selection into "collect candidates, then
-pick" is what makes the novelty re-ranking below possible without touching the
-filter logic.
+## The novelty score — Bresenham through the unknown
 
-## Path novelty scoring (F15, opt-in)
-
-Distance scoring answers "how far?" but not "how much *new* space does getting
-there reveal?" A robot re-traversing a mapped corridor to reach a far frontier
-learns little on the way. `path_novelty_score` estimates that payload: the count
-of **unknown** cells (`-1`) a straight line from the robot to the candidate
-crosses. More unknown cells crossed = more territory revealed by the trip.
-
-It needs the inverse of `cell_to_world` and an integer line. `world_to_cell`
-floors world coordinates back to a `(row, col)` — `math.floor`, not `int()`,
-because `int()` truncates toward zero and would land a point just left of the
-origin in cell 0 (in-bounds) instead of −1. `bresenham_cells` walks the
-integer raster line between two cells, both endpoints included:
+The other information-hungry scorer asks: *how much new territory does travelling
+to this goal reveal?* We approximate that by counting unknown cells on the
+straight line from robot to goal, using Bresenham's line algorithm to walk the
+raster:
 
 ```python
-def path_novelty_score(start_xy, end_xy, data, info):
+def path_novelty_score(start_xy, end_xy, data, info) -> int:
     r0, c0 = world_to_cell(start_xy, info)
     r1, c1 = world_to_cell(end_xy, info)
     score = 0
@@ -176,88 +215,183 @@ def path_novelty_score(start_xy, end_xy, data, info):
     return score
 ```
 
-Out-of-bounds cells are skipped rather than counted — the line may leave the grid
-near the edge. The score is over the *straight* line, not Nav2's eventual planned
-path: the planned path isn't known at selection time, and the straight-line
-approximation is cheap and directionally correct.
+More unknown cells crossed = more new map revealed by going there. It is pure
+integer arithmetic, out-of-bounds cells simply skipped.
 
-Re-ranking is a separate step so the default path is untouched.
-`pick_by_novelty` takes the pre-filtered, distance-ranked short-list and returns
-the highest-novelty candidate, keeping input order on ties (so distance breaks
-ties):
+## Stages 2–4 — the F31 scoring pipeline
+
+Older versions picked frontiers by a single criterion (nearest, or farthest).
+The **F31 pipeline** generalizes this into a small, composable scoring engine.
+The vocabulary:
 
 ```python
-def pick_by_novelty(candidates, robot_xy, data, info):
-    if not candidates:
-        return (None, 0)
-    best = candidates[0]
-    best_score = path_novelty_score(robot_xy, best, data, info)
-    for cand in candidates[1:]:
-        score = path_novelty_score(robot_xy, cand, data, info)
-        if score > best_score:
-            best_score, best = score, cand
-    return (best, best_score)
+Filter = Callable[[CellCtx], bool]        # True = keep
+Scorer = Callable[[CellCtx], float]       # raw cost, lower = better
+WeightedScorer = tuple[float, Scorer]     # weight 0.0 disables in place
 ```
 
-Cost stays negligible because novelty runs only on the short-list (≤ `novelty_top_n`,
-default 5), never on every frontier cell. The feature is off by default
-(`use_novelty_scoring=False`); `frontier_algorithm` wires the branch.
+Each candidate cell is described by a `CellCtx` bundle (its world position,
+distance to robot, clearance, the map, tuning, blacklist…). `build_registry`
+assembles the active filters and weighted scorers for this tick, adding the
+novelty and clearance tenants only when enabled:
 
-## Placing the goal off the boundary: `nudge_toward_robot`
+```python
+def build_registry(tuning, info, start_xy) -> Registry:
+    scorers = [(tuning.w_distance, score_distance_to_preferred)]
+    if tuning.use_novelty_scoring:
+        scorers.append((tuning.w_novelty, score_novelty))
+    cell_filters = [keep_off_blacklist, keep_within_dist_range]
+    if tuning.w_clearance > 0.0:
+        cell_filters.append(keep_clearance_floor)
+        scorers.append((tuning.w_clearance, score_clearance_bonus))
+    return Registry(
+        cluster_filters=[make_min_size_filter(tuning),
+                         make_max_radius_filter(tuning, info, start_xy)],
+        cell_filters=cell_filters,
+        scorers=scorers,
+    )
+```
 
-Even a buffer cell can sit near the costmap edge. `nudge_toward_robot` pulls the
-final goal a fixed `inset_m` back toward the robot:
+The scorers are small and each expresses one preference. Note the sign
+convention — everything is a *cost*, lower is better, so "more is better"
+quantities are negated:
+
+```python
+def score_distance_to_preferred(ctx):
+    reach = ctx.dist_to_robot_m - ctx.tuning.goal_inset_m  # account for the nudge
+    return abs(reach - ctx.tuning.preferred_goal_distance)
+
+def score_novelty(ctx):
+    return -float(path_novelty_score(ctx.robot_world_xy, ctx.world_xy,
+                                     ctx.map_data, ctx.map_info))
+
+def score_clearance_bonus(ctx):
+    return -ctx.clearance_cells   # more open = lower cost
+```
+
+### The key trick: per-scorer normalization
+
+Distance-to-preferred is in meters, novelty is a cell count, clearance is in
+cells — utterly different scales. Summing them raw would let whichever happens to
+have the biggest numbers dominate. So `select_cell` **min-max normalizes each
+scorer's column to [0, 1] across the surviving cells** before taking the weighted
+sum. Normalization is inherently cross-cell, so it lives in the selector, not in
+the scorers:
+
+```python
+def select_cell(cells, cell_filters, scorers):
+    survivors = [c for c in cells if all(f(c) for f in cell_filters)]
+    if not survivors:
+        return None
+    columns = [(weight, minmax_normalize([scorer(c) for c in survivors]))
+               for weight, scorer in scorers]
+    best_xy, best_cost = None, float("inf")
+    for i, cell in enumerate(survivors):
+        cost = sum(weight * col[i] for weight, col in columns)
+        if cost < best_cost:
+            best_cost, best_xy = cost, cell.world_xy
+    return best_xy
+```
+
+`minmax_normalize` has a carefully chosen degenerate case: when all values are
+equal (including a lone survivor, or an all-`inf` clearance column on a wall-less
+map), it returns **zeros** — a scorer that cannot discriminate must not sway the
+weighted sum. It compares `lo == hi` rather than the span so `inf` stays
+finite-safe:
+
+```python
+def minmax_normalize(values):
+    lo, hi = min(values), max(values)
+    if lo == hi:
+        return [0.0] * len(values)
+    return [(v - lo) / (hi - lo) for v in values]
+```
+
+### Per-cell, not per-centroid
+
+A crucial subtlety: selection is over individual *cells*, not cluster centroids.
+A ring-shaped frontier's centroid can land in the middle of the ring — an
+unknown or occupied cell that is not itself a frontier. Scoring every cell avoids
+that "hollow centroid" trap, and the blacklist is likewise per-cell.
+
+`pick_best_frontier` is the front door that runs all four stages, computing the
+clearance field only when clearance scoring is actually on:
+
+```python
+def pick_best_frontier(clusters, info, robot_xy, params, blacklist=None,
+                       start_xy=None, data=()):
+    registry = build_registry(params, info, start_xy)
+    use_clearance = params.w_clearance > 0.0 and bool(data)
+    clearance = clearance_field(data, info) if use_clearance else None
+    cells = cell_contexts(clusters, data, info, robot_xy, params,
+                          blacklist or set(), start_xy,
+                          registry.cluster_filters, clearance)
+    return select_cell(cells, registry.cell_filters, registry.scorers)
+```
+
+## The filters
+
+Cluster-level filters run first and cheaply (min size, max radius from start).
+Cell-level filters cull individual candidates:
+
+```python
+def keep_off_blacklist(ctx):
+    br = ctx.tuning.blacklist_radius
+    wx, wy = ctx.world_xy
+    return not any(math.sqrt((wx-bx)**2 + (wy-by)**2) < br
+                   for bx, by in ctx.blacklist)
+
+def keep_clearance_floor(ctx):
+    floor_m = ctx.tuning.robot_radius + ctx.tuning.clearance_margin_m
+    return ctx.clearance_cells * ctx.map_info.resolution >= floor_m
+```
+
+The clearance *floor* is a reachability guarantee (a goal the robot's body cannot
+fit into is worthless), kept deliberately low so corridors — whose maximum
+clearance is only half their width — still yield goals. The clearance *bonus*
+does the "prefer open space" work; the floor only rejects the impossible.
+
+## The final nudge
+
+The winning cell is a frontier point, close to the unknown edge. Before it
+becomes a Nav2 goal it is pulled `inset_m` back toward the robot, keeping it
+inside the costmap and off the unknown boundary:
 
 ```python
 def nudge_toward_robot(xy, robot_xy, inset_m):
-    dx, dy = robot_xy[0] - xy[0], robot_xy[1] - xy[1]
+    dx, dy = robot_xy[0]-xy[0], robot_xy[1]-xy[1]
     dist = math.sqrt(dx*dx + dy*dy)
     if dist < inset_m:
         return xy
     scale = inset_m / dist
-    return (xy[0] + dx * scale, xy[1] + dy * scale)
+    return (xy[0] + dx*scale, xy[1] + dy*scale)
 ```
 
-This keeps the sent goal inside known, navigable space and avoids Nav2
-`worldToMap` errors at the grid edge. (It's why `min_frontier_dist` is set 0.3 m
-higher than the desired sent-goal floor — see `explore_context`.)
+This is why `score_distance_to_preferred` subtracts `goal_inset_m`: the score
+must reflect where the goal will actually *end up* after the nudge, not the raw
+cell.
 
-## When nothing qualifies: `frontier_diag`
+## Diagnostics
 
-If `pick_best_frontier` returns `None`, the node needs to know *why* — was
-everything too small, all blacklisted, or all outside the distance band?
-`frontier_diag` does one extra pass to count exactly that, and is only called on
-the None path so it never taxes the normal case:
+When `pick_best_frontier` returns `None`, the node wants to know *why* — too many
+small clusters? all out of range? `frontier_diag` re-scans to bucket the
+clusters, and it is only called on the no-goal path so it never taxes the normal
+tick.
 
-```python
-def frontier_diag(clusters, info, robot_xy, min_size, min_dist, max_dist=0.0):
-    too_small = sum(1 for c in clusters if len(c) < min_size)
-    large = [c for c in clusters if len(c) >= min_size]
-    all_out_of_range = sum(
-        1 for cluster in large
-        if all(cell_out_of_range(cell_to_world(i, info), robot_xy, min_dist, max_dist)
-               for i in cluster)
-    )
-    return {"too_small": too_small, "large_clusters": len(large),
-            "all_cells_out_of_range": all_out_of_range}
-```
+## Observations and possible improvements
 
-Those three counts are what turn a mute "no frontier found" into an actionable
-telemetry record. (`cell_out_of_range` is the shared distance-band predicate,
-also used implicitly by the picker's own filters.)
-
-## Observations / possible improvements
-
-- **A full grid scan plus `buffer_cells` ring passes per call.** At current map
-  sizes and 2 Hz this is fine; for large maps a single pass that records the
-  boundary set would trim the work.
-- **`pick_best_frontier` has grown to eleven parameters.** They all matter, but
-  it's at the edge of readability — bundling the filter params (they already
-  travel together as `ExploreParams`) would tighten the signature.
-- **Buffer depth is now configurable** (`buffer_cells`, default 2). This closed a
-  real failure mode — goals landing in the seam between the SLAM map and the
-  smaller global costmap. A deeper buffer trades reach into narrow passages for
-  robustness; 2 has been the sweet spot in sim.
-- **`frontier_diag` recomputes `cell_to_world` for every cell of every large
-  cluster.** Only on the failure path, so acceptable, but it duplicates work the
-  picker just did.
+- **Straight-line novelty ignores walls.** `path_novelty_score` counts unknown
+  cells on the raster line even if a wall blocks the path — the robot could never
+  travel it. A line-of-sight cutoff (stop counting at the first wall) would make
+  novelty honest; the `algo_demo` tool already has a `has_line_of_sight` helper
+  that does exactly this.
+- **Euclidean distance-to-robot, not path distance.** `dist_to_robot_m` is
+  straight-line; the `CellCtx` comment already flags "path distance when F30
+  lands." A goal behind a wall looks closer than it is.
+- **`clearance_field` recomputes the whole grid every tick** it is enabled. For a
+  large map that is the tick's dominant cost. Caching it against the map's version
+  stamp, or computing it only near candidate cells, would cut that.
+- **Relaxation BFS re-enqueues cells.** Correct and simple, but a bucket/priority
+  queue would touch each cell fewer times on large maps.
+- **`find_frontier_clusters` scans every cell** to find the boundary. Tracking the
+  known/unknown boundary incrementally as the map grows would avoid the full sweep.

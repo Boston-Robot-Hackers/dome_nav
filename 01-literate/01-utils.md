@@ -1,29 +1,24 @@
 ---
-version: "2.3"
+version: "1.0"
 generated: "2026-07-24"
 ---
 
-# utils.py — Shared Launch Utilities for dome_nav
+# Launch Utilities — `utils.py`
 
-`utils.py` is the small pile of helpers the launch files lean on. It has no ROS
-dependencies and no side effects at import time, which is exactly what lets the
-pure-Python test suite exercise it directly. As of the 2026-07-08 config
-refactor it does much less than it used to: every YAML *patching* helper
-(`build_slam_config`, `patch_dock_db`, `yaml_override`, `yaml_patch_dict`,
-`deep_merge`) was deleted when the project moved from runtime patch-merges to
-standalone, committed config files. What remains are three concerns:
+Every launch file in `dome_nav` needs to answer the same handful of small
+questions before it can bring a robot up: *where does my persistent data live?
+which Gazebo worlds are actually installed? where should the robot spawn in this
+world? and how do I hand a big merged parameter blob to a node without leaking
+temp files?* `utils.py` is the shared answer to those questions. It is pure
+filesystem-and-config plumbing — no ROS, no nodes — which is exactly why it
+sorts first in the reading order: everything else leans on it.
 
-1. locating the DOME home directory,
-2. validating and mapping simulation world names, and
-3. writing a content-addressed config file (the one place a file is still
-   generated at launch time).
+## Where DOME keeps its state
 
-## Where does state live? `dome_home()`
-
-Everything the robot persists — saved maps, telemetry, the launch cache — lives
-under a single root. That root is `~/.dome` by default but can be relocated with
-the `DOME_HOME` environment variable, which is invaluable in tests (point it at a
-`tmp_path` and nothing touches the real home directory).
+The package writes maps, telemetry, and cached configs under a single home
+directory. Rather than hard-code a path, we honor a `DOME_HOME` environment
+variable and fall back to `~/.dome`, expanding `~` in either case so downstream
+`open()` calls never choke on an unexpanded tilde.
 
 ```python
 def dome_home() -> str:
@@ -31,16 +26,17 @@ def dome_home() -> str:
     return os.path.expanduser(os.environ.get("DOME_HOME", "~/.dome"))
 ```
 
-The function is deliberately trivial and called everywhere rather than caching a
-module-level constant — so a test that sets `DOME_HOME` via `monkeypatch.setenv`
-takes effect immediately, with no import-order surprises.
+The single point of truth matters: if this string were duplicated across launch
+files, a redirection for a test run (`DOME_HOME=/tmp/test`) would silently miss
+half of them.
 
-## Choosing a simulation world safely
+## Failing early on an unknown world
 
-The sim launch files take a `--world_name` argument. The naive approach — pass
-the name straight to Gazebo — fails late and opaquely ("file not found") if the
-name is wrong. Instead we validate up front against the worlds *actually
-installed*, so the error message can list the real choices.
+Gazebo's failure mode for a missing `.world` file is opaque — you get a "file
+not found" deep in the simulator's startup, long after the launch has committed
+to spinning up processes. We prefer to fail *before* that, with a message that
+tells the operator what they could have typed instead. So we list what is
+actually on disk and validate against it.
 
 ```python
 def available_worlds(worlds_dir: str) -> list[str]:
@@ -48,13 +44,8 @@ def available_worlds(worlds_dir: str) -> list[str]:
     return sorted(
         f[: -len(".world")] for f in os.listdir(worlds_dir) if f.endswith(".world")
     )
-```
 
-`available_worlds()` reads the installed `share/dome_nav/worlds/` directory at
-launch time — it is never a hardcoded list, so it cannot drift out of sync with
-what is actually shipped.
 
-```python
 def require_world_name(world_name: str, worlds_dir: str, usage: str) -> str:
     choices = available_worlds(worlds_dir)
     if world_name not in choices:
@@ -65,18 +56,18 @@ def require_world_name(world_name: str, worlds_dir: str, usage: str) -> str:
     return world_name
 ```
 
-The `usage` string is passed in by each caller so the error carries the exact
-`bl dome_nav <file>.launch.py --world_name <name>` hint for *that* launch file.
-This is a boundary-validation helper: it rejects bad input at the edge and then
-trusts the value downstream.
+The `usage` string is passed in by the caller so the error can name the exact
+command form (`bl dome_nav sim_robot.launch.py --world_name <name>`) rather than
+a generic complaint. This is the "guardrail at the boundary" pattern that recurs
+throughout the package: validate once, where the bad value enters, and phrase
+the error in the operator's own vocabulary.
 
-### Spawn points travel with the world
+## Per-world spawn points
 
-Each world was authored around a specific robot starting pose — `simple_room`
-uses a centered origin and spawns at `(-1, -1)`, while `multi_room` uses a
-bottom-left corner origin and spawns at `(1, 1)`. Coupling "which world" to
-"where the robot starts" by hand would be an easy source of mistakes, so the
-mapping lives in one table:
+A world and its natural robot-start location belong together — picking
+`multi_room` should not also mean remembering that its origin is `(1.0, 1.0)`.
+So the mapping lives here as data, with a sane `(0.0, 0.0)` default for worlds
+we have not annotated.
 
 ```python
 WORLD_SPAWN_XY: dict[str, tuple[float, float]] = {
@@ -84,24 +75,22 @@ WORLD_SPAWN_XY: dict[str, tuple[float, float]] = {
     "multi_room": (1.0, 1.0),
 }
 
+
 def world_spawn_xy(world_name: str) -> tuple[float, float]:
-    """Return the designed robot spawn (x, y) for a known world name."""
     return WORLD_SPAWN_XY.get(world_name, (0.0, 0.0))
 ```
 
-Selecting a world therefore also selects its spawn point automatically; the
-caller never repeats coordinates. Unknown names fall back to the origin — in
-practice `require_world_name()` has already rejected those, so the fallback is
-just defensive.
+## Content-addressed config caching
 
-## The one file still generated at launch: `write_config()`
+This is the most interesting function in the file, and the one that fixes a real
+bug. Launch files often need to hand a node a merged parameter set as a YAML
+file on disk (see `sim_robot.launch.py`, which cannot pass a 300-line URDF as a
+command-line argument). The naive approach — `NamedTemporaryFile` — leaks one
+file into `/tmp` per launch, forever.
 
-After the patching helpers were removed, only one launch input is still built at
-runtime rather than committed as a file: the `robot_state_publisher` params file,
-which embeds the (large, multi-line) URDF. `write_config()` serializes a dict to
-YAML under the launch cache.
-
-Its one non-obvious design choice is **content addressing**:
+Instead we render the config to YAML, hash the rendered bytes, and name the file
+after the hash. Identical configs collapse onto one file; repeated launches with
+the same params reuse it instead of accumulating.
 
 ```python
 def write_config(data: dict) -> str:
@@ -115,34 +104,41 @@ def write_config(data: dict) -> str:
     return path
 ```
 
-The filename is a hash of the rendered YAML. Identical configs therefore map to
-the same file and repeated launches reuse it, rather than accumulating a fresh
-temp file every run — the failure mode of the old `NamedTemporaryFile` approach,
-which leaked one file per launch into `/tmp`. `sort_keys=False` preserves the
-authored key order so the rendered file reads naturally.
+The design is *content-addressed storage* in miniature, the same idea Git uses
+for blobs. Two subtle choices are worth calling out:
+
+- **`sort_keys=False`** keeps the YAML in insertion order, so a human reading the
+  cached file sees the params in the order the launch author wrote them.
+- **Hashing the rendered string, not the dict**, means the cache key is exactly
+  the file content. Two dicts that render identically *are* the same cache entry,
+  which is the property we want.
 
 ```mermaid
 flowchart LR
-    A[launch file] -->|world_name| B[require_world_name]
-    B --> C[world_spawn_xy]
-    A -->|rsp params dict| D[write_config]
-    D -->|sha1 name| E[("DOME_HOME/launch_cache/*.yaml")]
-    C -->|spawn x,y| F[gazebo.spawn_model]
+    A["params dict"] --> B["yaml.dump<br/>(ordered)"]
+    B --> C["sha1[:16]"]
+    C --> D{"cache_dir/<br/>digest.yaml<br/>exists?"}
+    D -->|yes| E["reuse file"]
+    D -->|no| F["write file"]
+    E --> G["return path"]
+    F --> G
 ```
 
-## Observations / possible improvements
+## Observations and possible improvements
 
-- **`write_config` is now the module's only reason to depend on `yaml` and
-  `hashlib`.** If the URDF-params-file need ever goes away (e.g. `bl.node`
-  gains a first-class way to pass large parameters), this function and both
-  imports could be removed, leaving `utils.py` as pure path/validation helpers.
-- **The launch cache is never pruned.** Because names are content hashes it
-  won't grow unboundedly for a fixed set of configs, but distinct URDFs over
-  time will leave orphaned files. A tiny "delete entries older than N days"
-  sweep on launch would keep it tidy; not worth it yet.
-- **`world_spawn_xy` silently returns the origin for unknown worlds.** That's
-  safe only because `require_world_name` runs first. If a future caller uses
-  `world_spawn_xy` without that guard, an unknown world would spawn at `(0,0)`
-  with no warning — worth a raise-or-log if the two ever get decoupled.
-- **`available_worlds` does a directory listing on every call.** Negligible at
-  launch time, but if it were ever called in a hot path it should be cached.
+- **Collision handling is implicit.** A 16-hex-char SHA-1 prefix (64 bits) makes
+  accidental collisions astronomically unlikely, but a *deliberate* collision
+  would silently reuse the wrong config. For a launch cache this is a non-issue;
+  worth a one-line comment noting the truncation is a deliberate space/safety
+  trade.
+- **The cache never garbage-collects.** It grows one file per *distinct* config
+  rather than per launch, which is the whole point — but a long-lived robot that
+  sweeps many parameter combinations will still accumulate files. A small
+  "delete entries older than N days" sweep on startup would bound it.
+- **`available_worlds` does no caching.** It hits the filesystem on every call.
+  That is fine for launch-time use (called once), but if it ever moved into a hot
+  path it would want memoization.
+- **`require_world_name` returns the validated name** but most callers ignore the
+  return value and re-use their own variable. Returning it enables a
+  `world = require_world_name(world, ...)` idiom that some callers could adopt for
+  clarity.

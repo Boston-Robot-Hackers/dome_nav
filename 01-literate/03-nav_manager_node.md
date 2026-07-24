@@ -1,58 +1,64 @@
 ---
-version: "2.4"
-generated: "2026-07-08"
+version: "1.0"
+generated: "2026-07-24"
 ---
 
-# nav_manager_node.py — Intents In, Nav2 Goals Out
+# The Nav Manager Node — turning intents into Nav2 goals
 
-`NavManagerNode` is the ROS adapter for point-to-point navigation (Mode B: "go to
-the chair"). It is deliberately thin: all the *decisions* live in the pure
-`NavManager` (see `05-nav_manager.md`), and this node is the plumbing that wires
-ROS topics, the Nav2 action, and TF to that logic. The split is what keeps the
-brain unit-testable and the node boring.
+`nav_manager_node.py` is the ROS-facing half of the "go to that object" feature.
+It listens for high-level *intents* ("navigate to the chair"), looks up where the
+chair actually is, and drives Nav2's `NavigateToPose` action to get there. It is
+deliberately thin: every decision that can be made without ROS — parsing the
+intent JSON, choosing which of several candidate targets to head for, scoring
+localization quality — is delegated to a pure `NavManager` object (documented in
+`05-nav_manager.md`). This node's own job is the part that *cannot* be pure: TF
+lookups, action clients, publishers, and the ROS clock.
 
-## What it wires up
+That split — **pure policy in one class, I/O shell in another** — is the single
+most important idea in this file, and it is what makes the interesting logic
+unit-testable without a running ROS graph.
 
-The constructor is essentially a wiring diagram:
+## What flows in and out
 
-```python
-self.manager = NavManager()
-self.nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
-self.status_pub = self.create_publisher(String, "/dome_nav/nav_status", 10)
-self.loc_status_pub = self.create_publisher(String, "/dome_nav/localization_status", 10)
-self.loc_score_pub  = self.create_publisher(Float32, "/dome_nav/localization_score", 10)
-self.intent_sub  = self.create_subscription(String, "/intent", self.on_intent, 10)
-self.targets_sub = self.create_subscription(String, "/targets/confirmed", self.on_targets, 10)
+```mermaid
+flowchart LR
+    I["/intent"] --> N["NavManagerNode"]
+    T["/targets/confirmed"] --> N
+    A["/amcl_pose"] --> N
+    TF["map->base_footprint TF"] --> N
+    N --> S["/dome_nav/nav_status"]
+    N --> LS["/dome_nav/localization_status"]
+    N --> LC["/dome_nav/localization_score"]
+    N --> NAV["NavigateToPose action → Nav2"]
 ```
 
-Inputs: intents (commands), confirmed targets (from vision), and AMCL pose.
-Outputs: a nav status string and a localization status/score. In between sits a
-`NavigateToPose` action client and a TF listener for the robot's pose.
-
-### One subtle subscription: AMCL QoS
-
-`/amcl_pose` is latched, so a plain subscription can miss it. The node matches
-AMCL's QoS explicitly — reliable, transient-local, depth 1 — or it would silently
-never receive a pose:
+The node subscribes to three topics, publishes three, holds a TF listener, and
+owns one action client. Notice the QoS on `/amcl_pose`: AMCL latches its last
+pose with `TRANSIENT_LOCAL` durability, so we must match that to receive it.
 
 ```python
-amcl_qos = QoSProfile(depth=1,
-                      reliability=ReliabilityPolicy.RELIABLE,
-                      durability=DurabilityPolicy.TRANSIENT_LOCAL)
+amcl_qos = QoSProfile(
+    depth=1,
+    reliability=ReliabilityPolicy.RELIABLE,
+    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+)
 self.amcl_sub = self.create_subscription(
-    PoseWithCovarianceStamped, "/amcl_pose", self.on_amcl_pose, amcl_qos)
+    PoseWithCovarianceStamped, "/amcl_pose", self.on_amcl_pose, amcl_qos
+)
 ```
 
-This is the kind of ROS-boundary detail that has to live in the node, not the
-pure logic.
+A QoS mismatch here is a classic silent failure: a volatile subscriber never
+sees a transient-local latched publisher's last message, and you spend an hour
+wondering why localization status never updates.
 
-## The command path
+## The intent pipeline
 
-Intents arrive as JSON. The node hands the raw string to `NavManager.parse_intent`
-(which validates and extracts the action), then dispatches:
+An intent arrives as a JSON string. The node hands it straight to the pure
+manager, which returns either `None` (malformed/unknown) or an `(action, intent)`
+pair. The node only decides *what to do* with a well-formed action:
 
 ```python
-def on_intent(self, msg):
+def on_intent(self, msg: String):
     result = self.manager.parse_intent(msg.data)
     if result is None:
         self.get_logger().warning(f"Malformed or unknown intent: {msg.data!r}")
@@ -65,81 +71,104 @@ def on_intent(self, msg):
         self.navigation_cancel()
 ```
 
-The label comes from `slots.label` — the dome_control contract. `navigate_to_object`
-asks the manager for the nearest matching target, converts it to a `PoseStamped`
-in the `map` frame (including a yaw from `yaw_world` if present), waits for the
-action server, and sends the goal:
+## From label to pose
+
+`navigate_to_object` is where policy meets I/O. Choosing *which* confirmed target
+matching the label is nearest is pure logic — but it needs the robot's current
+position, which is a TF lookup. So the node fetches the pose, hands it to the
+manager, and gets back a target dict:
 
 ```python
-yaw = float(target.get("yaw_world", 0.0))
+def robot_xy_in_map(self) -> tuple[float, float] | None:
+    try:
+        tf = self.tf_buffer.lookup_transform("map", "base_footprint", rclpy.time.Time())
+        trans = tf.transform.translation
+        return (trans.x, trans.y)
+    except (tf2_ros.LookupException, tf2_ros.ExtrapolationException,
+            tf2_ros.ConnectivityException):
+        return None
+```
+
+If TF is unavailable the node warns and lets the manager fall back to the first
+match — navigation should degrade, not block. Once a target is chosen, the node
+builds the `PoseStamped`. The one piece of real geometry here is turning a yaw
+angle into a quaternion, using the half-angle identity for a rotation about Z:
+
+```python
+yaw = target.get("yaw_world", 0.0)
 goal_pose.pose.orientation.z = math.sin(yaw / 2.0)
 goal_pose.pose.orientation.w = math.cos(yaw / 2.0)
 ```
 
-Note this node sends a *real* orientation (from the target), unlike the explorer
-which sends identity — here the final heading is meaningful. Both guard rails
-that can fail — no target, missing `xyz_world`, no action server — publish a
-descriptive status and return rather than crash.
+## Driving the action, asynchronously
 
-## The async result chain
+Nav2's `NavigateToPose` is a long-running action, so everything is callback
+chained. The node sends the goal, and a `functools.partial` threads the `label`
+through each callback so status messages can name the target:
 
-Nav2 actions are asynchronous, so the outcome threads through callbacks, each
-publishing a status string the rest of the system can watch:
+```python
+future = self.nav_client.send_goal_async(goal)
+future.add_done_callback(functools.partial(self.on_goal_accepted, label=label))
+```
 
 ```mermaid
 sequenceDiagram
+    participant U as /intent
     participant N as NavManagerNode
     participant Nav2
-    N->>Nav2: send_goal_async
+    U->>N: navigation_go {label}
+    N->>N: find_nearest_confirmed(label, robot_xy)
+    N->>Nav2: send_goal_async(pose)
     Nav2-->>N: on_goal_accepted
-    Note over N: rejected produces goal_rejected:label
-    Nav2-->>N: on_goal_result
-    Note over N: SUCCEEDED produces done:label else failed:label
+    alt accepted
+        N->>Nav2: get_result_async()
+        Nav2-->>N: on_goal_result
+        N->>U: done:label / failed:label
+    else rejected
+        N->>U: goal_rejected:label
+    end
 ```
 
-`navigation_cancel` cancels the stored handle and reports `"cancelled"`.
+The `goal_handle` is stashed so a later `navigation_cancel` intent can cancel an
+in-flight goal. Each transition publishes a status string on
+`/dome_nav/nav_status` — `navigating:label`, `done:label`, `failed:label`,
+`goal_rejected:label`, `nav_unavailable`, or `no_target:label` — a compact wire
+protocol that a supervising process can watch.
 
 ## Localization reporting
 
-AMCL pose messages carry a covariance; the node passes it to
-`NavManager.check_localization` and caches the (status, score), then publishes
-both on a 1 Hz timer *and* immediately on each pose update:
+Independently of navigation, the node republishes localization health once per
+second (and immediately whenever a fresh AMCL pose arrives). It converts AMCL's
+6×6 pose covariance into a human-friendly `(status, score)` — again, pure logic
+in the manager — and publishes both:
 
 ```python
-def on_amcl_pose(self, msg):
+def on_amcl_pose(self, msg: PoseWithCovarianceStamped):
     status, score = self.manager.check_localization(list(msg.pose.covariance))
-    self.last_loc_status, self.last_loc_score = status, score
+    self.last_loc_status = status
+    self.last_loc_score = score
     self.publish_localization()
 ```
 
-The timer guarantees consumers see a value even before AMCL has published, and
-the immediate publish keeps it fresh.
+The 1 Hz timer means downstream consumers get a heartbeat even when AMCL is quiet,
+so "no message" unambiguously means "node is down" rather than "robot is holding
+still."
 
-## Robot pose from TF
+## Observations and possible improvements
 
-Target selection needs the robot's position, looked up from TF with a graceful
-`None` on the expected transient failures — and the node logs a warning but still
-proceeds (the manager falls back to the first match rather than blocking):
-
-```python
-def find_nearest_confirmed(self, label):
-    robot_xy = self.robot_xy_in_map()
-    if robot_xy is None:
-        self.get_logger().warning("map→base_footprint TF unavailable — returning first match.")
-    return self.manager.find_nearest_confirmed(label, robot_xy)
-```
-
-## Observations / possible improvements
-
-- **`on_nav_feedback` is an empty stub.** It's wired as the action feedback
-  callback but does nothing; either use it (publish progress/distance-remaining)
-  or drop the wiring.
-- **Status is an ad-hoc string protocol** (`done:label`, `failed:label`,
-  `nav_unavailable`, …). It works, but a structured JSON status (like
-  `/explore/status`) would be easier for consumers to parse and extend.
-- **`navigate_to_object` blocks up to 5 s** on `wait_for_server`. In the callback
-  thread that's usually fine, but a persistent-readiness check would avoid the
-  stall if Nav2 is briefly down.
-- **The manual quaternion from yaw** is correct but repeated wherever goals are
-  built; a tiny `yaw_to_quat` helper would DRY it across this node and any future
-  goal senders.
+- **`find_nearest_confirmed` is called twice-deep.** The node's wrapper fetches
+  the pose and delegates to the manager's method of the same name. The naming
+  collision is intentional (thin shell over pure core) but can confuse a reader
+  scanning for the "real" implementation — a `_impl` suffix or a comment pointer
+  would help.
+- **No feedback handling.** The action's periodic feedback (distance remaining,
+  recoveries) is ignored; only the terminal result is used. Surfacing feedback
+  would let `/dome_nav/nav_status` report progress, not just start/finish.
+- **`nav_unavailable` is terminal and silent to the caller's retry logic.** If
+  the action server is briefly down at goal time, the intent is simply dropped.
+  A short retry or a queued goal would make the feature more robust on a cold
+  Nav2 stack.
+- **The 1 Hz localization timer publishes even before any AMCL pose** (score 0.0,
+  status "localizing"). That is a reasonable default, but a consumer cannot
+  distinguish "genuinely lost" from "AMCL not started yet" — a distinct
+  "no_estimate" state would.

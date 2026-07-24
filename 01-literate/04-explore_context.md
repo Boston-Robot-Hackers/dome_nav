@@ -1,75 +1,104 @@
 ---
-version: "1.1"
-generated: "2026-07-22"
+version: "1.0"
+generated: "2026-07-24"
 ---
 
-# The Exploration Algorithm Contract
+# The Exploration Contract — `explore_context.py`
 
-`explore_context.py` is the narrow waist of the `dome_nav` exploration system.
-Everything else — the manager node, the frontier algorithm, the hello-world
-reference, and any future plugin — agrees to speak only the types and protocol
-defined here. Keeping this file small and free of ROS details makes it possible
-to unit-test algorithms without spinning up a full stack.
+Before a single frontier is detected, the exploration subsystem has to answer a
+design question: *how does the session manager talk to an exploration algorithm
+without knowing which algorithm it is?* `explore_context.py` is that answer. It
+contains no behavior — no loops, no ROS, no math — only the **data types and the
+protocol** that define the seam between the node (`explorer_manager_node.py`) and
+any pluggable strategy (`frontier_algorithm.py`, `hello_world_algorithm.py`).
 
-## What problem this solves
+Reading this file first is like reading an interface header: everything
+downstream makes sense once you know the shapes that cross the boundary. This is
+the "define the contract, then implement against it" pattern, and it is why a new
+exploration algorithm can be dropped in by satisfying one small protocol.
 
-An exploration algorithm needs information from the robot (map, pose, blacklist,
-tuning) and must return a decision (go here, blocked right now, or finished). The
-naive design would let the algorithm reach directly into the node: read fields,
-publish markers, declare parameters, inspect internal state. That collapses as
-soon as you want a second algorithm, because the second algorithm has different
-internals.
+## The shapes that cross the boundary
 
-The contract here inverts that dependency:
+Four dataclasses and one enum carry all the information. The organizing principle
+is **who owns what**: geometry and session state the node owns; tuning is split
+between shared (node-owned) and strategy-specific (algorithm-owned).
 
-- The **node** gathers session state and hands it to the algorithm as plain data.
-- The **algorithm** returns a self-describing decision.
-- Optional hooks (markers, diagnostics, telemetry) are opaque payloads the node
-  forwards without parsing.
+`MapInfo` is the occupancy grid's geometry, deliberately decoupled from any ROS
+message so pure functions can take it directly:
 
-This is the same shape as a strategy pattern, but with explicit data contexts
-instead of an object-oriented hierarchy.
+```python
+@dataclass
+class MapInfo:
+    width: int
+    height: int
+    resolution: float
+    origin_x: float
+    origin_y: float
+```
 
-## The decision type: `GoalDecision`
+`ExplorationContext` is the *input* to a decision: everything an algorithm needs
+to pick a goal this tick. Note the comment on `map_data` — the node passes the
+`OccupancyGrid`'s `array.array` **uncopied**, because copying a full map every
+tick was pure waste on the Pi.
 
-In earlier versions, `next_goal` returned `(x, y) | None`. That was lossy: `None`
-could mean "no usable target this tick" or "the map is fully explored." The node
-had to peek at frontier-specific state to tell them apart, which leaked the
-frontier algorithm into the manager.
+```python
+@dataclass
+class ExplorationContext:
+    """Read-only view; the node passes the OccupancyGrid's array.array uncopied."""
+    map_data: Sequence[int]
+    map_info: MapInfo
+    robot_xy: tuple[float, float]
+    blacklist: set[tuple[float, float]]
+    start_xy: tuple[float, float] | None
+    params: ExploreParams
+```
 
-`GoalDecision` fixes this with an explicit enum:
+## The decision, made self-describing
+
+An algorithm could return `None` to mean "no goal," but *why* there is no goal
+matters to the node: did the map run out of frontiers (session is genuinely
+done), or are there frontiers but all of them are filtered/blacklisted (blocked,
+worth retrying)? Collapsing those two into `None` would force the node to peek at
+the algorithm's internals to tell them apart. Instead, the outcome is named:
 
 ```python
 class GoalOutcome(Enum):
     NEW_GOAL = auto()
-    NO_TARGETS_BLOCKED = auto()
-    EXPLORED_DONE = auto()
+    NO_TARGETS_BLOCKED = auto()  # targets exist but all filtered/blacklisted
+    EXPLORED_DONE = auto()       # algorithm finished — end the session
+
 
 @dataclass(frozen=True)
 class GoalDecision:
     outcome: GoalOutcome
     xy: tuple[float, float] | None = None
+
+    @classmethod
+    def new_goal(cls, xy): return cls(GoalOutcome.NEW_GOAL, xy)
+    @classmethod
+    def blocked(cls): return cls(GoalOutcome.NO_TARGETS_BLOCKED)
+    @classmethod
+    def done(cls): return cls(GoalOutcome.EXPLORED_DONE)
 ```
 
-The three factory methods make the intended states easy to read at the call
-site:
+The three named constructors make call sites read like prose:
+`return GoalDecision.done()`. `frozen=True` makes the decision an immutable
+value — a returned decision cannot be mutated by the node before it is acted on.
 
-```python
-return GoalDecision.new_goal((1.5, 2.3))
-return GoalDecision.blocked()
-return GoalDecision.done()
+```mermaid
+flowchart TD
+    A["algorithm.next_goal(ctx)"] --> B{"outcome?"}
+    B -->|NEW_GOAL| C["node validates + sends goal"]
+    B -->|NO_TARGETS_BLOCKED| D["node debounces (patience)"]
+    B -->|EXPLORED_DONE| E["node ends session"]
 ```
 
-`EXPLORED_DONE` is a terminal state: the manager ends the session immediately,
-without waiting through a patience debounce. `NO_TARGETS_BLOCKED` is transient:
-the manager increments a counter, clears the blacklist once, and tries again
-later. This lets a coverage algorithm like frontier exploration distinguish
-"filtered out this tick" from "truly finished."
+## Splitting the tuning
 
-## Shared session parameters: `ExploreParams`
-
-`ExploreParams` holds the small set of tuning values that make sense for any
-coverage strategy, not just frontier detection:
+There are two kinds of knobs. Some are *session-level* and the node itself uses
+them (`blacklist_radius` drives the node's own reselection policy). Others are
+*strategy-specific* and belong to the algorithm (frontier cluster size, novelty
+weights — see `frontier_params.py`). The shared ones live here:
 
 ```python
 @dataclass
@@ -79,48 +108,32 @@ class ExploreParams:
     preferred_goal_distance: float = 1.0
 ```
 
-- `max_explore_radius` bounds how far from the start position the robot may go.
-- `blacklist_radius` defines the suppression neighborhood around failed goals.
-- `preferred_goal_distance` lets the user bias selection toward a particular
-  range, regardless of how the algorithm ranks candidates.
+Keeping strategy tuning *out* of this shared struct is what stops the contract
+from bloating every time a new algorithm needs a new knob.
 
-Notice what is deliberately absent: `min_frontier_size`, `frontier_buffer_cells`,
-`goal_inset_m`, and similar frontier-only knobs live in the algorithm's own
-parameter dataclass. The node does not know their names.
+## The protocol, with optional hooks
 
-## The algorithm input: `ExplorationContext`
-
-Each tick, the node assembles everything the algorithm needs into one value
-object:
+The algorithm interface is a `typing.Protocol` — structural, not inherited. A
+class *is* an `ExplorationAlgorithm` if it has the right methods; it need not
+import or subclass anything. Only `next_goal` is required. Everything else is
+optional and called via `getattr`, so a minimal algorithm implements exactly one
+method (see `hello_world_algorithm.py`).
 
 ```python
-@dataclass
-class ExplorationContext:
-    map_data: Sequence[int]
-    map_info: MapInfo
-    robot_xy: tuple[float, float]
-    blacklist: set[tuple[float, float]]
-    start_xy: tuple[float, float] | None
-    params: ExploreParams
+class ExplorationAlgorithm(Protocol):
+    def next_goal(self, ctx: ExplorationContext) -> GoalDecision: ...
+
+    def declare_params(self, node) -> None:
+        """Optional: declare/read the algorithm's ROS params in the node namespace."""
+        ...
 ```
 
-A few design choices are worth calling out:
-
-- `map_data` is typed `Sequence[int]`, and the node passes the
-  `OccupancyGrid`'s `array.array` **uncopied** — a read-only view, not a
-  defensive copy. The abstract type keeps algorithm implementations free of
-  ROS message imports while avoiding a per-tick copy of the whole grid.
-- `MapInfo` is a tiny dataclass with just the grid geometry. It originally lived
-  in `frontier_explorer.py`, but that created a dependency from the generic
-  protocol into a frontier-specific module, so it was moved here.
-- `blacklist` is passed as a set; the algorithm reads it but never mutates it.
-  Failure memory is session state, and session state belongs to the node.
-
-## The rendering context: `RenderContext`
-
-Visualization and diagnostics are optional hooks, but they still need the same
-node-owned session state that `next_goal` receives. `RenderContext` carries that
-state without any frontier-specific fields:
+The docstring enumerates the opaque hooks the node will *try* to call if present:
+`render_markers`, `exhaustion_report`, `failure_report`, `telemetry_extra`,
+`session_params`. "Opaque" means the node treats whatever comes back as a black
+box — it publishes the `MarkerArray`, logs the string, merges the dict — without
+understanding it. `RenderContext` is the read-only session snapshot handed to
+those viz/diagnostic hooks:
 
 ```python
 @dataclass
@@ -132,67 +145,29 @@ class RenderContext:
     blacklist: set[tuple[float, float]]
     goal_xy: tuple[float, float] | None
     params: ExploreParams
-    patience: int
+    patience: int  # node's no-target debounce threshold, for report labels
 ```
 
-`patience` was added later so that the frontier algorithm's exhaustion report
-can print the same debounce threshold the node is using, without hardcoding a
-duplicate constant.
+## Why this design pays off
 
-## The protocol: `ExplorationAlgorithm`
+The node never mentions "frontier." It builds an `ExplorationContext`, calls
+`next_goal`, switches on the `GoalOutcome`, and opportunistically calls hooks.
+Swap `FrontierAlgorithm` for anything satisfying the protocol and the node is
+unchanged. That is the entire payoff of putting the contract in its own,
+behavior-free module.
 
-The protocol itself requires only one method:
+## Observations and possible improvements
 
-```python
-class ExplorationAlgorithm(Protocol):
-    def next_goal(self, ctx: ExplorationContext) -> GoalDecision: ...
-
-    def declare_params(self, node) -> None:
-        ...
-```
-
-`declare_params` is optional for implementers; the node calls it once at
-construction so an algorithm can register its own ROS parameters in the node's
-namespace. `FrontierAlgorithm` uses this to declare frontier tuning.
-`HelloWorldAlgorithm` leaves it as a no-op.
-
-The optional visualization and diagnostics hooks are documented in comments but
-not listed as required protocol members. That keeps the barrier low for new
-plugins while still giving the node a consistent way to call them via
-`getattr`.
-
-## How the pieces fit together
-
-```mermaid
-flowchart LR
-    subgraph Node
-        A[assemble ExplorationContext]
-        B[call next_goal]
-        C[execute GoalDecision]
-    end
-    subgraph Algorithm
-        D[FrontierAlgorithm]
-        E[HelloWorldAlgorithm]
-    end
-    A --> B
-    B --> D
-    B --> E
-    D --> C
-    E --> C
-```
-
-The contract is intentionally thin. Any class that implements `next_goal` and
-optionally the hook methods can be dropped into the manager without changing the
-manager's code.
-
-## Observations for improvement
-
-- The optional hooks are documented as comments rather than typed Protocol
-  members. Adding them to the Protocol (or a companion mixin with no-op defaults)
-  would give plugin authors autocomplete and type checking.
-- `ExploreParams.blacklist_radius` is defined here but not declared as a ROS
-  parameter by the node, so it cannot be changed from launch/yaml. Exposing it
-  would make the blacklist neighborhood tunable at runtime.
-- As more algorithms are added, the shared param set may need to grow slowly and
-  deliberately. The temptation is to move every tuning knob into `ExploreParams`,
-  but that would recreate the frontier-leak problem F23 was meant to fix.
+- **`RenderContext` and `ExplorationContext` overlap** (map_info, robot_xy,
+  blacklist, params). They serve different call sites (decision vs. reporting)
+  and one is nullable where the other is not, so the duplication is defensible —
+  but a shared base or a note explaining the split would save a reader from
+  wondering.
+- **Optional hooks are stringly-typed.** `getattr(algo, "render_markers", None)`
+  has no static guarantee the signature matches. A set of `Protocol`s (one per
+  hook) or `runtime_checkable` checks would catch a mis-typed hook at load time
+  rather than at first call.
+- **`blacklist` as `set[tuple[float, float]]`** keys on exact float coordinates.
+  That works because the node stores canonical post-nudge points, but float-exact
+  set membership is fragile in general; the radius-based filtering in
+  `frontier_explorer.keep_off_blacklist` is what actually does the work.

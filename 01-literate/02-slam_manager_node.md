@@ -1,77 +1,127 @@
 ---
-version: "3.4"
-generated: "2026-07-17"
+version: "1.1"
+generated: "2026-07-24"
 ---
 
-# slam_manager_node.py — Persisting the Map That slam_toolbox Builds
+# The SLAM Manager — persisting the map at the right moment
 
-slam_toolbox happily builds a map in memory, but it only writes that map to disk
-when someone asks it to via its `serialize_map` service. `SlamManagerNode` is the
-"someone": a small **lifecycle** node whose entire job is to notice when a map
-exists and to serialize slam_toolbox's pose graph to disk — on first sight and
-(critically) at shutdown. Since the 2026-07-08 config refactor, slam_toolbox
-itself no longer carries a `map_file_name`, so this node is the *only* thing
-persisting maps. Each save also optionally exports a legacy PGM/YAML pair
-(`export_legacy_map`, default on). A periodic timer used to save every couple of
-minutes as well; F24 removed it — steady mapping now leans on the two
-event-driven saves.
+`slam_manager_node.py` has one job that sounds trivial and turns out to be
+subtle: **make sure the map slam_toolbox builds actually survives the process
+exiting.** It does not do any mapping itself — slam_toolbox does that. It
+watches `/map`, announces status, and drives slam_toolbox's serialization
+services so that a pose graph (and, optionally, a legacy PNG/YAML map) lands on
+disk. The subtlety is entirely about *timing*: an earlier version saved the map
+after the event loop had already stopped, and the save silently never happened
+(issue I01). Fixing that is why this is a **lifecycle node** rather than a plain
+one.
+
+## Background: what "serialize the pose graph" actually saves
+
+slam_toolbox is a **pose-graph SLAM** system, and knowing that explains why this
+node saves *two different things*. In pose-graph SLAM the map is not primarily an
+image — it is a graph whose nodes are robot poses and whose edges are constraints
+between them (odometry, and scan-to-scan matches). As the robot revisits a place,
+a loop-closure edge is added and the whole graph is re-optimized (a sparse
+nonlinear least-squares solve), which retroactively straightens drift across
+every pose at once. The occupancy grid you see on `/map` is a *rendering* of that
+graph, regenerated from the optimized poses and their scans.
+
+That is why "save the map" here means **serialize the pose graph**
+(`SerializePoseGraph`): the graph is the source of truth and can be reloaded to
+*continue* mapping or to relocalize. The optional legacy PGM/YAML export
+(`SaveMap`) is the flattened image — convenient for tools that only understand
+occupancy grids, but lossy: you cannot resume SLAM from a PNG. The node saves the
+graph first and treats the image as a disposable derivative, which is exactly the
+right priority.
 
 ## Why a lifecycle node
 
-The node's shape is dictated by one hard-won bug (I01): the map was being lost on
-shutdown. The original plain `Node` fired the final save asynchronously *after*
-`spin()` had already returned, so the callback never ran. Making this a
-`LifecycleNode` gives a real `on_shutdown` transition that runs before the node
-is destroyed, where a **synchronous** save can complete.
-
-The lifecycle also gives clean start/stop semantics for the subscription, the
-status publisher, and the service clients — each created in `on_configure` and
-torn down in `on_cleanup`/`on_shutdown`. (`on_activate`/`on_deactivate` carry no
-custom logic since F24 dropped the save timer they used to manage.)
+A ROS 2 `LifecycleNode` has explicit `configure → activate → … → shutdown`
+transitions with callbacks you can hook. That structure is what lets us run a
+*synchronous* final save during `on_shutdown`, before the node's entities are
+destroyed. A plain `Node` has no such hook; you are left firing an async service
+call from `main()`'s cleanup after `spin()` has returned — at which point nothing
+is spinning to deliver the response, so the callback never runs and the map is
+lost.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> unconfigured
-    unconfigured --> inactive: on_configure - subs, pub, clients
-    inactive --> active: on_activate
-    active --> inactive: on_deactivate
-    active --> finalized: on_shutdown - SYNC final save
-    inactive --> finalized: on_cleanup
+    [*] --> Unconfigured
+    Unconfigured --> Inactive: on_configure
+    Inactive --> Active: on_activate
+    Active --> Finalized: on_shutdown
+    Inactive --> Unconfigured: on_cleanup
+    note right of Active
+        subscribed to /map
+        first map triggers async save
+    end note
+    note right of Finalized
+        synchronous final save
+        BEFORE entities destroyed
+    end note
 ```
 
-## Where and when it saves
+## Configuration: wiring up subscriptions and clients
 
-The persist path is a parameter (`map_persist_path`, defaulting to
-`~/.dome/slam_map`) — the launch files set it to `~/.dome/slam_maps/<map_name>`,
-which is how `--map_name` reaches the saved file.
+`on_configure` creates everything the node talks through: a subscription to
+`/map`, a lifecycle publisher for status, and two service clients into
+slam_toolbox — one to serialize the pose graph, one to export a legacy map.
 
-Two triggers cause a save:
+```python
+def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
+    self.map_sub = self.create_subscription(OccupancyGrid, "/map", self.on_map, 10)
+    self.status_pub = self.create_lifecycle_publisher(
+        String, "/dome_nav/slam_status", 10
+    )
+    self.serialize_client = self.create_client(
+        SerializePoseGraph, "/slam_toolbox/serialize_map"
+    )
+    self.save_map_client = self.create_client(SaveMap, "/slam_toolbox/save_map")
+    return TransitionCallbackReturn.SUCCESS
+```
 
-1. **First map received** — proof slam is actually mapping, so capture it
-   immediately:
-   ```python
-   def on_map(self, msg):
-       first_map = not self.map_ready
-       if first_map:
-           self.map_ready = True
-           self.get_logger().info("Map received — slam_toolbox is mapping.")
-       self.status_pub.publish(String(data="mapping"))
-       if first_map:
-           self.save_map_async()
-   ```
-   `on_map` also publishes a `/dome_nav/slam_status` heartbeat every message so
-   the rest of the system can tell mapping is live.
-2. **Shutdown** — a final synchronous save (see below).
+The persistence path is a ROS parameter (`map_persist_path`), defaulting under
+`DOME_HOME` via the `dome_home()` helper from `utils.py`. A second parameter,
+`export_legacy_map`, decides whether we also emit the older PGM/YAML format that
+some tools still expect.
 
-Each successful pose-graph save then optionally fires the legacy PGM/YAML export
-via slam_toolbox's `save_map` service (`export_legacy_map`, default on),
-best-effort — a missing service warns rather than fails.
+## The save state machine
 
-## Async vs sync saving: the same request, two waits
+Two things trigger a save, and they use two *different* mechanisms for a
+deliberate reason.
 
-Both `save_map_async` and `save_map_sync` build the identical
-`SerializePoseGraph` request; they differ only in how they wait. The first-map
-path fires-and-forgets:
+**First map received → async save.** The moment the first `/map` arrives we know
+slam_toolbox is genuinely mapping, so we kick off a non-blocking save. Blocking
+here would stall the executor for no benefit — there is plenty of time before
+shutdown.
+
+```python
+def on_map(self, msg: OccupancyGrid):
+    first_map = not self.map_ready
+    if first_map:
+        self.map_ready = True
+    status = String()
+    status.data = "mapping"
+    self.status_pub.publish(status)
+    if first_map:
+        self.save_map_async()
+```
+
+**Shutdown → synchronous save.** At shutdown we cannot afford "fire and hope."
+We spin the future to completion right here, inside the transition callback,
+while the executor is still alive:
+
+```python
+def on_shutdown(self, state: LifecycleState) -> TransitionCallbackReturn:
+    if self.map_ready:
+        self.save_map_sync()
+    self.destroy_entities()
+    return TransitionCallbackReturn.SUCCESS
+```
+
+The two save methods share their setup (`prepare_save`, `serialize_request`) and
+differ only in how they await the result — `add_done_callback` versus
+`spin_until_future_complete`:
 
 ```python
 def save_map_async(self):
@@ -79,12 +129,7 @@ def save_map_async(self):
         return
     future = self.serialize_client.call_async(self.serialize_request())
     future.add_done_callback(self.on_save_done)
-```
 
-Shutdown must not fire-and-forget — it spins the call to completion before the
-node dies, which is the actual fix for I01:
-
-```python
 def save_map_sync(self):
     if not self.prepare_save():
         return
@@ -93,22 +138,67 @@ def save_map_sync(self):
     self.on_save_done(future)
 ```
 
-`prepare_save` is the shared guard: it ensures the target directory exists and
-waits up to 5 s for the `serialize_map` service, warning (not crashing) if
-slam_toolbox isn't there — a graceful degrade if the node is run without slam.
+Both funnel into `on_save_done`, which — on success — optionally chains the
+legacy export. That chaining is itself async (`export_legacy_map_async` →
+`on_legacy_save_done`), because the legacy export is a nice-to-have and its
+failure should only warn, never abort.
 
-## Observations / possible improvements
+```mermaid
+flowchart TD
+    A["/map first arrives"] --> B["save_map_async"]
+    S["on_shutdown"] --> C["save_map_sync<br/>(spin to completion)"]
+    B --> D["serialize pose graph"]
+    C --> D
+    D --> E["on_save_done"]
+    E -->|export_legacy_map| F["export_legacy_map_async"]
+    F --> G["on_legacy_save_done<br/>warn-only on failure"]
+```
 
-- **`on_map` publishes `"mapping"` on every single map message.** That's a lot of
-  redundant status traffic; a state-change-only publish (or a slow heartbeat
-  timer) would be lighter.
-- **Load/resume is not this node's job.** It only saves. With slam_toolbox's
-  `map_file_name` now dropped, there is no auto-resume of a prior map — re-running
-  a map name overwrites it. If incremental multi-session mapping is ever wanted,
-  this node (or the slam config) is where a load-on-start would go.
-- **The 5 s service timeout is duplicated** in `prepare_save` and
-  `save_map_sync`. Fine, but a single constant would document the intent.
-- **`main()` drives the lifecycle manually** (`trigger_configure` then
-  `trigger_activate`), so this node self-activates rather than waiting on an
-  external lifecycle manager — convenient standalone, but means it won't
-  participate in a coordinated bringup sequence.
+## The unusual `main`
+
+Because this is a lifecycle node driven without an external lifecycle manager,
+`main()` walks the transitions itself — configure, activate, spin, and on the
+way out, `trigger_shutdown()` inside the `finally` block so the synchronous save
+always gets its chance:
+
+```python
+def main():
+    rclpy.init()
+    node = SlamManagerNode()
+    node.trigger_configure()
+    node.trigger_activate()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            node.trigger_shutdown()
+        except Exception as e:
+            node.get_logger().warning(f"trigger_shutdown failed on exit: {e}")
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+```
+
+The `try/except` around `trigger_shutdown` is defensive: an exception there must
+not prevent `destroy_node`/`rclpy.shutdown` from running.
+
+## Observations and possible improvements
+
+- **Only the *first* map triggers an async save.** Between that first save and
+  shutdown, the map keeps growing but is not re-serialized. The synchronous
+  shutdown save is what captures the final, complete map — so a hard `kill -9`
+  (which skips `on_shutdown`) would leave only the near-empty first-map snapshot.
+  A periodic checkpoint save (every N seconds while mapping) would bound the loss.
+- **`destroy_entities` forgets the serialize client.** It nulls `map_sub`,
+  `status_pub`, and `save_map_client`, but not `serialize_client`. Harmless at
+  process exit, but inconsistent, and would matter under a real cleanup/reconfigure
+  cycle.
+- **The 5-second sync timeout is silent on expiry.** If serialization takes
+  longer than 5s at shutdown, `spin_until_future_complete` returns and
+  `on_save_done` runs against a future with no result — logged as an error, but
+  the map is still lost. A slow disk or a large pose graph could hit this.
+- **No lifecycle manager.** Driving transitions from `main()` is fine for a
+  standalone node, but it means this node cannot participate in a coordinated
+  Nav2-style bringup where a `lifecycle_manager` sequences everything together.

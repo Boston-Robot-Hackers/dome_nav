@@ -1,83 +1,83 @@
 ---
 version: "1.0"
-generated: "2026-07-17"
+generated: "2026-07-24"
 ---
 
-# Hello World Algorithm
+# Appendix — `hello_world_algorithm.py`
 
-`hello_world_algorithm.py` is the smallest plugin that still exercises the
-`ExplorationAlgorithm` protocol end to end. It ignores the map and drives the
-robot one fixed step forward in the map +x direction.
+The smallest possible exploration algorithm, and the template for writing a new
+one. It exists to answer a single question for anyone extending the package:
+*what is the absolute minimum I must implement to be a valid
+`ExplorationAlgorithm`?* The answer, demonstrated here, is: **one method.**
 
-## Purpose
+## The whole thing
 
-A reference plugin serves two roles:
-
-1. **Template.** New algorithm authors can copy it and replace the decision
-   logic without first understanding frontier clustering.
-2. **Seam test.** If the manager can run this trivial plugin, the plugin boundary
-   is real. If the manager only works with `FrontierAlgorithm`, the boundary is
-   leaky.
-
-It is registered under the name `hello` and can be selected at launch with the
-`explore_algorithm` ROS parameter.
-
-## State
-
-The algorithm has a single boolean of internal state:
+`HelloWorldAlgorithm` emits exactly one goal — a fixed distance straight ahead in
+the map's +x direction — and then reports done. It ignores the map entirely. That
+is intentionally useless as a real strategy but perfect as a reference: it shows
+the protocol's shape with nothing else in the way.
 
 ```python
-def __init__(self):
-    self.emitted = False
+class HelloWorldAlgorithm:
+    """Emits ONE goal a step ahead of the robot (map +x), then done. Ignores the map."""
+
+    def __init__(self):
+        self.emitted = False
+
+    def declare_params(self, node):
+        pass  # no tuning of its own
+
+    def next_goal(self, ctx: ExplorationContext) -> GoalDecision:
+        if self.emitted:
+            return GoalDecision.done()
+        self.emitted = True
+        rx, ry = ctx.robot_xy
+        return GoalDecision.new_goal((rx + ctx.params.preferred_goal_distance, ry))
 ```
 
-`emitted` tracks whether the one goal has already been handed out.
+## What it teaches
 
-## Decision logic
+Reading it against the protocol in `04-explore_context.md` makes three things
+concrete:
 
-```python
-def next_goal(self, ctx: ExplorationContext) -> GoalDecision:
-    if self.emitted:
-        return GoalDecision.done()
-    self.emitted = True
-    rx, ry = ctx.robot_xy
-    return GoalDecision.new_goal((rx + ctx.params.preferred_goal_distance, ry))
+- **Only `next_goal` is required.** The optional viz/diagnostic hooks
+  (`render_markers`, `telemetry_extra`, and friends) are simply *absent*. The node
+  calls them via `getattr` and falls back to a default when they are missing, so
+  omitting them costs nothing — no stubs, no `NotImplementedError`.
+- **`declare_params` can be a no-op.** An algorithm with no tuning of its own
+  still implements the hook, but its body is `pass`. Contrast with
+  `FrontierAlgorithm`, whose `declare_params` registers a dozen ROS parameters.
+- **`GoalDecision` is how you speak to the node.** One goal, then
+  `GoalDecision.done()` — the same `done` the node interprets as "session
+  complete." A minimal algorithm never needs `GoalDecision.blocked()`; that
+  distinction only matters when a strategy can be *temporarily* out of targets.
+
+It is also a structural (not inherited) match: the class subclasses nothing. It
+*is* an `ExplorationAlgorithm` purely because it has a `next_goal` with the right
+signature — the payoff of using a `typing.Protocol` for the contract.
+
+```mermaid
+flowchart TD
+    A["first next_goal"] --> B["emit goal:<br/>robot_x + preferred_goal_distance"]
+    B --> C["set emitted = True"]
+    D["second next_goal"] --> E["GoalDecision.done"]
 ```
 
-- First call: return a goal `preferred_goal_distance` meters ahead in map +x.
-- Subsequent calls: return `EXPLORED_DONE`, which ends the session immediately.
+## Using it
 
-The algorithm uses `preferred_goal_distance` as a step size, not as a preference
-toward a particular frontier distance. That is acceptable for a wiring demo, but
-a more descriptive parameter name would be clearer for this specific plugin.
+The node's registry lists it as `"hello"`, so
+`--explore_algorithm hello` (or the `explore_algorithm` ROS param) selects it —
+handy for smoke-testing the whole goal-sending / Nav2 pipeline without frontier
+detection in the mix. If Nav2 drives the robot one step forward and the session
+ends cleanly, the plumbing works and any remaining trouble is in the real
+algorithm.
 
-## No optional hooks
+## Observations and possible improvements
 
-`HelloWorldAlgorithm` implements only the required `next_goal` and the optional
-`declare_params` no-op. It has no markers, diagnostics, or extra telemetry. The
-node's `getattr`-based hook calls silently skip it.
-
-```python
-def declare_params(self, node):
-    pass  # no tuning of its own
-```
-
-## How it differs from FrontierAlgorithm
-
-| Aspect | FrontierAlgorithm | HelloWorldAlgorithm |
-|--------|-------------------|---------------------|
-| Map use | Reads every cell | Ignores |
-| Done condition | No frontier cells | One goal emitted |
-| Hooks | All implemented | None |
-| State | Clusters, diag, params | Single boolean |
-
-## Observations for improvement
-
-- The parameter name `preferred_goal_distance` is semantically odd here. For a
-  step-goal plugin, `step_distance` would be clearer.
-- It currently uses `preferred_goal_distance` as the step size, which is
-  semantically odd for a non-frontier plugin. A dedicated `step_distance` param
-  would be clearer.
-- A second hello-world variant that publishes its own marker (for example, a
-  single arrow showing the chosen direction) would be a good illustration of the
-  optional `render_markers` hook.
+- **The heading is ignored.** It always aims along map +x, regardless of which way
+  the robot faces, so the one goal may point into a wall. Reading the robot's yaw
+  from TF and stepping *forward* would make it a slightly more honest smoke test —
+  though at the cost of the radical simplicity that is its whole point.
+- **As a template it is undercommented for its purpose.** A short "to add a hook,
+  define a method named X returning Y" note in the file would turn it from an
+  example into documentation.

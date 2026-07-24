@@ -1,22 +1,50 @@
 ---
-version: "1.3"
-generated: "2026-07-08"
+version: "1.1"
+generated: "2026-07-24"
 ---
 
-# nav_manager.py — Pure Navigation Logic
+# `nav_manager.py` — the pure brain behind navigation
 
-`NavManager` is the brain of point-to-point navigation (Mode B: "go to the
-chair") with none of the ROS plumbing. It parses intents, remembers the set of
-known targets, picks the nearest matching one, judges whether localization has
-converged, and formats status strings. Every method takes plain data and returns
-plain data, which is the whole point: the ROS node (`nav_manager_node.py`) is a
-thin adapter around this, and this class is exhaustively unit-testable without a
-running graph.
+This is the counterpart to `nav_manager_node.py`. The node handles ROS; this
+class handles *thinking*. Every decision that can be made from plain data —
+parsing an intent, validating a target list, choosing the nearest matching
+target, translating AMCL covariance into a localization score — lives here, with
+zero ROS imports. The payoff is that all of it is unit-testable with ordinary
+Python values (see `test/test_nav_manager_pure.py`), no rclpy, no simulator, no
+TF.
 
-## Remembering targets
+The whole file is an exercise in **validating at the boundary and trusting
+afterward**. Data enters through two doors (`on_targets`, `parse_intent`); both
+are strict. Once past them, the rest of the code assumes clean data.
 
-Targets come from the vision system as a JSON array of dicts. `on_targets`
-validates and stores them, refusing anything that isn't a list:
+## Guarding the target boundary
+
+Confirmed targets arrive as a JSON array from perception. A malformed entry
+should not crash a later distance computation, so we filter the list down to
+*valid* targets once, at ingest, and store only those. Validity is precise: a
+dict with an `xyz_world` holding at least two numeric coordinates —
+
+```python
+def is_valid_target(target) -> bool:
+    if not isinstance(target, dict):
+        return False
+    xyz = target.get("xyz_world")
+    return (
+        isinstance(xyz, (list, tuple)) and len(xyz) >= 2
+        and all(
+            isinstance(coord, (int, float)) and not isinstance(coord, bool)
+            for coord in xyz[:2]
+        )
+    )
+```
+
+The `not isinstance(coord, bool)` clause is the kind of detail that only shows up
+after a bug: in Python `bool` is a subclass of `int`, so `True` would sail
+through an `isinstance(coord, (int, float))` check and later be used as a
+coordinate. Excluding it explicitly closes that hole.
+
+`on_targets` applies this filter and reports parse success as a bool, so the node
+can warn without needing to know *why*:
 
 ```python
 def on_targets(self, json_str: str) -> bool:
@@ -26,38 +54,38 @@ def on_targets(self, json_str: str) -> bool:
         return False
     if not isinstance(result, list):
         return False
-    self.confirmed_targets = result
+    self.confirmed_targets = [t for t in result if is_valid_target(t)]
     return True
 ```
 
-The boolean return lets the node log a warning on bad input rather than crash —
-validation at the boundary, then trust downstream. Each target dict is expected
-to look like `{"label": str, "xyz_world": [x, y, z], ...}`.
+## Guarding the intent boundary
 
-## Parsing intents
-
-`parse_intent` is the counterpart on the command side. It accepts only the two
-navigation intents and rejects everything else (including non-dict JSON) by
-returning `None`:
+`parse_intent` is the other door. It returns `None` for anything it does not
+recognize — bad JSON, non-dict, or an action outside the known set — and
+otherwise hands back the `(action, intent)` pair. Returning `None` rather than
+raising lets the node treat "unknown intent" as a warn-and-ignore, not a crash:
 
 ```python
 def parse_intent(self, json_str: str) -> tuple[str, dict] | None:
-    ...
+    try:
+        intent = json.loads(json_str)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(intent, dict):
+        return None
     action = intent.get("name", "")
     if action not in ("navigation_go", "navigation_cancel"):
         return None
     return (action, intent)
 ```
 
-Note it reads the `"name"` key — the dome_control intent contract. (This was
-once `"action"`, a mismatch that silently dropped every command; see the F09
-history.) Returning the whole intent dict alongside the action lets the caller
-pull `slots.label` without re-parsing.
+## Choosing the nearest target
 
-## Choosing the nearest match
-
-Given a label, `find_nearest_confirmed` returns the closest target of that label
-to the robot — with a deliberate fallback:
+Given a label and the robot's position, pick the closest confirmed target with
+that label. Because every stored target was validated at ingest, this method can
+trust `xyz_world` exists and is numeric — no defensive checks needed here. The
+graceful-degradation case is `robot_xy is None` (no pose available): rather than
+block navigation, fall back to the first match.
 
 ```python
 def find_nearest_confirmed(self, label, robot_xy):
@@ -67,21 +95,23 @@ def find_nearest_confirmed(self, label, robot_xy):
     if robot_xy is None:
         return matches[0]
     rx, ry = robot_xy
+
     def dist(target):
-        xyz = target.get("xyz_world", [0.0, 0.0, 0.0])
+        xyz = target["xyz_world"]
         return math.sqrt((xyz[0] - rx) ** 2 + (xyz[1] - ry) ** 2)
+
     return min(matches, key=dist)
 ```
 
-The `robot_xy is None` branch is the interesting design decision: if no pose is
-available, rather than *block* navigation, it falls back to the first match.
-Better to drive toward *a* chair than to refuse because localization hiccuped.
+Using `min(..., key=dist)` is both the clearest and the most efficient
+expression — one linear pass, no sort.
 
-## Judging localization
+## Reading localization health from covariance
 
-`check_localization` turns an AMCL covariance matrix into a human-friendly
-(status, score) pair. The covariance is a 36-element row-major 6×6; only the
-`xx` (index 0) and `yy` (index 7) diagonal terms matter for a 2D base:
+AMCL reports its confidence as a 6×6 pose covariance matrix, flattened to 36
+row-major floats. The diagonal entries `[0]` and `[7]` are the *x* and *y*
+position variances (in meters²). Big variance means the filter is unsure. We
+collapse that to a single 0–1 score and a status label:
 
 ```python
 def check_localization(self, covariance):
@@ -91,27 +121,62 @@ def check_localization(self, covariance):
     return (status, score)
 ```
 
-Score is `1 − worst/MAX_COV`, clamped to `[0, 1]`: 1.0 is fully converged, 0.0 is
-lost. `MAX_COV = 1.0` is the "lost" ceiling and `CONVERGED_THRESHOLD = 0.9` is
-the cutoff for calling it good. The clamp matters — without it a covariance above
-`MAX_COV` would produce a negative "score." (This clamp was issue I07.)
+**The theory behind the numbers.** AMCL is a particle filter: it represents the
+robot's pose belief as a cloud of weighted hypotheses. The 6×6 covariance it
+reports is the second moment of that cloud — geometrically, the *uncertainty
+ellipse* around the estimate. The two diagonal entries we read, `[0]` and `[7]`,
+are the variances of that ellipse along *x* and *y* (its axes, ignoring
+correlation); the off-diagonal terms we ignore only tilt the ellipse. A tight,
+converged filter has a small ellipse (low variance); a "kidnapped" or freshly
+initialized robot has a broad one. Taking `max(xx, yy)` reports the ellipse's
+worst semi-axis — honest, because localization is only as trustworthy as its
+least-certain direction. Squared meters are the natural unit (variance, not
+standard deviation), which is why `MAX_COV = 1.0 m²` — a 1-meter-ish spread — is a
+sensible "lost" ceiling.
+
+The design choices worth naming:
+
+- **Take the *worst* of the two axes.** Localization is only as good as its least
+  certain direction, so `max(xx, yy)` is the honest summary.
+- **`MAX_COV = 1.0` is the "lost" ceiling.** A variance at or above it maps to
+  score 0.0; a variance of 0 maps to 1.0. The `min/max` clamp keeps the score in
+  `[0, 1]` for any input.
+- **`CONVERGED_THRESHOLD = 0.9`** draws the line between "converged" and still
+  "localizing."
+
+```mermaid
+flowchart LR
+    A["36-elem covariance"] --> B["worst = max(xx, yy)"]
+    B --> C["score = clamp(1 - worst/MAX_COV)"]
+    C --> D{"score ≥ 0.9?"}
+    D -->|yes| E["converged"]
+    D -->|no| F["localizing"]
+```
+
+## Status string helper
+
+Finally, a tiny formatter for the node's status topic, keeping the wire vocabulary
+in one place:
 
 ```python
 def navigate_status(self, label, target):
-    return f"no_target:{label}" if target is None else f"navigating:{label}"
+    if target is None:
+        return f"no_target:{label}"
+    return f"navigating:{label}"
 ```
 
-`navigate_status` is just the string contract the node publishes.
+## Observations and possible improvements
 
-## Observations / possible improvements
-
-- **`MAX_COV = 1.0` is a magic ceiling.** It works, but a real covariance can
-  exceed 1.0 m² when badly lost, and the clamp then just pins the score at 0.
-  Whether 1.0 is the right normalizer is a tuning question worth revisiting on
-  hardware.
-- **Target dicts are duck-typed with `.get(..., default)` everywhere.** Forgiving,
-  but a malformed target (missing `xyz_world`) silently sorts as if at the
-  origin. If the vision contract is stable, validating target shape once in
-  `on_targets` would catch that at the boundary.
-- **`find_nearest_confirmed` recomputes distances on every call.** Negligible for
-  a handful of targets; irrelevant unless the target list grows large.
+- **The covariance→score mapping is linear and uncalibrated.** `MAX_COV = 1.0 m²`
+  is a reasonable but arbitrary ceiling; a real deployment would tune it (or use a
+  log/exponential mapping) against observed AMCL behavior on the actual robot.
+- **`find_nearest_confirmed` uses Euclidean distance**, not path distance. Two
+  targets equidistant in a straight line can differ greatly in travel cost when a
+  wall sits between the robot and one of them. Path-aware selection would need the
+  costmap, which this pure module deliberately does not have.
+- **Only two intents are recognized.** Extending the vocabulary means editing the
+  tuple in `parse_intent`; a set constant or a small registry would make the
+  supported actions self-documenting.
+- **`MAX_COV` and `CONVERGED_THRESHOLD` are class constants, not params.** Moving
+  them to `ExploreParams`-style tuning would let them be set per robot without a
+  code change.

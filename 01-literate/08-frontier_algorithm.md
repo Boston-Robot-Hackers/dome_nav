@@ -1,87 +1,42 @@
 ---
-version: "1.2"
-generated: "2026-07-22"
+version: "1.0"
+generated: "2026-07-24"
 ---
 
-# The Frontier Algorithm
+# The Frontier Algorithm — wrapping the pure core in a protocol
 
-`frontier_algorithm.py` is the default exploration strategy for `dome_nav`. It
-wraps the pure, ROS-free functions in `frontier_explorer.py` behind the
-`ExplorationAlgorithm` protocol, and it owns all frontier-specific tuning and
-state.
+`frontier_algorithm.py` is the adapter that makes the pure functions of
+`frontier_explorer.py` usable by the exploration node. It satisfies the
+`ExplorationAlgorithm` protocol from `explore_context.py`: given an
+`ExplorationContext`, return a `GoalDecision`. Everything the node knows about
+"frontier exploration" it knows *only* through this one small class — the node
+itself never mentions frontiers, clusters, or novelty.
 
-## What frontier exploration means here
+This file also owns the frontier-specific tuning defined in `frontier_params.py`,
+so we cover both here: the algorithm, and the parameter plumbing that feeds it.
 
-A frontier is the boundary between known free space and unknown space in the
-SLAM map. The robot drives to the frontier, observes what is beyond it, and the
-map grows. Repeating this process covers the environment.
+## Two kinds of state, and who owns them
 
-The algorithm is deliberately simple:
-
-1. Find clusters of frontier cells.
-2. Filter out clusters that are too small, too close, too far, or blacklisted.
-3. Pick the best remaining cell, nudge it slightly toward the robot, and return
-   it as the next goal.
-
-## Separation of concerns
-
-The module keeps three things distinct:
-
-- **Frontier detection math** lives in `frontier_explorer.py` and has no ROS or
-  algorithm state.
-- **Frontier tuning** lives in `frontier_params.py` and is declared/read as ROS
-  parameters.
-- **Protocol adaptation** lives here: state, `next_goal`, and optional hooks.
-
-This separation makes the math testable in isolation and keeps the algorithm
-module focused on wiring.
-
-## State owned by the algorithm
+The class holds a `FrontierParams` (its tuning) and some *latest-tick* state used
+only by the optional viz/diagnostic hooks — `latest_clusters`, `latest_diag`,
+`latest_novelty`. None of that state is protocol surface; the node never touches
+it directly. It exists so that `render_markers` and `telemetry_extra` can report
+on the decision `next_goal` just made.
 
 ```python
 class FrontierAlgorithm:
-    def __init__(self, frontier_params: FrontierParams | None = None):
-        self.latest_clusters: list[list[int]] = []
-        self.latest_diag: dict | None = None
-        self.latest_novelty: int | None = None
+    def __init__(self, frontier_params=None):
+        self.latest_clusters = []
+        self.latest_diag = None
+        self.latest_novelty = None
         self.frontier_params = frontier_params or FrontierParams()
 ```
 
-- `latest_clusters` stores the most recent frontier cell clusters. It is used
-  only by the optional visualization and diagnostics hooks, not by the protocol's
-  `next_goal` method.
-- `latest_diag` holds filter-stage counts when no frontier is chosen. It is
-  merged into `no_frontier` telemetry via the `telemetry_extra` hook.
-- `latest_novelty` holds the novelty score of the last chosen goal when path
-  novelty scoring (F15) is on, else `None`. Surfaced through `telemetry_extra`.
-- `frontier_params` is the algorithm's private tuning object.
+## The one required method
 
-These fields are no longer part of the `ExplorationAlgorithm` protocol. The node
-never reads them directly.
-
-## Parameter declaration
-
-The algorithm declares its own ROS parameters so the node does not need to know
-frontier parameter names:
-
-```python
-def declare_params(self, node):
-    self.frontier_params = declare_frontier_params(node)
-```
-
-`declare_frontier_params` lives in `frontier_params.py` and registers each tuning
-value in the node's namespace. Launch files and yaml configs can override them
-with the same names as before, but the manager node has no hardcoded knowledge
-of those names.
-
-`merge_tuning` also enforces one cross-parameter invariant at the merge
-boundary: `blacklist_radius` must exceed `goal_inset_m`. Exclusion coordinates
-are stored *post-nudge* but filtered against *raw* cluster cells, which sit
-`goal_inset_m` further out — a radius at or below the inset would let an
-excluded cell reselect every tick. Violation raises `ValueError` rather than
-silently clamping.
-
-## The decision loop
+`next_goal` is the whole contract. It merges the node's shared params with the
+frontier tuning, detects clusters, picks a target, and translates the result into
+the node's vocabulary of `GoalDecision`s:
 
 ```python
 def next_goal(self, ctx: ExplorationContext) -> GoalDecision:
@@ -92,7 +47,10 @@ def next_goal(self, ctx: ExplorationContext) -> GoalDecision:
     self.latest_clusters = clusters
     target = self.select_target(clusters, ctx, tuning)
     if target is None:
-        self.latest_diag = frontier_diag(...)
+        self.latest_diag = frontier_diag(clusters, ctx.map_info, ctx.robot_xy,
+            tuning.min_frontier_size, tuning.min_frontier_dist,
+            tuning.max_frontier_dist)
+        # No clusters -> done; clusters but all filtered -> blocked, not done.
         if not clusters:
             return GoalDecision.done()
         return GoalDecision.blocked()
@@ -101,112 +59,131 @@ def next_goal(self, ctx: ExplorationContext) -> GoalDecision:
     return GoalDecision.new_goal(goal)
 ```
 
-The logic encodes the three outcomes the manager understands:
+The most important line is the distinction the node depends on:
 
-- `NEW_GOAL`: a candidate survived all filters.
-- `NO_TARGETS_BLOCKED`: clusters exist but none are usable this tick.
-- `EXPLORED_DONE`: there are no frontier cells at all, so exploration is
-  complete.
+- **No clusters at all** → `GoalDecision.done()`. The map genuinely has no
+  frontiers left; the session is complete.
+- **Clusters exist but none survived filtering** → `GoalDecision.blocked()`. This
+  is transient — the map is still growing, the blacklist may clear — so the node
+  debounces rather than declaring victory.
 
-`nudge_toward_robot` pulls the goal slightly inward from the unknown edge. This
-is frontier-specific goal shaping, so it belongs in the algorithm rather than
-in the node.
+Collapsing these two into one "no goal" would rob the node of the ability to tell
+"finished" from "temporarily stuck." This is exactly why `GoalOutcome` is an enum
+and not a nullable coordinate.
 
-## Selecting the target: distance, or distance-then-novelty
+```mermaid
+flowchart TD
+    A["next_goal(ctx)"] --> B["find_frontier_clusters"]
+    B --> C["select_target<br/>(F31 pipeline)"]
+    C --> D{"target?"}
+    D -->|yes| E["nudge_toward_robot"]
+    E --> F["GoalDecision.new_goal"]
+    D -->|no| G{"any clusters<br/>at all?"}
+    G -->|no| H["GoalDecision.done"]
+    G -->|yes| I["GoalDecision.blocked"]
+```
 
-`next_goal` delegates the actual choice to `select_target`, which keeps the
-default fast path untouched and adds the F15 novelty branch behind a flag:
+`select_target` is a thin call into `pick_best_frontier`, plus one side effect:
+it stashes the winning goal's raw novelty count for telemetry, so per-goal
+algorithm state rides along with the goal itself.
 
 ```python
 def select_target(self, clusters, ctx, tuning):
-    if not tuning.use_novelty_scoring:
+    target = pick_best_frontier(clusters, ctx.map_info, ctx.robot_xy, tuning,
+        blacklist=ctx.blacklist, start_xy=ctx.start_xy, data=ctx.map_data)
+    if tuning.use_novelty_scoring and target is not None:
+        self.latest_novelty = path_novelty_score(
+            ctx.robot_xy, target, ctx.map_data, ctx.map_info)
+    else:
         self.latest_novelty = None
-        return pick_best_frontier(
-            clusters, ctx.map_info, ctx.robot_xy, tuning,
-            blacklist=ctx.blacklist, start_xy=ctx.start_xy,
-        )
-    candidates = best_frontier_candidates(
-        clusters, ctx.map_info, ctx.robot_xy, tuning,
-        blacklist=ctx.blacklist, start_xy=ctx.start_xy,
-        top_n=tuning.novelty_top_n,
-    )
-    target, score = pick_by_novelty(
-        candidates, ctx.robot_xy, ctx.map_data, ctx.map_info
-    )
-    self.latest_novelty = score if target is not None else None
     return target
 ```
 
-With scoring off, this is exactly the old `pick_best_frontier` call. With it on,
-the algorithm asks for the top-`novelty_top_n` distance candidates and re-ranks
-them by how much unknown space each straight-line path crosses (see
-`frontier_explorer`). The chosen goal's score is stashed in `latest_novelty` for
-telemetry. Because the branch only re-orders an already-filtered short-list, all
-the filtering guarantees of the default path still hold.
+## The optional hooks
 
-## Optional hooks
-
-The algorithm implements all the optional hooks so the node can render markers,
-log exhaustion reports, and append diagnostics on failure:
+The remaining methods are the opaque hooks the node calls *if present* (via
+`getattr`). Each delegates to a formatting or marker-building helper and returns
+something the node treats as a black box:
 
 ```python
-def render_markers(self, rc: RenderContext) -> MarkerArray:
-    return build_explore_markers(...)
+def render_markers(self, rc):        # -> MarkerArray for RViz
+def exhaustion_report(self, rc):     # -> human string: why exploration ended
+def failure_report(self, rc):        # -> human string: cluster summary on failure
+def telemetry_extra(self):           # -> dict merged into telemetry rows
+def session_params(self):            # -> dict logged at session start
+```
 
-def exhaustion_report(self, rc: RenderContext) -> str:
-    tuning = merge_tuning(rc.params, self.frontier_params)
-    return format_frontier_exhaustion(...)
+`telemetry_extra` is a good illustration of the pattern — it publishes the
+algorithm's private latest-tick state as an opaque dict the node merges blindly:
 
-def failure_report(self, rc: RenderContext) -> str:
-    return format_cluster_summary(self.latest_clusters, rc.map_info)
-
+```python
 def telemetry_extra(self) -> dict:
     diag = self.latest_diag or {}
     extra = {"raw_clusters": len(self.latest_clusters), **diag}
     if self.latest_novelty is not None:
         extra["novelty_score"] = self.latest_novelty
     return extra
-
-def session_params(self) -> dict:
-    fp = self.frontier_params
-    return {
-        "min_frontier_dist": fp.min_frontier_dist,
-        "max_frontier_dist": fp.max_frontier_dist,
-        "goal_inset": fp.goal_inset_m,
-        "min_frontier_size": fp.min_frontier_size,
-        "use_novelty_scoring": fp.use_novelty_scoring,
-        "novelty_top_n": fp.novelty_top_n,
-    }
 ```
 
-The node treats each return value as opaque. It does not know what a cluster is;
-it only knows that the algorithm handed back a `MarkerArray`, a string, or a
- dictionary.
+## The parameter plumbing (`frontier_params.py`)
 
-## Data flow
+Frontier tuning is split into three pieces, and the split is deliberate:
 
-```mermaid
-flowchart TD
-    A[ExplorationContext] --> B[merge_tuning]
-    B --> C[find_frontier_clusters]
-    C --> S{use_novelty_scoring?}
-    S -->|no| P[pick_best_frontier]
-    S -->|yes| N[best_frontier_candidates then pick_by_novelty]
-    P --> D{target found?}
-    N --> D
-    D -->|yes| E[nudge_toward_robot]
-    E --> F[GoalDecision.new_goal]
-    D -->|no clusters| G[GoalDecision.done]
-    D -->|filtered out| H[GoalDecision.blocked]
+- **`FrontierParams`** — the algorithm's own defaults, self-declared as ROS
+  parameters. Keeping these names out of the node means the node has no idea what
+  `min_frontier_size` or `w_novelty` are.
+- **`FrontierTuning`** — the *merged, per-tick* view combining shared
+  (`ExploreParams`) and frontier fields, which is what the pure functions and
+  diagnostics actually consume.
+- **`merge_tuning`** — the function that combines them, and enforces one
+  invariant at the boundary.
+
+That invariant is subtle and worth understanding. Blacklist coordinates are
+stored *post-nudge* (the goal after `nudge_toward_robot` pulled it `goal_inset_m`
+inward), but the blacklist filter runs against *raw* frontier cells that are
+`goal_inset_m` farther out. If the blacklist radius were smaller than the inset,
+an excluded cell's raw counterpart would sit outside the exclusion radius and get
+reselected every single tick — an infinite loop. So:
+
+```python
+def merge_tuning(shared, frontier) -> FrontierTuning:
+    if shared.blacklist_radius <= frontier.goal_inset_m:
+        raise ValueError(
+            f"blacklist_radius ({shared.blacklist_radius}) must exceed "
+            f"goal_inset_m ({frontier.goal_inset_m}); exclusion is stored "
+            "post-nudge but filtered against raw cells.")
+    ...
 ```
 
-## Observations for improvement
+Declaring the params keeps every frontier name in one place, `declare_frontier_params`,
+which the node calls once at startup via the protocol's `declare_params` hook:
 
-- `render_markers` uses `self.frontier_params.min_frontier_size` directly instead
-  of the merged `tuning`. That is usually fine, but it means a shared override of
-  `min_frontier_size` would affect goal selection without affecting marker
-  filtering. Using the merged value would be more consistent.
-- `session_params` omits `frontier_buffer_cells` and `prefer_farthest`. Adding them
-  would make telemetry more complete.
-- `prefer_farthest` is deprecated but currently remapped silently. A visible
-  deprecation warning would help users migrate to `preferred_goal_distance`.
+```python
+def declare_frontier_params(node) -> FrontierParams:
+    defaults = FrontierParams()
+    node.declare_parameter("min_frontier_size", defaults.min_frontier_size)
+    node.declare_parameter("use_novelty_scoring", defaults.use_novelty_scoring)
+    node.declare_parameter("w_clearance", defaults.w_clearance)
+    ...
+    return FrontierParams(
+        min_frontier_size=node.get_parameter("min_frontier_size").value, ...)
+```
+
+## Observations and possible improvements
+
+- **Several params are deprecated but still declared.** `prefer_farthest` (mapped
+  to a `preferred_goal_distance` sentinel inside `merge_tuning`) and
+  `novelty_top_n` (a retired no-op) linger for backward compatibility. A cleanup
+  pass could drop them, or at least route their declarations through a
+  `_DEPRECATED` list so they are obviously legacy.
+- **`merge_tuning` restates every field by hand.** The `FrontierParams` →
+  `FrontierTuning` copy is fifteen lines of `field=frontier.field`. If the two
+  dataclasses stay in lockstep, a `dataclasses.asdict` merge would remove the
+  transcription risk.
+- **`declare_frontier_params` lists each param name three times** (declare, get,
+  construct). A table of `(name, default)` tuples driving all three would make
+  adding a param a one-line change and eliminate the copy-paste.
+- **`latest_novelty`/`latest_diag`/`latest_clusters` are mutable per-tick state**
+  on a shared object. Fine single-threaded, but if the node ever ran ticks
+  concurrently these would race; the state properly belongs to the decision, not
+  the algorithm instance.

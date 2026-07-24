@@ -1,129 +1,155 @@
 ---
-version: "1.2"
-generated: "2026-07-08"
+version: "1.0"
+generated: "2026-07-24"
 ---
 
-# algo_demo.py — Seeing the Frontier Algorithm Think
+# `algo_demo.py` — watching the frontier algorithm think
 
-`algo_demo.py` is a developer tool, not part of the robot. It runs the *real*
-`FrontierAlgorithm` against small hand-drawn ASCII maps and animates the result
-in a color terminal, so you can watch how frontier detection, clustering, goal
-selection, blacklisting, and the lidar reveal behave — without Gazebo, ROS, or a
-robot. Because it calls the same pure functions the node uses
-(`find_frontier_clusters`, `pick_best_frontier`, `nudge_toward_robot`,
-`frontier_diag`), what you see here is exactly what the robot's brain would
-decide given the same map.
+`tools/algo_demo.py` is a standalone teaching and debugging tool: it runs the
+real `FrontierAlgorithm` against tiny hand-drawn ASCII maps and animates the
+exploration in a color-coded terminal, step by step. No ROS, no simulator, no
+robot — just the pure detection and scoring functions from
+`frontier_explorer.py` driven by a fake sensor model. It is the fastest way to
+build intuition for *why* the algorithm picks the goals it does, and to reproduce
+a selection bug in seconds rather than minutes of Gazebo.
 
 ```
-python3 tools/algo_demo.py --map compound --min-size 3 --auto
+python3 tools/algo_demo.py --map compound --inset 0.3 --min-size 5 --auto
 ```
 
-## Maps as strings
+## The idea: a robot in a text file
 
-The whole point is that a map is just text you can edit: `?`=unknown, `0`=free,
-`#`=wall, `R`=robot start. Several built-ins (`room`, `corridor`, `ring`, `maze`,
-`large`, `compound`) exercise different topologies — the `ring` map, for
-instance, exists specifically to demonstrate why goal selection uses the nearest
-*cell* and not the cluster centroid (a ring's centroid is the robot's own
-position).
+A map is just rows of characters — `#` wall, `0` free, `?` unknown, `R` robot
+start. `parse_map` converts them to the same `-1/0/100` occupancy encoding the
+real grid uses, so the algorithm sees exactly what it would on the robot:
 
 ```python
+CELL_FREE, CELL_OCC, CELL_UNK = 0, 100, -1
+
 def parse_map(rows):
-    ...
-    for ch in row.ljust(width):
-        if ch in ("0", "R"):  data.append(CELL_FREE)
-        elif ch == "#":       data.append(CELL_OCC)
-        else:                 data.append(CELL_UNK)
+    height, width = len(rows), max(len(r) for r in rows)
+    data = []
+    for row in rows:
+        for ch in row.ljust(width):
+            data.append(CELL_FREE if ch in ("0", "R")
+                        else CELL_OCC if ch == "#" else CELL_UNK)
     info = MapInfo(width=width, height=height, resolution=1.0,
                    origin_x=0.0, origin_y=0.0)
+    return data, info
 ```
 
-Resolution is 1.0 m/cell, so a cell and a meter are the same thing here — which
-makes the printed distances easy to reason about.
+`resolution=1.0` makes one cell equal one world meter, so grid and world
+coordinates coincide and the printout is easy to reason about. Several maps ship
+built in — `room`, `corridor`, `ring`, `maze`, `large`, `compound` — each chosen
+to stress a different behavior (the `ring` map exists specifically to exercise the
+"hollow centroid" case that motivated per-cell selection).
 
-## Simulating a lidar: line-of-sight reveal
+## Faking a sensor
 
-A real robot doesn't see through walls, and the demo mustn't either — otherwise
-frontier detection would be meaningless. `uncover_around_robot` turns unknown
-cells free only if they're within the sensor radius **and** have clear
-line-of-sight, traced with Bresenham:
+On a real robot, driving to a goal reveals new cells as the lidar sweeps. The
+demo simulates that with a **line-of-sight reveal**: any unknown cell within a
+radius of the robot, *and* not occluded by a wall, becomes free.
 
 ```python
 def uncover_around_robot(data, info, robot_xy, radius):
-    for idx in ...:
-        if data[idx] != CELL_UNK: continue
+    data = list(data)
+    for idx in range(info.width * info.height):
+        if data[idx] != CELL_UNK:
+            continue
         wx, wy = cell_to_world(idx, info)
-        if dist(...) <= radius and has_line_of_sight(data, info, robot_xy, (wx, wy)):
-            data[idx] = CELL_FREE
+        if math.sqrt((wx - rx)**2 + (wy - ry)**2) <= radius:
+            if has_line_of_sight(data, info, robot_xy, (wx, wy)):
+                data[idx] = CELL_FREE
+    return data
 ```
 
-Crucially, the reveal is swept **along the travel path**, not just at the
-destination — `uncover_along_path` steps in `radius/2` increments from old to new
-position, mirroring how a real robot scans continuously as it drives:
+`has_line_of_sight` walks a Bresenham line between the two cells and returns false
+if any *intermediate* cell is a wall — so the robot cannot see through walls, and
+a room is revealed only as far as its doorway allows. `uncover_along_path` sweeps
+this reveal in steps of `radius/2` along the whole travel path, not just the
+destination, mimicking a robot uncovering cells as it drives.
+
+Notably, this line-of-sight logic is exactly the wall-awareness the real
+`path_novelty_score` lacks (it counts unknown cells through walls). The demo is
+where that better model was prototyped.
+
+## The main loop
+
+Each step mirrors one exploration tick: detect clusters, pick a target, nudge it
+to a goal, then either drive there (revealing new space) or blacklist it if the
+path is blocked.
 
 ```python
-steps = max(1, int(dist / (radius / 2)))
-for i in range(steps + 1):
-    pos = interpolate(from_xy, to_xy, i / steps)
-    data = uncover_around_robot(data, info, pos, radius)
+while True:
+    algo.latest_clusters = find_frontier_clusters(data, info)
+    target_xy = pick_best_frontier(algo.latest_clusters, info, robot_xy, ...)
+    if target_xy is None:
+        goal_xy = None
+    elif args.nudge_mode == "unknown":
+        goal_xy = nudge_away_from_unknown(target_xy, data, info, args.inset)
+    else:
+        goal_xy = nudge_toward_robot(target_xy, robot_xy, args.inset)
+
+    print(render(...))                      # color-coded frame
+    if goal_xy is None:
+        no_frontier_count += 1              # patience countdown
+        if no_frontier_count >= PATIENCE:
+            break                           # exploration complete
+    elif not has_line_of_sight(data, info, robot_xy, goal_xy):
+        blacklist.add(goal_xy)              # blocked path
+    else:
+        data = uncover_along_path(data, info, robot_xy, goal_xy, radius)
+        robot_xy = goal_xy                  # "drive" there
+        blacklist.add(goal_xy)
 ```
 
-## The main loop mirrors the node
+## Rendering
 
-Each step reproduces the node's decision cycle: build a context, cluster, pick,
-and either explain the failure (`frontier_diag`) or nudge the goal. The render
-distinguishes **T** (the raw `pick_best_frontier` cell) from **G** (the nudged
-goal), so you can literally see the inset:
-
-```python
-target_xy = pick_best_frontier(algo.latest_clusters, info, robot_xy, ...)
-if target_xy is None:
-    algo.latest_diag = frontier_diag(...)
-    goal_xy = None
-else:
-    goal_xy = (nudge_away_from_unknown(...) if args.nudge_mode == "unknown"
-               else nudge_toward_robot(target_xy, robot_xy, args.inset))
-```
-
-Then it advances the world: if the straight-line path is blocked it blacklists
-the goal (a stand-in for a Nav2 failure); otherwise it reveals along the path,
-teleports the robot to the goal, and continues — declaring "complete" after
-`PATIENCE` empty steps, exactly like the node's `NO_FRONTIER_PATIENCE`.
+`render` walks the grid and colors each cell: robot (`R`), target (`T`, the raw
+`pick_best_frontier` pick), goal (`G`, after nudging), blacklisted (`B`),
+frontier clusters (`A`–`Z`, each a distinct 256-color), free/wall/unknown. Seeing
+`T` and `G` in different cells makes the nudge visible; seeing distinct cluster
+letters makes the min-size filter and per-cell selection concrete.
 
 ```mermaid
-flowchart TD
-    S["cluster + pick"] --> G{"goal?"}
-    G -->|none| P["no-frontier count++ / patience"]
-    G -->|blocked LoS| BL["blacklist goal"]
-    G -->|clear| M["reveal along path, move robot, blacklist visited"]
-    P --> S
-    BL --> S
-    M --> S
+flowchart LR
+    A["ASCII map"] --> B["parse_map"]
+    B --> C["uncover_around_robot<br/>(fake first scan)"]
+    C --> D["loop: detect → pick → nudge"]
+    D --> E["render frame"]
+    E --> F["uncover_along_path<br/>(drive + reveal)"]
+    F --> D
 ```
 
-## Two experiments baked in
+## A `--nudge-mode` experiment
 
-- **`--nudge-mode {robot,unknown}`** compares the shipped `nudge_toward_robot`
-  against the prototype `nudge_away_from_unknown` (the shelved T04n idea). The
-  latter steps the goal along the summed direction *away* from nearby unknown
-  cells, on the theory that a frontier cell sits on the known/unknown boundary
-  and "toward the robot" doesn't reliably move off it. This function lives only
-  here — it was never ported into the robot code.
-- **The color rendering** assigns each large cluster a distinct 256-color
-  letter (A–Z), with the legend showing cell counts — making it obvious which
-  clusters the size filter kept and which it dropped.
+The tool carries a second, prototype nudge strategy, `nudge_away_from_unknown`,
+selectable with `--nudge-mode unknown`. Rather than pulling the goal toward the
+robot, it computes a vector *away from* nearby unknown cells and steps the goal
+along it. The rationale (worth reading in the source comment): a frontier cell is
+by definition on the known/unknown boundary, and the robot is not necessarily on
+that boundary's normal, so pulling toward the robot does not reliably move the
+goal off the boundary. This is exactly the kind of idea the demo exists to try
+cheaply before committing it to the real pipeline.
 
-## Observations / possible improvements
+## Observations and possible improvements
 
-- **`nudge_away_from_unknown` is dead-ended here.** It's a useful visualization
-  but decisions about it should be made in `frontier_explorer`, not kept as a
-  tool-only fork. Either port it (with tests) or delete it once the buffer-cell
-  approach is considered final.
-- **The loop duplicates the node's orchestration** (patience, blacklist, nudge
-  dispatch) rather than reusing it. That's inherent to being a standalone tool,
-  but it means changes to the node's cycle must be mirrored here by hand.
-- **`resolution: 1.0`** makes distances readable but hides sub-cell effects; a
-  configurable resolution would let the demo reproduce the 0.05 m grids the robot
-  actually uses.
-- **Terminal-only.** Fine for a dev aid, but a tiny matplotlib/HTML render would
-  make it usable in notebooks and docs.
+- **The demo is out of sync with the current pipeline.** Its call to
+  `pick_best_frontier` uses the *pre-F31* keyword signature
+  (`min_size=`, `blacklist_radius=`, `prefer_farthest=`), and it constructs
+  `ExploreParams(min_frontier_size=..., goal_inset_m=...)` with fields that moved
+  to `FrontierParams`. As written it would raise a `TypeError` against the current
+  `frontier_explorer.py`/`explore_context.py`. Bringing it up to the F31 API
+  (build a `FrontierTuning`, pass `data=`) is the highest-value fix here — a demo
+  that does not run cannot teach.
+- **No scoring introspection.** It shows the *winning* cell but not the
+  per-scorer normalized costs. Printing the weighted breakdown for the winner (and
+  runners-up) would make the F31 weighting visible, which is the whole point of
+  the tool now.
+- **Its own `bresenham_cells`/`world_to_cell` duplicate the library versions**
+  (with a different argument order, `(c, r)` vs `(r, c)`). Reusing the
+  `frontier_explorer` functions would remove a subtle divergence and a source of
+  off-by-one confusion.
+- **`--auto` aside, it is single-threaded and synchronous**, which is ideal for a
+  teaching tool — but a `--export-gif` or frame-dump option would turn a run into
+  documentation.
