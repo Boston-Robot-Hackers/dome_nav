@@ -65,19 +65,19 @@ def costmap_radius_costs(
     for dr in range(-radius_cells, radius_cells + 1):
         row = []
         for dc in range(-radius_cells, radius_cells + 1):
-            col, r = cx + dc, cy + dr
-            if not (0 <= col < info.width and 0 <= r < info.height):
+            col, grid_row = cx + dc, cy + dr
+            if not (0 <= col < info.width and 0 <= grid_row < info.height):
                 row.append("    ")
                 continue
-            v = costmap.data[r * info.width + col]
-            if v >= LETHAL_COST:
+            cost = costmap.data[grid_row * info.width + col]
+            if cost >= LETHAL_COST:
                 row.append("XXX")
-            elif v < 0:
+            elif cost < 0:
                 row.append("???")
             elif dc == 0 and dr == 0:
-                row.append(f"[{v:3d}]")
+                row.append(f"[{cost:3d}]")
             else:
-                row.append(f"{v:4d}")
+                row.append(f"{cost:4d}")
         costs.append(" ".join(row))
     return "\n      ".join(costs)
 
@@ -104,7 +104,9 @@ def format_frontier_exhaustion(
         lines.append("  (no clusters)")
     else:
         for i, cl in enumerate(clusters):
-            lines.append(exhaustion_cluster_line(i, cl, info, robot_xy, params, blacklist))
+            lines.append(
+                exhaustion_cluster_line(i, cl, info, robot_xy, params, blacklist)
+            )
     lines.append(SEP)
     return "\n".join(lines)
 
@@ -149,8 +151,11 @@ def format_failure_diagnostics(
     blacklist: set[XY], nav2_error_code: int = 0, nav2_error_msg: str = "",
     algorithm_report: str | None = None,
 ) -> str:
-    # Node-general failure dump. Anything algorithm-specific (e.g. frontier
-    # clusters) arrives pre-rendered in algorithm_report and is appended blindly.
+    """Render the node-general nav-failure dump as a multi-line string.
+
+    Anything algorithm-specific (e.g. frontier clusters) arrives pre-rendered in
+    algorithm_report and is appended blindly.
+    """
     error_name = NAV2_ERROR_CODES.get(nav2_error_code, f"code={nav2_error_code}")
     lines = [
         SEP,
@@ -162,8 +167,12 @@ def format_failure_diagnostics(
         f"  goal_xy  : ({goal_xy[0]:.3f}, {goal_xy[1]:.3f})",
     ]
     if robot_xy:
-        dist = math.sqrt((goal_xy[0] - robot_xy[0]) ** 2 + (goal_xy[1] - robot_xy[1]) ** 2)
-        lines.append(f"  robot_xy : ({robot_xy[0]:.3f}, {robot_xy[1]:.3f})  dist={dist:.2f}m")
+        dist = math.sqrt(
+            (goal_xy[0] - robot_xy[0]) ** 2 + (goal_xy[1] - robot_xy[1]) ** 2
+        )
+        lines.append(
+            f"  robot_xy : ({robot_xy[0]:.3f}, {robot_xy[1]:.3f})  dist={dist:.2f}m"
+        )
     else:
         lines.append("  robot_xy : unavailable")
 
@@ -190,7 +199,7 @@ def format_failure_diagnostics(
 def format_cluster_summary(
     clusters: list[list[int]], info: MapInfo | None
 ) -> str:
-    # Frontier-owned block for the failure dump: the available raw clusters.
+    """Frontier-owned block for the failure dump: the available raw clusters."""
     lines = [f"  frontiers: {len(clusters)} clusters available"]
     for i, cl in enumerate(clusters[:10]):
         if info is not None and cl:

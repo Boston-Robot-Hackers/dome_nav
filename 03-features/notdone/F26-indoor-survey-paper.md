@@ -32,7 +32,14 @@ small section on our pluggable-algorithm architecture.
   slam_toolbox, action servers); explicitly framed as one possible realization.
 - **Small pluggable-architecture section** — the F12 algorithm registry + F23
   decoupling (intent-carrying `GoalDecision`, opaque hooks) that let us swap
-  survey algorithms without touching the manager node.
+  survey algorithms without touching the manager node. If F31/F32 land, this
+  section gains the sharper framing: selection splits into **candidate generation**
+  (F32 `CandidateSource`: frontier / grid / random / hybrid) and **candidate
+  ranking** (F31 filters + weighted scorers). "How candidates are generated" is
+  precisely the survey's algorithm-comparison axis, and F32 makes each strategy a
+  swappable, benchmarkable unit — potentially the experimental scaffold for the
+  quantitative section. Note the info-gain caveat (F32): non-frontier sources need
+  an information-gain scorer or they revisit known space.
 - **Venue: arXiv / tech report** (author decision 2026-07-17) — no page-limit
   constraint; the plan's publishability assessment becomes an internal quality
   gate, not a venue fit analysis.

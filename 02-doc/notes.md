@@ -20,8 +20,30 @@ slam_toolbox serializes two files: `.posegraph` (pose graph nodes and edges) and
 `.data` (raw scan data). Both required to resume. Occupancy grid PNG is separate
 and only needed for Nav2 static layer on localization-only runs.
 
-`map_file_name` in slam.yaml is hardcoded to `~/.dome/slam_map`. slam_toolbox
-silently starts fresh if the files do not exist — safe to always include this param.
+### No auto-resume by design — restarting does NOT reload a saved map
+
+`slam_manager_node` only **saves** (via `/slam_toolbox/serialize_map` to
+`map_persist_path`, default `~/.dome/slam_map`); it never loads. The mapper
+config (`mapper_params_online_async.yaml`) **deliberately omits `map_file_name`**
+and runs `mode: mapping`, so every launch of `robot_map`/`robot_explore` starts a
+**fresh** map. Re-launching with the same `--map_name` overwrites the old files;
+it does not continue them. This is expected — not a bug.
+
+To actually resume a saved posegraph, slam_toolbox needs both params set:
+
+```yaml
+map_file_name: /home/pitosalas/.dome/slam_map   # posegraph path, NO extension
+mode: localization    # relocalize in saved graph, no new mapping
+# — OR —
+mode: mapping         # load graph, then keep extending it
+```
+
+`map_file_name` points at the serialized posegraph base name (`slam_map` →
+`slam_map.posegraph` + `slam_map.data`), **not** the PNG/YAML. slam_toolbox
+silently starts fresh if the files are missing, so the param is safe to always
+include. Gotcha: `map_start_at_dock: true` (currently set) overrides
+`map_start_pose` and forces the origin — fine for continue-mapping, but for
+localization the robot must actually start at the dock or it begins lost.
 
 ## Future: costmap-based frontier exploration
 

@@ -10,7 +10,7 @@ from dome_nav.explore_context import ExplorationContext, GoalDecision
 
 
 class HelloWorldAlgorithm:
-    # Emits ONE goal a step ahead of the robot (map +x), then done. Ignores the map.
+    """Emits ONE goal a step ahead of the robot (map +x), then done. Ignores the map."""
 
     def __init__(self):
         self.emitted = False

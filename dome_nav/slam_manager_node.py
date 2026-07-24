@@ -134,9 +134,8 @@ class SlamManagerNode(LifecycleNode):
     def on_legacy_save_done(self, future):
         result = future.result()
         if result is None or result.result != SaveMap.Response.RESULT_SUCCESS:
-            self.get_logger().warning(
-                f"Legacy map export failed (result={result.result if result else None})."
-            )
+            code = result.result if result else None
+            self.get_logger().warning(f"Legacy map export failed (result={code}).")
         else:
             self.get_logger().info(
                 f"Exported legacy map to {self.map_persist_path}.pgm/.yaml"

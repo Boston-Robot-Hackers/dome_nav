@@ -70,6 +70,13 @@ def robot_explore_launch(
             "preferred_goal_distance": 2.0,
             "frontier_buffer_cells": 0,
             "min_frontier_size": 10,
+            # F31 goal-scoring weights + clearance floor (robot_radius matches the
+            # Nav2 footprint; w_clearance 0.0 = baseline, raise to enable clearance).
+            "w_distance": 1.0,
+            "w_novelty": 1.0,
+            "w_clearance": 1.0,
+            "robot_radius": 0.17,
+            "clearance_margin_m": 0.05,
             "map_name": map_name,
             "use_sim_time": use_sim_time == "true",
         },

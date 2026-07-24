@@ -26,11 +26,19 @@ class NavManagerNode(Node):
         self.nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
         self.status_pub = self.create_publisher(String, "/dome_nav/nav_status", 10)
 
-        self.loc_status_pub = self.create_publisher(String, "/dome_nav/localization_status", 10)
-        self.loc_score_pub = self.create_publisher(Float32, "/dome_nav/localization_score", 10)
+        self.loc_status_pub = self.create_publisher(
+            String, "/dome_nav/localization_status", 10
+        )
+        self.loc_score_pub = self.create_publisher(
+            Float32, "/dome_nav/localization_score", 10
+        )
 
-        self.intent_sub = self.create_subscription(String, "/intent", self.on_intent, 10)
-        self.targets_sub = self.create_subscription(String, "/targets/confirmed", self.on_targets, 10)
+        self.intent_sub = self.create_subscription(
+            String, "/intent", self.on_intent, 10
+        )
+        self.targets_sub = self.create_subscription(
+            String, "/targets/confirmed", self.on_targets, 10
+        )
         amcl_qos = QoSProfile(
             depth=1,
             reliability=ReliabilityPolicy.RELIABLE,
@@ -103,7 +111,9 @@ class NavManagerNode(Node):
             return
         self.goal_handle = goal_handle
         result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(functools.partial(self.on_goal_result, label=label))
+        result_future.add_done_callback(
+            functools.partial(self.on_goal_result, label=label)
+        )
 
     def on_goal_result(self, future, label: str):
         self.goal_handle = None
@@ -135,16 +145,24 @@ class NavManagerNode(Node):
 
     def robot_xy_in_map(self) -> tuple[float, float] | None:
         try:
-            tf = self.tf_buffer.lookup_transform("map", "base_footprint", rclpy.time.Time())
-            t = tf.transform.translation
-            return (t.x, t.y)
-        except (tf2_ros.LookupException, tf2_ros.ExtrapolationException, tf2_ros.ConnectivityException):
+            tf = self.tf_buffer.lookup_transform(
+                "map", "base_footprint", rclpy.time.Time()
+            )
+            trans = tf.transform.translation
+            return (trans.x, trans.y)
+        except (
+            tf2_ros.LookupException,
+            tf2_ros.ExtrapolationException,
+            tf2_ros.ConnectivityException,
+        ):
             return None
 
     def find_nearest_confirmed(self, label: str) -> dict | None:
         robot_xy = self.robot_xy_in_map()
         if robot_xy is None:
-            self.get_logger().warning("map→base_footprint TF unavailable — returning first match.")
+            self.get_logger().warning(
+                "map→base_footprint TF unavailable — returning first match."
+            )
         return self.manager.find_nearest_confirmed(label, robot_xy)
 
     def publish_status(self, status: str):

@@ -53,12 +53,12 @@ ALGORITHM_REGISTRY: dict[str, type[ExplorationAlgorithm]] = {
 GOAL_STATUS_NAMES = {5: "canceled", 6: "aborted"}
 
 
-def dist(a: XY, b: XY) -> float:
-    return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
+def dist(xy_a: XY, xy_b: XY) -> float:
+    return math.sqrt((xy_a[0] - xy_b[0]) ** 2 + (xy_a[1] - xy_b[1]) ** 2)
 
 
 def rounded(xy: XY | None) -> list[float] | None:
-    # Telemetry wire format: 3-decimal coordinate list, None when pose unknown.
+    """Telemetry wire format: 3-decimal coordinate list, None when pose unknown."""
     return [round(xy[0], 3), round(xy[1], 3)] if xy is not None else None
 
 
@@ -73,25 +73,19 @@ class ExplorerManagerNode(Node):
     # Cancel active goal after this many seconds to break Nav2 BT recovery loops.
     GOAL_TIMEOUT_S = 25.0
 
-    # Abandon a goal after this many seconds of NO progress (robot wedged /
-    # collision-monitor-gated). Raised 7->20 so Nav2's own progress_checker
-    # (movement_time_allowance 10s) fails first and its BT recovery (BackUp/Spin)
-    # can run before the explorer cancels. Progress = distance-to-goal dropped by
+    # No-progress goal-abandon timeout, set above Nav2's progress_checker (10s) so
+    # its BT recovery runs before the explorer cancels. Progress = dist dropped by
     # STUCK_PROGRESS_EPS or robot moved STUCK_MOVE_EPS.
     STUCK_T_S = 20.0
     STUCK_MOVE_EPS = 0.05
     STUCK_PROGRESS_EPS = 0.10
 
-    # Max goal candidates to try in one tick when a candidate maps outside the
-    # global costmap. Each rejected goal is excluded and next_goal is re-asked, so
-    # a run of edge goals near the growing map boundary can't wedge the tick.
+    # Max goal candidates per tick when a candidate maps outside the global costmap,
+    # so a run of edge goals can't wedge the tick.
     MAX_GOAL_ATTEMPTS = 8
 
-    # Consecutive stuck-goal failures from the same robot pose before the robot
-    # is declared wedged and the session stops. Reselecting goals cannot fix a
-    # wedged pose: 2026-07-20 telemetry shows 12- and 20-goal stuck runs with a
-    # bit-identical robot_xy, each burning STUCK_T_S. Same-pose = within
-    # STUCK_MOVE_EPS.
+    # Same-pose (within STUCK_MOVE_EPS) stuck failures before declaring the robot
+    # wedged and stopping; reselecting goals can't fix a wedged pose.
     WEDGED_STUCK_LIMIT = 3
 
     def __init__(self, algorithm: ExplorationAlgorithm | None = None):
@@ -102,23 +96,17 @@ class ExplorerManagerNode(Node):
         self.intent_sub = self.create_subscription(
             String, "/intent", self.on_intent, 10
         )
-        # Map + costmaps are fetched on demand (fetch_grid) only while exploring,
-        # not held as standing subscriptions. rclpy deserializes every message
-        # before the callback runs, so a standing sub to these large latched grids
-        # burned 10-20% CPU on the Pi even when idle. All three publishers are
-        # RELIABLE + TRANSIENT_LOCAL (latched), so wait_for_message returns the
-        # last grid immediately. This QoS must match the publishers to receive it.
+        # Grids fetched on demand (fetch_grid) while exploring, not held as standing
+        # subs (idle deserialize burned 10-20% CPU on the Pi). Must match the latched
+        # publishers' QoS for wait_for_message to return the last grid.
         self.map_qos = QoSProfile(
             depth=1,
             history=QoSHistoryPolicy.KEEP_LAST,
             reliability=QoSReliabilityPolicy.RELIABLE,
             durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
         )
-        # TF listener runs only while exploring. /tf streams ~40Hz; the tf2
-        # TransformListener deserializes every message in Python (~8% CPU) for a
-        # pose this node needs at 1Hz. When idle it holds no listener, so an
-        # idle node deserializes no TF at all. Started in exploration_start,
-        # torn down in stop_exploring.
+        # TF listener runs only while exploring: /tf at ~40Hz costs ~8% CPU to
+        # deserialize for a 1Hz pose. Started in exploration_start, torn down in stop.
         self.tf_buffer: tf2_ros.Buffer | None = None
         self.tf_listener: tf2_ros.TransformListener | None = None
         self.create_timer(1.0 / self.EXPLORE_HZ, self.explore_tick)
@@ -160,10 +148,11 @@ class ExplorerManagerNode(Node):
         self.get_logger().info("ExplorerManagerNode ready.")
 
     def fetch_grid(self, topic: str) -> OccupancyGrid | None:
-        # On-demand latest grid. Publishers are latched (TRANSIENT_LOCAL), so a
-        # matching-QoS reader gets the last sample immediately; deserialization
-        # happens here only, never while the node is idle. Briefly blocks the
-        # executor up to time_to_wait; latched topics return in ~ms.
+        """On-demand latest grid from the latched publisher, or None if none arrives.
+
+        Deserializes here only, never while idle. Briefly blocks the executor up to
+        time_to_wait (~ms).
+        """
         ok, msg = wait_for_message(
             OccupancyGrid, self, topic,
             qos_profile=self.map_qos, time_to_wait=1.0,
@@ -171,20 +160,21 @@ class ExplorerManagerNode(Node):
         return msg if ok else None
 
     def goal_within_costmap_bounds(self, xy: XY) -> bool:
-        # True if xy maps inside the current global costmap extent. When no
-        # global costmap has been received yet, returns True so startup is not
-        # blocked. Guards against dispatching goals outside the costmap, which the
-        # planner rejects with a worldToMap failure -> PLAN/NO_VALID_PATH (the SLAM
-        # /map the algorithm reads can extend past the smaller global costmap).
+        """True if xy maps inside the global costmap (None costmap ⇒ True).
+
+        Goals outside it fail worldToMap -> NO_VALID_PATH (the SLAM /map can extend
+        past the costmap); None costmap returns True so startup isn't blocked.
+        """
         if self.latest_global_costmap is None:
             return True
         return costmap_cell_cost(self.latest_global_costmap, xy) is not None
 
     def goal_is_lethal(self, xy: XY) -> bool:
-        # True if xy lands on a lethal/inscribed global-costmap cell — the footprint
-        # is guaranteed in collision there, so Nav2 rejects the goal. A None cost
-        # (no costmap yet, or out of bounds) is not treated as lethal: startup stays
-        # permissive and bounds are goal_within_costmap_bounds' job.
+        """True if xy sits on a lethal/inscribed costmap cell (Nav2 would reject it).
+
+        None cost (no costmap / out of bounds) is not lethal; bounds are checked by
+        goal_within_costmap_bounds.
+        """
         cost = costmap_cell_cost(self.latest_global_costmap, xy)
         is_lethal = cost is not None and cost >= LETHAL_THRESHOLD
         if is_lethal:
@@ -207,7 +197,7 @@ class ExplorerManagerNode(Node):
         )
 
     def call_hook(self, hook: str, *args, default=None):
-        # Optional algorithm hook: absent -> default, present -> called opaquely.
+        """Call optional hook: absent -> default, present -> called opaquely."""
         fn = getattr(self.algorithm, hook, None)
         return fn(*args) if fn is not None else default
 
@@ -217,7 +207,7 @@ class ExplorerManagerNode(Node):
             self.get_logger().info(report)
 
     def session_start_params(self) -> dict:
-        # Node's own shared params plus the algorithm's opaque session_params.
+        """Node shared params merged with the algorithm's opaque session_params."""
         params: dict = {
             "timeout_s": self.GOAL_TIMEOUT_S,
             "max_radius": self.params.max_explore_radius,
@@ -259,11 +249,11 @@ class ExplorerManagerNode(Node):
             # (see explore_tick).
             self.state = "exploring"
             self.publish_status("exploring")
-            r = (
+            radius_note = (
                 f", max_radius={self.params.max_explore_radius}m"
                 if self.params.max_explore_radius > 0 else ""
             )
-            self.get_logger().info(f"Exploration started{r}.")
+            self.get_logger().info(f"Exploration started{radius_note}.")
             self.telemetry.write(
                 "session_start", map_name=self.map_name, start_xy=None,
                 params=self.session_start_params(),
@@ -299,25 +289,22 @@ class ExplorerManagerNode(Node):
         self.find_and_send_goal()
 
     def check_stuck(self):
-        # Abandon a goal that is making no progress (robot wedged), long before
-        # GOAL_TIMEOUT_S. Blacklisting the target also suppresses its neighborhood
-        # (blacklist_radius), so reselection avoids the same wall. All tracking
-        # fields are seeded in send_nav_goal; best_dist_to_goal can still be None
-        # here when the goal was sent before TF resolved.
+        # Abandon a no-progress goal before GOAL_TIMEOUT_S; blacklisting also
+        # suppresses its blacklist_radius neighborhood so reselection avoids the wall.
         robot_xy = self.robot_xy_in_map()
         if robot_xy is None or self.current_goal_xy is None:
             return
-        d = dist(robot_xy, self.current_goal_xy)
+        goal_dist = dist(robot_xy, self.current_goal_xy)
         moved = (
             dist(robot_xy, self.last_progress_xy)
             if self.last_progress_xy is not None else 0.0
         )
         if (self.best_dist_to_goal is None
-                or d < self.best_dist_to_goal - self.STUCK_PROGRESS_EPS
+                or goal_dist < self.best_dist_to_goal - self.STUCK_PROGRESS_EPS
                 or moved > self.STUCK_MOVE_EPS):
             self.best_dist_to_goal = (
-                d if self.best_dist_to_goal is None
-                else min(self.best_dist_to_goal, d)
+                goal_dist if self.best_dist_to_goal is None
+                else min(self.best_dist_to_goal, goal_dist)
             )
             self.last_progress_xy = robot_xy
             self.last_progress_time = time.monotonic()
@@ -334,11 +321,8 @@ class ExplorerManagerNode(Node):
         self.note_stuck(robot_xy)
 
     def note_stuck(self, robot_xy: XY):
-        # Wedge detector: consecutive stuck failures from the same pose mean the
-        # robot itself cannot move (collision-monitor gated / against an
-        # obstacle); goal reselection is provably futile, so stop cleanly rather
-        # than cycle goals until patience or shutdown. The streak resets whenever
-        # the robot gets stuck somewhere new or reaches a goal.
+        # Wedge detector: stuck failures from the same pose mean the robot can't
+        # move, so stop cleanly. Streak resets on a new stuck pose or a reached goal.
         same_pose = (
             self.stuck_streak_xy is not None
             and dist(robot_xy, self.stuck_streak_xy) <= self.STUCK_MOVE_EPS
@@ -379,20 +363,20 @@ class ExplorerManagerNode(Node):
             self.get_logger().warning("TF map→base_footprint unavailable — waiting.")
             self.telemetry.write("no_frontier", reason="no_tf")
             return
-        m = self.latest_map
+        grid = self.latest_map
         info = MapInfo(
-            width=m.info.width, height=m.info.height, resolution=m.info.resolution,
-            origin_x=m.info.origin.position.x, origin_y=m.info.origin.position.y,
+            width=grid.info.width, height=grid.info.height,
+            resolution=grid.info.resolution,
+            origin_x=grid.info.origin.position.x,
+            origin_y=grid.info.origin.position.y,
         )
         self.latest_map_info = info
-        # m.data (array.array) is passed uncopied: every consumer is read-only
+        # grid.data (array.array) is passed uncopied: every consumer is read-only
         # indexing/iteration, and a full-map list() copy per tick is pure waste.
-        map_data = m.data
-        # Ask the algorithm for a goal; exclude candidates the planner would reject —
-        # outside the global costmap (worldToMap failure) or on a lethal/inscribed
-        # cell — and re-ask for the next-best goal. Both checks run on the final
-        # post-nudge candidate. rejected is local to this tick; next tick re-evaluates
-        # fresh in case the costmap has since grown or cleared.
+        map_data = grid.data
+        # Ask for a goal, re-asking past candidates the planner would reject (outside
+        # costmap or lethal/inscribed). Checks run on the post-nudge candidate;
+        # rejected is per-tick so a grown/cleared costmap re-evaluates fresh.
         rejected: set[XY] = set()
         goal_xy = None
         decision = None
@@ -486,7 +470,7 @@ class ExplorerManagerNode(Node):
         self.last_progress_time = None
 
     def abandon_active_goal(self):
-        # Cancel + blacklist the active goal; shared by the stuck/timeout paths.
+        """Cancel + blacklist the active goal; shared by the stuck/timeout paths."""
         if self.goal_handle is not None:
             self.goal_handle.cancel_goal_async()
         if self.current_goal_xy is not None:
@@ -592,11 +576,8 @@ class ExplorerManagerNode(Node):
                     nav2_error_code=result.result.error_code,
                     nav2_error_msg=result.result.error_msg,
                 )
-            # Failures only: a reached goal's frontier disappears on the next map
-            # update, and blacklisting it (blacklist_radius circle) killed live
-            # frontier cells around every success — over-accumulation ended
-            # sessions prematurely. If the frontier does persist, the reselected
-            # goal fails and is blacklisted then.
+            # Blacklist failures only: blacklisting reached goals killed live
+            # frontier cells around each success and ended sessions early.
             self.blacklist.add(xy)
         self.write_goal_result(xy, robot_xy, status_name, elapsed)
 
@@ -642,8 +623,8 @@ class ExplorerManagerNode(Node):
             tf = self.tf_buffer.lookup_transform(
                 "map", "base_footprint", rclpy.time.Time()
             )
-            t = tf.transform.translation
-            return (t.x, t.y)
+            trans = tf.transform.translation
+            return (trans.x, trans.y)
         except (
             tf2_ros.LookupException,
             tf2_ros.ExtrapolationException,
@@ -652,7 +633,7 @@ class ExplorerManagerNode(Node):
             return None
 
     def publish_markers(self):
-        # Optional opaque hook: publish the algorithm's MarkerArray verbatim.
+        """Optional opaque hook: publish the algorithm's MarkerArray verbatim."""
         markers = self.call_hook("render_markers", self.render_context())
         if markers is not None:
             self.marker_pub.publish(markers)

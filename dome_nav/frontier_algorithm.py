@@ -3,6 +3,8 @@
 # Author: Pito Salas and Claude Code
 # Open Source Under MIT license
 
+from typing import TYPE_CHECKING
+
 from visualization_msgs.msg import MarkerArray
 
 from dome_nav.explore_context import (
@@ -21,20 +23,25 @@ from dome_nav.frontier_params import (
     merge_tuning,
 )
 from dome_nav.frontier_explorer import (
-    best_frontier_candidates,
     find_frontier_clusters,
     nudge_toward_robot,
+    path_novelty_score,
     pick_best_frontier,
-    pick_by_novelty,
     frontier_diag,
 )
 
+if TYPE_CHECKING:
+    from dome_nav.frontier_params import FrontierTuning
+
 
 class FrontierAlgorithm:
-    # Default algorithm: wraps frontier_explorer's pure functions behind the
-    # ExplorationAlgorithm protocol. Owns its own FrontierParams and its
-    # latest_clusters/latest_diag state (for the viz/diag hooks); neither is
-    # protocol surface. next_goal merges shared ctx.params with the frontier tuning.
+    """Default algorithm: wraps frontier_explorer's pure functions behind the
+    ExplorationAlgorithm protocol.
+
+    Owns its own FrontierParams and its latest_clusters/latest_diag state (for the
+    viz/diag hooks); neither is protocol surface. next_goal merges shared ctx.params
+    with the frontier tuning.
+    """
 
     def __init__(self, frontier_params: FrontierParams | None = None):
         self.latest_clusters: list[list[int]] = []
@@ -69,25 +76,25 @@ class FrontierAlgorithm:
         goal = nudge_toward_robot(target, ctx.robot_xy, tuning.goal_inset_m)
         return GoalDecision.new_goal(goal)
 
-    def select_target(self, clusters, ctx, tuning):
-        # Default: single distance-best cell. Novelty on: short-list the top-N
-        # distance candidates, then pick the one whose straight-line path crosses
-        # the most unknown cells. latest_novelty is stashed for telemetry.
-        if not tuning.use_novelty_scoring:
-            self.latest_novelty = None
-            return pick_best_frontier(
-                clusters, ctx.map_info, ctx.robot_xy, tuning,
-                blacklist=ctx.blacklist, start_xy=ctx.start_xy,
-            )
-        candidates = best_frontier_candidates(
+    def select_target(
+        self, clusters: list[list[int]], ctx: ExplorationContext,
+        tuning: "FrontierTuning",
+    ) -> tuple[float, float] | None:
+        """One F31 pipeline pick; stash the winner's raw novelty for telemetry.
+
+        The registry adds the novelty scorer when use_novelty_scoring is on;
+        latest_novelty holds the winner's unknown-cell count (None otherwise).
+        """
+        target = pick_best_frontier(
             clusters, ctx.map_info, ctx.robot_xy, tuning,
-            blacklist=ctx.blacklist, start_xy=ctx.start_xy,
-            top_n=tuning.novelty_top_n,
+            blacklist=ctx.blacklist, start_xy=ctx.start_xy, data=ctx.map_data,
         )
-        target, score = pick_by_novelty(
-            candidates, ctx.robot_xy, ctx.map_data, ctx.map_info
-        )
-        self.latest_novelty = score if target is not None else None
+        if tuning.use_novelty_scoring and target is not None:
+            self.latest_novelty = path_novelty_score(
+                ctx.robot_xy, target, ctx.map_data, ctx.map_info
+            )
+        else:
+            self.latest_novelty = None
         return target
 
     def render_markers(self, rc: RenderContext) -> MarkerArray:

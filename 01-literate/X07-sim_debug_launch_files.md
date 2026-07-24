@@ -5,9 +5,9 @@ generated: "2026-07-08"
 
 # Sim Debug Launch Files — Bringing the Stack Up Piece by Piece
 
-Where `sim_explore.launch.py` starts the whole simulation from one file, the
-`sim_*` debug launch files split that same stack into single-purpose pieces, each
-runnable in its own terminal. The motivation is diagnosis: when something in the
+The `sim_*` debug launch files split the full simulation stack into
+single-purpose pieces, each runnable in its own terminal. `sim_nav_full.launch.py`
+composes them back into one command. The motivation is diagnosis: when something in the
 sim misbehaves, being able to start *just* the robot, or *just* slam, and watch
 it in isolation is far more informative than an all-in-one that either works or
 doesn't. Several real bugs (the slam-before-Nav2 ordering, the joint-state remap,
@@ -38,7 +38,7 @@ flowchart LR
   `nav2_params_explore_sim.yaml`). Requires slam already publishing `map→odom`, or its
   `global_costmap` blocks on activation and `lifecycle_manager` aborts the whole
   bringup.
-- **`sim_explore_node.launch.py`** — just `pluggable_explore_manager_node` with
+- **`sim_explore_node.launch.py`** — just `explorer_manager_node` with
   the sim exploration parameters. Requires the three above.
 - **`sim_rviz.launch.py`** — RViz2 with `use_sim_time` on, for visualizing map,
   costmaps, TF, and the `/explore/markers`.
@@ -96,15 +96,14 @@ bl dome_nav sim_rviz.launch.py            # optional
 
 ## Observations / possible improvements
 
-- **`sim_nav_full` and `sim_explore` are two routes to the same stack.** The
-  split-and-compose approach (`sim_nav_full`) is the more maintainable one since
-  it has no duplicated node setup; `sim_explore` inlines everything. Long term,
-  one should be retired.
+- **`sim_nav_full` is now the single route to the full stack.** The old monolithic
+  `sim_explore.launch.py` (which inlined everything) was retired 2026-07-20 in
+  favor of this split-and-compose approach, which has no duplicated node setup.
 - **The `wait_for_map_odom_tf` pattern is exactly what the raw `bl.include`
   ordering lacks.** If `better_launch` ever grows a "wait until ready" include
   option, the manual two-step debugging dance becomes unnecessary.
-- **Sim parameter defaults are repeated** in `sim_explore_node`, `sim_explore`,
-  and `sim_nav_full` (the AST-parsing constraint again). Worth consolidating if a
+- **Sim parameter defaults are repeated** in `sim_explore_node` and
+  `sim_nav_full` (the AST-parsing constraint again). Worth consolidating if a
   clean mechanism appears.
 - **`sim_robot` now assumes an externally-started Gazebo.** Convenient for
   debugging the sim layer natively, but it means "run the robot" is really a

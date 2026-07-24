@@ -335,6 +335,20 @@ def test_merge_tuning_accepts_default_radius_and_inset():
     assert tuning.blacklist_radius > tuning.goal_inset_m
 
 
+def test_merge_tuning_carries_scorer_weights_and_clearance():
+    # T05: the F31 weights + clearance params round-trip through the merge, and the
+    # shipped default enables clearance (w_clearance > 0) to fix the wall-hug.
+    frontier = make_frontier_params(
+        w_distance=2.0, w_novelty=3.0, w_clearance=4.0,
+        robot_radius=0.2, clearance_margin_m=0.07,
+    )
+    tuning = merge_tuning(ExploreParams(), frontier)
+    assert (tuning.w_distance, tuning.w_novelty, tuning.w_clearance) == (2.0, 3.0, 4.0)
+    assert tuning.robot_radius == 0.2
+    assert tuning.clearance_margin_m == 0.07
+    assert merge_tuning(ExploreParams(), FrontierParams()).w_clearance > 0.0
+
+
 def test_session_params_include_novelty_settings():
     algo = make_algo(make_frontier_params(use_novelty_scoring=True, novelty_top_n=7))
     params = algo.session_params()

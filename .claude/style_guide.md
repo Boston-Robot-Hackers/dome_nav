@@ -91,6 +91,8 @@ content, it's a bug to fix at the source.
 - [ ] MUST: Line length <= 88 chars unless a longer line is materially clearer
 - [ ] SHOULD: Boolean variables/params are named `is_X`, `has_X`, or `can_X`
 - [ ] SHOULD: No single-letter variables except loop counters `i`, `j`
+- [ ] MUST: Dataclass/struct fields are self-explanatory without the surrounding code — no bare `xy`/`data`/`info`/`params`; spell out the meaning (`world_xy`, `map_data`, `map_info`, `tuning`). A vague name that reads fine as a function arg is not acceptable as a stored field.
+- [ ] SHOULD: Put units in names when a value has them (`dist_to_robot_m`, `clearance_cells`, `time_before_collision`), and document non-obvious encodings inline (e.g. OccupancyGrid: -1 unknown, 0 free, >=lethal occupied).
 - [ ] SHOULD: Use `is` / `is not` for comparisons with `None`, `True`, and `False`
 - [ ] MUST: Use f-strings for string formatting
 - [ ] SHOULD: Use `enumerate()` instead of manual counter variables when the index is needed
@@ -115,7 +117,10 @@ content, it's a bug to fix at the source.
 ## Comments And Types
 - [ ] SHOULD: Simple methods with obvious bodies have no docstring
 - [ ] SHOULD: Complex methods may use multi-line docstrings explaining why the mechanism exists and any non-obvious preconditions or postconditions
+- [ ] MUST: Any function or method that does something complicated or obscure explains what it does and what its inputs and outputs are — preferably in the docstring. This is the one sanctioned place for a fuller explanation; it does not license narrative comment blocks inside the body (see below).
 - [ ] SHOULD: Comments explain why, not what
+- [ ] MUST: No multi-line narrative comment blocks embedded in code. A comment is a short "why" note, not prose paragraphs. Long explanatory passages break the flow of the code and belong in the literate docs (`01-literate/`) or a docstring, not as a wall of consecutive comment lines above the logic.
+- [ ] SHOULD: One or two lines per comment. If the "why" needs more, it is design rationale — move it to the module docstring or literate doc and leave a one-line pointer.
 - [ ] SHOULD: No task/fix/caller references in comments
 - [ ] SHOULD: Public method parameters have type annotations where the type is non-obvious
 - [ ] SHOULD: Return type is annotated when callers would otherwise have to guess

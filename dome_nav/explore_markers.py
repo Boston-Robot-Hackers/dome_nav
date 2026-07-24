@@ -11,6 +11,23 @@ from dome_nav.explore_context import MapInfo
 from dome_nav.frontier_explorer import cell_to_world
 
 
+def new_marker(now: Time, ns: str, marker_id: int, marker_type: int) -> Marker:
+    marker = Marker()
+    marker.header.frame_id = "map"
+    marker.header.stamp = now
+    marker.ns = ns
+    marker.id = marker_id
+    marker.type = marker_type
+    return marker
+
+
+def add_point(marker: Marker, x: float, y: float) -> None:
+    point = Point()
+    point.x = x
+    point.y = y
+    marker.points.append(point)
+
+
 def build_explore_markers(
     now: Time,
     is_exploring: bool,
@@ -20,7 +37,7 @@ def build_explore_markers(
     blacklist: set[tuple[float, float]],
     goal_xy: tuple[float, float] | None,
 ) -> MarkerArray:
-    # Builds the three-marker array (frontiers, blacklist, goal) for /explore/markers.
+    """Build the frontiers/blacklist/goal marker array for /explore/markers."""
     markers = MarkerArray()
     markers.markers.append(
         build_frontier_marker(now, is_exploring, clusters, min_frontier_size, map_info)
@@ -37,12 +54,7 @@ def build_frontier_marker(
     min_frontier_size: int,
     map_info: MapInfo | None,
 ) -> Marker:
-    marker = Marker()
-    marker.header.frame_id = "map"
-    marker.header.stamp = now
-    marker.ns = "frontiers"
-    marker.id = 0
-    marker.type = Marker.POINTS
+    marker = new_marker(now, "frontiers", 0, Marker.POINTS)
     marker.action = Marker.ADD if is_exploring else Marker.DELETE
     marker.scale.x = 0.05
     marker.scale.y = 0.05
@@ -55,10 +67,7 @@ def build_frontier_marker(
             if len(cluster) >= min_frontier_size:
                 for idx in cluster:
                     wx, wy = cell_to_world(idx, map_info)
-                    p = Point()
-                    p.x = wx
-                    p.y = wy
-                    marker.points.append(p)
+                    add_point(marker, wx, wy)
     return marker
 
 
@@ -66,12 +75,7 @@ def build_blacklist_marker(
     now: Time,
     blacklist: set[tuple[float, float]],
 ) -> Marker:
-    marker = Marker()
-    marker.header.frame_id = "map"
-    marker.header.stamp = now
-    marker.ns = "blacklist"
-    marker.id = 1
-    marker.type = Marker.POINTS
+    marker = new_marker(now, "blacklist", 1, Marker.POINTS)
     marker.action = Marker.ADD
     marker.scale.x = 0.1
     marker.scale.y = 0.1
@@ -80,10 +84,7 @@ def build_blacklist_marker(
     marker.color.b = 0.0
     marker.color.a = 1.0
     for bx, by in blacklist:
-        p = Point()
-        p.x = bx
-        p.y = by
-        marker.points.append(p)
+        add_point(marker, bx, by)
     return marker
 
 
@@ -92,12 +93,7 @@ def build_goal_marker(
     is_exploring: bool,
     goal_xy: tuple[float, float] | None,
 ) -> Marker:
-    marker = Marker()
-    marker.header.frame_id = "map"
-    marker.header.stamp = now
-    marker.ns = "goal"
-    marker.id = 2
-    marker.type = Marker.SPHERE
+    marker = new_marker(now, "goal", 2, Marker.SPHERE)
     if is_exploring and goal_xy is not None:
         marker.action = Marker.ADD
         marker.pose.position.x = goal_xy[0]

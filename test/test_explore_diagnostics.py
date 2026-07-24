@@ -36,6 +36,11 @@ def tuning(
         prefer_farthest=False,
         use_novelty_scoring=False,
         novelty_top_n=5,
+        w_distance=1.0,
+        w_novelty=1.0,
+        w_clearance=0.0,
+        robot_radius=0.17,
+        clearance_margin_m=0.05,
     )
 
 

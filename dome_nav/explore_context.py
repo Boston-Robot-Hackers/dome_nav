@@ -13,7 +13,7 @@ from builtin_interfaces.msg import Time
 
 @dataclass
 class MapInfo:
-    # Occupancy-grid geometry. Lives in the shared contract module, not a strategy's.
+    """Occupancy-grid geometry; lives in the shared contract module, not a strategy."""
     width: int
     height: int
     resolution: float
@@ -22,7 +22,7 @@ class MapInfo:
 
 
 class GoalOutcome(Enum):
-    # Names why next_goal returned no goal, so the node needn't peek at internals.
+    """Names why next_goal returned no goal, so the node needn't peek at internals."""
     NEW_GOAL = auto()
     NO_TARGETS_BLOCKED = auto()  # targets exist but all filtered/blacklisted
     EXPLORED_DONE = auto()       # algorithm finished — end the session
@@ -48,9 +48,12 @@ class GoalDecision:
 
 @dataclass
 class ExploreParams:
-    # Shared/session tuning the node owns. Strategy-specific tuning lives in the
-    # algorithm (e.g. frontier_params.FrontierParams). blacklist_radius is here
-    # because the node's own reselection policy uses it.
+    """Shared/session tuning the node owns.
+
+    Strategy-specific tuning lives in the algorithm (e.g. frontier_params.
+    FrontierParams). blacklist_radius is here because the node's own reselection
+    policy uses it.
+    """
     max_explore_radius: float = 0.0
     blacklist_radius: float = 0.5
     preferred_goal_distance: float = 1.0
@@ -58,7 +61,7 @@ class ExploreParams:
 
 @dataclass
 class ExplorationContext:
-    # Read-only view; the node passes the OccupancyGrid's array.array uncopied.
+    """Read-only view; the node passes the OccupancyGrid's array.array uncopied."""
     map_data: Sequence[int]
     map_info: MapInfo
     robot_xy: tuple[float, float]
@@ -69,8 +72,10 @@ class ExplorationContext:
 
 @dataclass
 class RenderContext:
-    # General session state the node hands to an algorithm's optional viz/diagnostic
-    # hooks. The node treats whatever the hook returns as opaque.
+    """Session state handed to an algorithm's optional viz/diagnostic hooks.
+
+    The node treats whatever the hook returns as opaque.
+    """
     now: Time
     is_exploring: bool
     map_info: MapInfo | None
@@ -82,16 +87,21 @@ class RenderContext:
 
 
 class ExplorationAlgorithm(Protocol):
-    # next_goal is the only required method. These optional hooks are called via
-    # getattr and treated as opaque; a plugin omits any it doesn't need:
-    #   render_markers(rc) -> MarkerArray | None
-    #   exhaustion_report(rc) -> str | None
-    #   failure_report(rc) -> str | None
-    #   telemetry_extra() -> dict
-    #   session_params() -> dict
+    """Pluggable exploration strategy contract.
+
+    next_goal is the only required method. These optional hooks are called via
+    getattr and treated as opaque; a plugin omits any it doesn't need:
+        render_markers(rc) -> MarkerArray | None
+        exhaustion_report(rc) -> str | None
+        failure_report(rc) -> str | None
+        telemetry_extra() -> dict
+        session_params() -> dict
+    """
     def next_goal(self, ctx: ExplorationContext) -> GoalDecision: ...
 
     def declare_params(self, node) -> None:
-        # Optional: declare/read the algorithm's own ROS params in the node's
-        # namespace (must be node-declared to be yaml/launch-settable). No-op if none.
+        """Optional: declare/read the algorithm's ROS params in the node namespace.
+
+        Must be node-declared to be yaml/launch-settable. No-op if the plugin has none.
+        """
         ...

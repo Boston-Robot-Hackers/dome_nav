@@ -24,9 +24,16 @@ def just_explorer_launch(
     max_explore_radius: float = -1.0,
     use_novelty_scoring: bool = False,
     novelty_top_n: int = -1,
+    w_distance: float = -1.0,
+    w_novelty: float = -1.0,
+    w_clearance: float = -1.0,
+    robot_radius: float = -1.0,
+    clearance_margin_m: float = -1.0,
 ):
     bl = BetterLaunch()
 
+    # F31 scorer weights + clearance floor. w_clearance:=0.0 disables clearance
+    # (the T07 baseline); left at -1 the node keeps its dataclass default (1.0).
     overrides = {
         "min_frontier_dist": min_frontier_dist,
         "max_frontier_dist": max_frontier_dist,
@@ -34,6 +41,11 @@ def just_explorer_launch(
         "preferred_goal_distance": preferred_goal_distance,
         "max_explore_radius": max_explore_radius,
         "novelty_top_n": novelty_top_n,
+        "w_distance": w_distance,
+        "w_novelty": w_novelty,
+        "w_clearance": w_clearance,
+        "robot_radius": robot_radius,
+        "clearance_margin_m": clearance_margin_m,
     }
     params = {
         "map_name": map_name,

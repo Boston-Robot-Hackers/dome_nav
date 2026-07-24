@@ -8,11 +8,20 @@ import pytest
 from dome_nav.frontier_params import FrontierTuning
 from dome_nav.frontier_explorer import (
     MapInfo,
+    CellCtx,
+    Registry,
+    build_registry,
+    clearance_field,
     frontier_diag,
     cell_to_world,
     find_frontier_clusters,
+    keep_clearance_floor,
     nudge_toward_robot,
     pick_best_frontier,
+    score_clearance_bonus,
+    score_distance_to_preferred,
+    score_novelty,
+    select_cell,
 )
 
 
@@ -37,6 +46,11 @@ def filters(
     prefer_farthest: bool = False,
     use_novelty_scoring: bool = False,
     novelty_top_n: int = 5,
+    w_distance: float = 1.0,
+    w_novelty: float = 1.0,
+    w_clearance: float = 0.0,   # clearance OFF here so geometry/parity tests are pure
+    robot_radius: float = 0.17,
+    clearance_margin_m: float = 0.05,
 ) -> FrontierTuning:
     return FrontierTuning(
         min_frontier_size=min_frontier_size,
@@ -50,6 +64,11 @@ def filters(
         prefer_farthest=prefer_farthest,
         use_novelty_scoring=use_novelty_scoring,
         novelty_top_n=novelty_top_n,
+        w_distance=w_distance,
+        w_novelty=w_novelty,
+        w_clearance=w_clearance,
+        robot_radius=robot_radius,
+        clearance_margin_m=clearance_margin_m,
     )
 
 
@@ -544,12 +563,10 @@ def test_pick_returns_cell_within_max_dist():
     assert abs(result[0] - 0.5) < 1e-6
 
 
-# --- path_novelty_score / best_frontier_candidates / pick_by_novelty ---
+# --- path_novelty_score ---
 
 from dome_nav.frontier_explorer import (  # noqa: E402
     path_novelty_score,
-    best_frontier_candidates,
-    pick_by_novelty,
     world_to_cell,
 )
 
@@ -622,49 +639,288 @@ def test_novelty_skips_out_of_bounds():
     assert path_novelty_score((0.5, 0.5), (7.5, 0.5), data, info) == 3
 
 
-def test_best_frontier_candidates_ranks_by_distance_and_caps_top_n():
-    # Three single-cell clusters at increasing distance from robot at origin.
+def test_pick_best_frontier_nearest_when_preferred_zero():
     info = make_info(10, 1, resolution=1.0)
     clusters = [[1], [4], [8]]  # world x 1.5, 4.5, 8.5
-    cands = best_frontier_candidates(
-        clusters, info, (0.0, 0.0), filters(preferred_goal_distance=0.0), top_n=2
-    )
-    assert len(cands) == 2
-    assert abs(cands[0][0] - 1.5) < 1e-6  # nearest first
-    assert abs(cands[1][0] - 4.5) < 1e-6
-
-
-def test_pick_best_frontier_matches_top1_candidate():
-    info = make_info(10, 1, resolution=1.0)
-    clusters = [[1], [4], [8]]
     tuning = filters(preferred_goal_distance=0.0)
-    top1 = best_frontier_candidates(clusters, info, (0.0, 0.0), tuning, top_n=1)[0]
-    assert pick_best_frontier(clusters, info, (0.0, 0.0), tuning) == top1
+    result = pick_best_frontier(clusters, info, (0.0, 0.0), tuning)
+    assert abs(result[0] - 1.5) < 1e-6  # nearest cell wins
 
 
-def test_pick_by_novelty_prefers_more_unknown_path():
-    info = make_info(5, 3, resolution=1.0)
-    data = flat_map(5, 3, 0)
-    # Unknown strip along row 0 only; candidate A along row 0, B along row 2.
-    for col in range(5):
-        data[col] = -1
-    cand_a = (4.5, 0.5)  # path across the unknown row
-    cand_b = (4.5, 2.5)  # path across all-free row
-    best, score = pick_by_novelty([cand_b, cand_a], (0.5, 0.5), data, info)
-    assert best == cand_a
-    assert score >= 3
+# --- F31 scoring pipeline (T01 primitives) ---
+
+def make_cell(world_xy, dist_to_robot_m=0.0, clearance_cells=float("inf"),
+              cell_index=0, blacklist=None, tuning=None) -> CellCtx:
+    # Minimal CellCtx for pipeline tests; shared fields default to empty/None since
+    # the tests read only the per-cell fields plus tuning/blacklist.
+    return CellCtx(
+        world_xy=world_xy, cell_index=cell_index, dist_to_robot_m=dist_to_robot_m,
+        clearance_cells=clearance_cells, map_data=[], map_info=make_info(1, 1),
+        robot_world_xy=(0.0, 0.0), start_world_xy=None, tuning=tuning or filters(),
+        blacklist=blacklist or set(),
+    )
 
 
-def test_pick_by_novelty_empty_returns_none():
+def test_select_cell_picks_min_weighted_cost():
+    cells = [make_cell((0.0, 0.0), dist_to_robot_m=0.0), make_cell((1.0, 0.0), dist_to_robot_m=9.0)]
+    # single scorer = d_robot; normalized to [0,1]; lower cost wins → the d=0 cell.
+    best = select_cell(cells, [], [(1.0, lambda c: c.dist_to_robot_m)])
+    assert best == (0.0, 0.0)
+
+
+def test_select_cell_failing_filter_excludes():
+    cells = [make_cell((0.0, 0.0), dist_to_robot_m=0.0), make_cell((1.0, 0.0), dist_to_robot_m=9.0)]
+    # reject the otherwise-winning near cell; only the far cell survives.
+    keep_far = lambda c: c.world_xy != (0.0, 0.0)
+    best = select_cell(cells, [keep_far], [(1.0, lambda c: c.dist_to_robot_m)])
+    assert best == (1.0, 0.0)
+
+
+def test_select_cell_none_when_all_filtered():
+    cells = [make_cell((0.0, 0.0)), make_cell((1.0, 0.0))]
+    assert select_cell(cells, [lambda c: False], [(1.0, lambda c: c.dist_to_robot_m)]) is None
+
+
+def test_select_cell_empty_returns_none():
+    assert select_cell([], [], [(1.0, lambda c: c.dist_to_robot_m)]) is None
+
+
+def test_select_cell_weights_honored():
+    # cell A: cheap distance, expensive clearance-cost; cell B: the reverse.
+    a = make_cell((0.0, 0.0), dist_to_robot_m=0.0, clearance_cells=0.0)
+    b = make_cell((1.0, 0.0), dist_to_robot_m=10.0, clearance_cells=10.0)
+    dist = lambda c: c.dist_to_robot_m
+    clear_cost = lambda c: -c.clearance_cells  # reward openness → negate
+    # weight clearance heavily → B (more open) wins despite worse distance.
+    best = select_cell([a, b], [], [(1.0, dist), (5.0, clear_cost)])
+    assert best == (1.0, 0.0)
+    # weight distance heavily → A wins.
+    best = select_cell([a, b], [], [(5.0, dist), (1.0, clear_cost)])
+    assert best == (0.0, 0.0)
+
+
+def test_select_cell_single_survivor_normalizes_to_zero():
+    # One survivor: every scorer column is degenerate → cost 0 → still returned.
+    only = make_cell((2.0, 3.0), dist_to_robot_m=7.0)
+    best = select_cell([only], [], [(1.0, lambda c: c.dist_to_robot_m)])
+    assert best == (2.0, 3.0)
+
+
+def test_build_registry_has_distance_heuristics():
+    # T02: registry carries the migrated filters + the distance scorer.
+    reg = build_registry(filters(), make_info(5, 5), None)
+    assert isinstance(reg, Registry)
+    assert len(reg.cluster_filters) == 2      # min-size, max-radius
+    assert len(reg.cell_filters) == 2         # blacklist, dist-range
+    assert len(reg.scorers) == 1              # distance-to-preferred, weight 1.0
+    assert reg.scorers[0][0] == 1.0
+
+
+# --- F31 T03: novelty migrated from two-stage hack to a weighted scorer ---
+
+def test_build_registry_adds_novelty_scorer_when_enabled():
+    # use_novelty_scoring flips the novelty scorer in; off leaves the single
+    # distance scorer (no separate short-list stage anymore).
+    off = build_registry(filters(use_novelty_scoring=False), make_info(5, 5), None)
+    on = build_registry(filters(use_novelty_scoring=True), make_info(5, 5), None)
+    assert len(off.scorers) == 1
+    assert len(on.scorers) == 2
+
+
+def test_score_novelty_negates_unknown_path_count():
+    # Scorer is the negated unknown-cell path count: more novelty = lower cost.
+    info = make_info(5, 1, resolution=1.0)
+    data = [0, -1, -1, 0, 0]
+    cell = make_cell((4.5, 0.5))
+    cell.map_data = data
+    cell.map_info = info
+    cell.robot_world_xy = (0.5, 0.5)
+    assert score_novelty(cell) == -float(
+        path_novelty_score((0.5, 0.5), (4.5, 0.5), data, info)
+    )
+
+
+def test_novelty_scorer_breaks_distance_tie_toward_unknown():
+    # Two candidates equidistant from the robot (distance scorer ties, normalizes
+    # to 0), so the novelty scorer decides: the cell whose straight-line path
+    # crosses more unknown wins. Proves novelty steers selection in the pipeline.
+    info = make_info(9, 1, resolution=1.0)
+    data = [0, 0, -1, -1, 0, 0, 0, 0, 0]  # unknown at cells 2, 3 (robot's left)
+    robot = (4.5, 0.5)
+    tuning = filters(use_novelty_scoring=True)
+
+    def candidate(world_xy):
+        cell = make_cell(world_xy, dist_to_robot_m=3.0, tuning=tuning)
+        cell.map_data = data
+        cell.map_info = info
+        cell.robot_world_xy = robot
+        return cell
+
+    left = candidate((1.5, 0.5))   # path crosses cells 4,3,2,1 → 2 unknown
+    right = candidate((7.5, 0.5))  # path crosses cells 4,5,6,7 → 0 unknown
+    scorers = [(1.0, score_distance_to_preferred), (1.0, score_novelty)]
+    assert select_cell([left, right], [], scorers) == (1.5, 0.5)
+
+
+# --- F31 T04: clearance_field + floor filter + bonus scorer ---
+
+def test_clearance_field_zero_at_occupied_grows_outward():
+    # 1x5 row with the wall at cell 0: distances step out 0,1,2,3,4.
+    info = make_info(5, 1, resolution=1.0)
+    data = [100, 0, 0, 0, 0]
+    field = clearance_field(data, info)
+    assert field == [0.0, 1.0, 2.0, 3.0, 4.0]
+
+
+def test_clearance_field_metric_diagonal():
+    # Wall at corner (0,0); the opposite-diagonal cell is reached by two diagonal
+    # steps, so its clearance is 2*sqrt(2), not the 4-step Manhattan 4.
     info = make_info(3, 3, resolution=1.0)
-    assert pick_by_novelty([], (0.0, 0.0), flat_map(3, 3, 0), info) == (None, 0)
+    data = flat_map(3, 3, 0)
+    data[0] = 100  # cell (0,0) is the wall
+    field = clearance_field(data, info)
+    assert field[0] == 0.0
+    assert abs(field[8] - 2 * math.sqrt(2)) < 1e-9   # cell (2,2)
+    assert abs(field[4] - math.sqrt(2)) < 1e-9       # cell (1,1)
 
 
-def test_pick_by_novelty_ties_keep_input_order():
-    info = make_info(3, 1, resolution=1.0)
-    data = flat_map(3, 1, 0)  # no unknown → all scores 0 → tie
-    first = (0.5, 0.5)
-    second = (2.5, 0.5)
-    best, score = pick_by_novelty([first, second], (0.5, 0.5), data, info)
-    assert best == first
-    assert score == 0
+def test_clearance_field_all_inf_when_no_walls():
+    info = make_info(3, 3, resolution=1.0)
+    field = clearance_field(flat_map(3, 3, 0), info)
+    assert all(v == float("inf") for v in field)
+
+
+def test_clearance_floor_rejects_sub_margin_keeps_clear():
+    # floor = robot_radius(0.2) + margin(0.1) = 0.3m; at res 0.1 that is 3 cells.
+    info = make_info(5, 1, resolution=0.1)
+    tuning = filters(robot_radius=0.2, clearance_margin_m=0.1, w_clearance=1.0)
+    near = make_cell((0.0, 0.0), clearance_cells=2.0, tuning=tuning)  # 0.2m < 0.3m
+    far = make_cell((0.0, 0.0), clearance_cells=4.0, tuning=tuning)   # 0.4m >= 0.3m
+    near.map_info = info
+    far.map_info = info
+    assert keep_clearance_floor(near) is False
+    assert keep_clearance_floor(far) is True
+
+
+def test_clearance_floor_keeps_inf_when_no_walls():
+    tuning = filters(robot_radius=0.2, clearance_margin_m=0.1, w_clearance=1.0)
+    cell = make_cell((0.0, 0.0), clearance_cells=float("inf"), tuning=tuning)
+    assert keep_clearance_floor(cell) is True
+
+
+def test_clearance_bonus_prefers_more_open_of_equal_distance():
+    # Two equidistant cells: the clearance bonus picks the more-open one.
+    tuning = filters(w_clearance=1.0)
+    tight = make_cell((1.0, 0.0), dist_to_robot_m=3.0, clearance_cells=1.0, tuning=tuning)
+    open_ = make_cell((2.0, 0.0), dist_to_robot_m=3.0, clearance_cells=9.0, tuning=tuning)
+    scorers = [(1.0, score_distance_to_preferred), (1.0, score_clearance_bonus)]
+    assert select_cell([tight, open_], [], scorers) == (2.0, 0.0)
+
+
+def test_build_registry_adds_clearance_when_weight_positive():
+    off = build_registry(filters(w_clearance=0.0), make_info(5, 5), None)
+    on = build_registry(filters(w_clearance=1.0), make_info(5, 5), None)
+    assert len(off.cell_filters) == 2 and len(off.scorers) == 1
+    assert len(on.cell_filters) == 3      # + clearance floor
+    assert len(on.scorers) == 2           # + clearance bonus
+
+
+def test_clearance_corridor_not_wiped_at_inscribed_floor():
+    # A narrow corridor (walls either side, one free cell between): center
+    # clearance is 1 cell = 0.1m at res 0.1. With floor = inscribed 0.08 + margin
+    # 0.0 the center survives, proving a low floor does not starve corridors.
+    info = make_info(3, 1, resolution=0.1)
+    data = [100, 0, 100]
+    field = clearance_field(data, info)
+    assert field[1] == 1.0
+    tuning = filters(robot_radius=0.08, clearance_margin_m=0.0, w_clearance=1.0)
+    center = make_cell((0.0, 0.0), clearance_cells=field[1], tuning=tuning)
+    center.map_info = info
+    assert keep_clearance_floor(center) is True
+
+
+# --- F31 T02: pipeline parity with the pre-refactor selection ---
+
+def _reference_pick(clusters, info, robot_xy, tuning, blacklist=None, start_xy=None):
+    # Frozen copy of the pre-F31 selection (best cell per cluster by
+    # distance-to-preferred, cluster filters, then best across clusters). Kept in
+    # the test as the parity spec so pick_best_frontier can never silently drift.
+    rx, ry = robot_xy
+    bl = blacklist or set()
+    best_xy, best_score = None, float("inf")
+    for cluster in clusters:
+        if len(cluster) < tuning.min_frontier_size:
+            continue
+        cx = sum(cell_to_world(i, info)[0] for i in cluster) / len(cluster)
+        cy = sum(cell_to_world(i, info)[1] for i in cluster) / len(cluster)
+        if tuning.max_explore_radius > 0.0 and start_xy is not None:
+            if math.hypot(cx - start_xy[0], cy - start_xy[1]) > tuning.max_explore_radius:
+                continue
+        for idx in cluster:
+            wx, wy = cell_to_world(idx, info)
+            if any(math.hypot(wx - bx, wy - by) < tuning.blacklist_radius
+                   for bx, by in bl):
+                continue
+            d = math.hypot(wx - rx, wy - ry)
+            if tuning.min_frontier_dist > 0.0 and d < tuning.min_frontier_dist:
+                continue
+            if tuning.max_frontier_dist > 0.0 and d > tuning.max_frontier_dist:
+                continue
+            score = abs((d - tuning.goal_inset_m) - tuning.preferred_goal_distance)
+            if score < best_score:
+                best_score, best_xy = score, (wx, wy)
+    return best_xy
+
+
+def _parity_check(clusters, info, robot_xy, tuning, blacklist=None, start_xy=None):
+    # The pipeline must reproduce the frozen pre-F31 selection cell-for-cell.
+    expected = _reference_pick(clusters, info, robot_xy, tuning, blacklist, start_xy)
+    got = pick_best_frontier(
+        clusters, info, robot_xy, tuning, blacklist=blacklist, start_xy=start_xy
+    )
+    assert got == expected
+
+
+def test_parity_single_cluster_nearest():
+    info = make_info(10, 1)
+    clusters = [[2, 4, 6, 8]]
+    _parity_check(clusters, info, (0.0, 0.0), filters(preferred_goal_distance=0.0))
+
+
+def test_parity_multi_cluster_preferred_distance():
+    info = make_info(20, 1)
+    clusters = [[2, 3], [10, 11], [17, 18]]
+    _parity_check(clusters, info, (0.0, 0.0),
+                  filters(preferred_goal_distance=5.0, goal_inset_m=0.3))
+
+
+def test_parity_with_blacklist_and_dist_filters():
+    info = make_info(20, 1)
+    clusters = [[2, 3, 4], [9, 10, 11], [16, 17, 18]]
+    bl = {cell_to_world(10, info)}  # knock out the middle cluster's best cell
+    _parity_check(clusters, info, (0.0, 0.0),
+                  filters(preferred_goal_distance=8.0, min_frontier_dist=3.0,
+                          max_frontier_dist=18.0, blacklist_radius=0.5),
+                  blacklist=bl)
+
+
+def test_parity_size_filter_drops_small_cluster():
+    info = make_info(20, 1)
+    clusters = [[2], [10, 11, 12, 13]]  # first cluster below min_frontier_size
+    _parity_check(clusters, info, (0.0, 0.0),
+                  filters(min_frontier_size=3, preferred_goal_distance=0.0))
+
+
+def test_parity_max_radius_filter():
+    info = make_info(20, 1)
+    clusters = [[2, 3], [16, 17]]
+    _parity_check(clusters, info, (0.0, 0.0),
+                  filters(max_explore_radius=5.0, preferred_goal_distance=0.0),
+                  start_xy=(0.0, 0.0))
+
+
+def test_parity_all_filtered_returns_none():
+    info = make_info(10, 1)
+    clusters = [[2, 4]]
+    _parity_check(clusters, info, (0.0, 0.0),
+                  filters(min_frontier_dist=100.0))  # nothing survives

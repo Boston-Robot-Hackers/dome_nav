@@ -26,6 +26,11 @@ def sim_explore_node_launch(
     min_frontier_dist: float = 0.9,
     preferred_goal_distance: float = 2.0,
     min_frontier_size: int = 5,
+    w_distance: float = 1.0,
+    w_novelty: float = 1.0,
+    w_clearance: float = 1.0,
+    robot_radius: float = 0.17,
+    clearance_margin_m: float = 0.05,
 ):
     if not map_name:
         raise ValueError(
@@ -45,6 +50,12 @@ def sim_explore_node_launch(
             "min_frontier_dist": min_frontier_dist,
             "preferred_goal_distance": preferred_goal_distance,
             "min_frontier_size": min_frontier_size,
+            # F31 goal-scoring weights + clearance floor; w_clearance:=0.0 = T07 baseline.
+            "w_distance": w_distance,
+            "w_novelty": w_novelty,
+            "w_clearance": w_clearance,
+            "robot_radius": robot_radius,
+            "clearance_margin_m": clearance_margin_m,
             "map_name": map_name,
             "use_sim_time": True,
         },

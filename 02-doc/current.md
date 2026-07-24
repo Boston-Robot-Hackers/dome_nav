@@ -3,9 +3,69 @@
 Concise cold-start orientation. Detailed history lives in git log and the
 `04-tasks/` files — do **not** re-narrate it here.
 
-**Date:** 2026-07-22 · **Branch:** main
+**Date:** 2026-07-24 · **Branch:** main
 
-## This session (2026-07-22) — collision_monitor gate probe (preliminary)
+## This session (2026-07-24) — docs cleanup + package-wide style-guide pass
+
+No behavior change. Cosmetic/quality + docs only; full suite still **266 pass**
+(4 live-stack `test_map_validation` need a robot), `colcon build` clean.
+
+- **Style guide grew a rule** (`.claude/style_guide.md` §Comments And Types, MUST):
+  complicated/obscure functions explain what + inputs/outputs, **preferably in the
+  docstring**; explicitly does not license in-body narrative `#` blocks (resolves
+  the clash with the existing narrative-block ban). Working rule applied everywhere:
+  *whole-function/class "what" → docstring; per-line "why" → `#` comment.*
+- **Package-wide style pass on all 14 `dome_nav/*.py`**: `#`-what-blocks → docstrings;
+  16 lines wrapped to ≤88; DRY (`explore_markers` `new_marker`/`add_point`,
+  `explore_telemetry` `telemetry_dir`); single-letter renames (`d/m/r/t/v/n/a/b` →
+  intention-revealing). One line left >88 = pre-existing aligned field-comment
+  (`frontier_explorer.py:191`).
+- **Docs fixed**: `02-doc/notes.md` map-persistence (no auto-resume by design +
+  how to resume; corrected stale "map_file_name hardcoded" claim);
+  `01-literate/X07` stale `sim_explore.launch.py` refs (file deleted 07-20) +
+  `pluggable_explore_manager_node` node name.
+- **Launch audit**: all 12 launch files justified, none dead. Doc-rot flagged:
+  `spec.md` outdoor row is a planned-future file (kept); `robot_nav_outdoor` /
+  `sim_explore` refs otherwise only in `done/` archives.
+- **Deferred (needs decision)**: `frontier_params.declare_frontier_params` +
+  `merge_tuning` hand-transcribe 13/16 dataclass fields — style_guide SHOULD (:52)
+  prefers `dataclasses.fields()`; behavior-sensitive (ROS param types), not done.
+- **Known stale literate (pre-existing, not this session)**: `X05-explore_telemetry.md`
+  shows a retired `next_run_number`/`exp-NNNN` scheme; real code is
+  `build_telemetry_filename` (`e<name><date>.json`). Needs a regen.
+
+## This session (2026-07-23) — F31 pipeline T03–T05 (novelty scorer + clearance)
+
+TF31 T01/T02 were already landed (uncommitted) at session start. Completed:
+
+- **T03** — novelty migrated to a weighted scorer; the two-stage
+  short-list-then-re-rank branch in `select_target` is gone. `novelty_top_n` is
+  now a deprecated no-op (kept declared so configs don't break). Added
+  pipeline-level novelty tests (tie-break toward higher-unknown path).
+- **T04** — new pure `clearance_field(data, info)` (multi-source relaxation BFS
+  from wall cells `>= OCCUPIED_THRESHOLD` 65 on the SLAM `/map`, 8-connected,
+  diagonal √2). Added `keep_clearance_floor` cell filter + `score_clearance_bonus`
+  scorer, registered when `w_clearance > 0`.
+- **T05** — `FrontierParams`/`FrontierTuning`/`merge_tuning`/`declare` carry
+  `w_distance`/`w_novelty`/`w_clearance`, `robot_radius` (R_inscribed source, not a
+  separate param), `clearance_margin_m`. `_minmax_normalize` made inf-safe
+  (`lo == hi ⇒ zeros`) so a no-wall map's all-inf clearance column is a no-op.
+- **Default `w_clearance` 1.0 ⇒ clearance ON by default** (spec intent: fix
+  wall-hug). Not sim-verified yet — **T07 must tune**. Maps with no occupied cell
+  are unaffected (clearance all-inf → floor/bonus no-op).
+- **Tests**: full suite **266 pass** (`/usr/bin/python3 -m pytest test/`, excl. 4
+  live-stack `test_map_validation` tests that need a running robot). `colcon build
+  --packages-select dome_nav` clean. Gotcha logged: PATH `python` is the platformio
+  venv (no numpy) — use `/usr/bin/python3` (memory `project_pure_test_run_recipe`).
+- **Params plumbed into launch**: `w_distance`/`w_novelty`/`w_clearance`/
+  `robot_radius`/`clearance_margin_m` now exposed on all three explorer launch
+  surfaces — `robot_explore` (real, explicit values, robot_radius 0.17),
+  `sim_explore_node` (sim args), `just_explorer` (-1 sentinels, the tuning
+  harness). `w_clearance:=0.0` = the T07 baseline; default 1.0 = clearance on.
+- Remaining TF31: **T06** (feature flags + literate regen), **T07** sim,
+  **T08** live.
+
+## This session (2026-07-22) — gate probe (preliminary) + F31 scoring pipeline
 
 Goal: pin down **which gate** stops the wedged robot (F29 mandatory probe).
 
@@ -32,19 +92,26 @@ Goal: pin down **which gate** stops the wedged robot (F29 mandatory probe).
     BackUp viable.
 - F29 has **no task file yet** (TF29 needed before code; probe should be T01).
 
-Also this session — `nav2_params_explore_real_mini.yaml` review + wall-hug fix:
+Also this session — **frontier goals hug walls** → wrote F31 goal-scoring pipeline:
 
-- **Header CHANGES table was stale** (claimed local inflation 0.15 and a global
-  0.5 that was never in the file). Synced to the in-place annotations; rule-6
-  stripped diff vs upstream now clean.
-- **Robot drove too close to walls.** Local costmap `cost_scaling_factor`
-  5.0 → 3.0 (back to upstream): higher scaling = faster cost decay = cheaper
-  near-wall cells = MPPI hugs. If still too close next lever is local
-  `inflation_radius` 0.4 → 0.55. Needs `colcon build` + real-robot retest.
-- Literate docs synced to pending source changes: 04 (`Sequence[int]` uncopied
-  map view), 06 (`world_to_cell` floor fix, inset-adjusted cluster scoring),
-  08 (merge_tuning invariant, novelty telemetry keys); deleted
-  `11-sim_explore_launch.md` (source launch file removed).
+- **Root cause**: `find_frontier_clusters` buffers only against *unknown*
+  (`buffer_cells` rings from the `-1` boundary); occupied cells never checked.
+  `best_cell_in_cluster` filters size/blacklist/dist but has no obstacle-proximity
+  test (no `data` in scope). F27 rejects goals *on* lethal cells; near-lethal
+  passes → picks hug walls → feeds the F29 collision_monitor wedge.
+- **F31 written** (`03-features/notdone/F31-goal-scoring-pipeline.md`, High):
+  refactor selection into **filters + weighted scorers** (Nav2 `CriticManager`
+  shape) with a per-cycle `CellCtx` + registry from `FrontierParams`. Kills the
+  scattered `if params.x` guards and the F15 two-stage novelty hack (novelty
+  becomes just a weighted scorer). First new tenant = **obstacle clearance**: new
+  `clearance_field` BFS (distance-to-nearest-occupied), floor filter
+  (`clearance ≥ R_inscribed + margin`) + bonus scorer (`-clearance`). Two
+  must-gets: per-cycle [0,1] normalization; keep cluster/cell two-phase. Parity
+  test (clearance weight 0 + novelty migrated = old behavior) is the regression
+  anchor. F15/F30 migrate in as tenants; F27 relocates as a cell filter.
+- Wall-standoff YAML lever (local `cost_scaling_factor` 5.0→3.0) still pending
+  `colcon build` + real retest — F31 attacks the same wall-hug at goal selection,
+  upstream of costmap tuning.
 
 ## Prior sessions (2026-07-18/20/21) — shipped + diagnosed
 
@@ -163,12 +230,17 @@ ros2 param set /collision_monitor FootprintApproach.enabled false   # dynamic es
 
 1. **Finish gate probe** (points-in-footprint count + cmd_vel ratio + reverse
    test) → decides F29 design. Then write TF29 with probe as T01.
-2. **Write TF30** (path-distance ranking, High) — biggest stall-input fix.
-3. **Give the dev VM 4–6 vCPUs.**
-4. **Restore `FootprintApproach` enabled** in both explore configs.
-5. TF27 T06 sim verify (lethal-goal guard skip log).
-6. TF15 T05 live verify (novelty on vs off).
-7. Real-robot retest of wall standoff (local `cost_scaling_factor` 5.0→3.0).
+   Probe script: `scratchpad/count_footprint_points.py` (R=0.17, min_points=6
+   confirmed vs mini config).
+2. **Write TF31** (scoring pipeline + clearance, High) — fixes wall-hug goals,
+   frames F15/F30 migration.
+3. **Write TF30** (path-distance ranking, High) — biggest stall-input fix;
+   lands as an F31 filter/`d`-source.
+4. **Give the dev VM 4–6 vCPUs.**
+5. **Restore `FootprintApproach` enabled** in both explore configs.
+6. TF27 T06 sim verify (lethal-goal guard skip log).
+7. TF15 T05 live verify (novelty on vs off).
+8. Real-robot retest of wall standoff (local `cost_scaling_factor` 5.0→3.0).
 
 ## In-flight features
 
@@ -176,6 +248,9 @@ ros2 param set /collision_monitor FootprintApproach.enabled false   # dynamic es
   verification pending — feature open.
 - **F29** BackUp escape: feature file only; probe in progress (this session);
   no TF29 yet.
+- **F31** goal-scoring pipeline + clearance: TF31 T01–T05 done (pipeline +
+  novelty scorer + obstacle clearance, pure tests pass); T06 literate/flags +
+  T07 sim + T08 live pending. Umbrella for F15/F30 heuristics; fixes wall-hug.
 - **F30** path-distance ranking: feature file only; no TF30 yet.
 - **F28** reason-tagged exclusion: feature file only; no TF28 yet.
 - **F26** survey-algorithms paper: TF26 T01–T05 not started.

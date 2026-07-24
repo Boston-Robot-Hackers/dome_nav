@@ -35,10 +35,7 @@ def require_world_name(world_name: str, worlds_dir: str, usage: str) -> str:
     return world_name
 
 
-# Each world was designed with a specific robot starting position in mind
-# (e.g. multi_room.world uses a corner origin, simple_room.world a centered
-# one) -- selecting a world should not also require remembering its spawn
-# point by hand.
+# Designed spawn per world, so picking a world need not also mean recalling its origin.
 WORLD_SPAWN_XY: dict[str, tuple[float, float]] = {
     "simple_room": (-1.0, -1.0),
     "multi_room": (1.0, 1.0),
