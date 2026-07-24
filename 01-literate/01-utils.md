@@ -1,6 +1,6 @@
 ---
-version: "2.2"
-generated: "2026-07-08"
+version: "2.3"
+generated: "2026-07-24"
 ---
 
 # utils.py — Shared Launch Utilities for dome_nav
