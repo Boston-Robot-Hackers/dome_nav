@@ -3,6 +3,7 @@
 This document inventories every parameter you can use to tune the exploration and
 navigation behavior of `dome_nav`, grouped by where it lives:
 
+0. [Most useful tunings (start here)](#0-most-useful-tunings-start-here)
 1. [ROS2 parameters — explorer manager (shared)](#1-ros2-parameters-explorer-manager-shared)
 2. [ROS2 parameters — frontier algorithm](#2-ros2-parameters-frontier-algorithm)
 3. [ROS2 parameters — slam manager](#3-ros2-parameters-slam-manager)
@@ -10,9 +11,52 @@ navigation behavior of `dome_nav`, grouped by where it lives:
 5. [YAML configs (slam_toolbox / nav2)](#5-yaml-configs)
 6. [Hard-coded constants (code-edit only)](#6-hard-coded-constants)
 7. [Architecture notes](#7-architecture-notes)
+8. [Launch-file inventory & redundancy](#8-launch-file-inventory--redundancy)
 
 **Runtime-configurable** means the value can be set in a launch file or YAML and changed
 without editing code. **Code-edit only** means the default is baked into the source.
+
+---
+
+## 0. Most useful tunings (start here)
+
+If you only touch a handful of knobs, touch these. All are runtime-configurable
+(launch-file or YAML) and have the biggest, most predictable effect on behavior.
+
+Recommended-value columns are the values the shipped launch/YAML configs actually
+set (sim = `sim_explore_node.launch.py` / `nav2_params_explore_sim.yaml`;
+real = `robot_explore.launch.py` / `nav2_params_explore_real.yaml`). Use them as
+the starting point, not the dataclass defaults.
+
+### Exploration coverage vs. speed
+
+| Parameter | Section | Sim | Real | Effect | Tune up when | Tune down when |
+|---|---|---|---|---|---|---|
+| `preferred_goal_distance` | [2](#2-ros2-parameters-frontier-algorithm) | `2.0` | `2.0` | How far the robot travels per goal. Biggest lever on explore pace and thrashing. | Robot dithers among nearby frontiers; want longer purposeful runs. | Robot overshoots into unmapped space and gets stuck. |
+| `min_frontier_dist` | [2](#2-ros2-parameters-frontier-algorithm) | `0.9` | `0.5` | Rejects goals too close to the robot. Kills oscillation near the current pose. | Robot picks goals right on top of itself. | Robot ignores nearby unmapped pockets. |
+| `max_frontier_dist` | [2](#2-ros2-parameters-frontier-algorithm) | `15.0` | `0.0` (off) | Upper bound on robot-to-goal distance. Sim caps it; real leaves it open. | Robot commits to far goals across unmapped space. | Want only-nearby goals. |
+| `max_explore_radius` | [1](#1-ros2-parameters-explorer-manager-shared) | `0.0` | `0.0` | Hard cap on how far from start to explore. | Never — keep `0.0` for full coverage. | Want to bound the session to one room/area. |
+| `min_frontier_size` | [2](#2-ros2-parameters-frontier-algorithm) | `5` | `10` | Ignores small frontier clusters (noise/thin gaps). Real is stricter — noisier lidar. | Robot chases sensor-noise frontiers and never finishes. | Missing real but small openings (doorways). |
+
+### Safety / clearance
+
+| Parameter | Section | Sim | Real | Effect | Tune up when | Tune down when |
+|---|---|---|---|---|---|---|
+| `robot_radius` + `clearance_margin_m` | [2](#2-ros2-parameters-frontier-algorithm) | `0.17` + `0.05` | `0.17` + `0.05` | Clearance floor = `robot_radius + clearance_margin_m`; rejects goals too near walls. | Robot picks goals that wedge it against walls (see [[project_smac_collision_monitor]]). | Robot refuses valid goals in tight spaces. |
+| costmap `inflation_radius` | [5](#5-yaml-configs) | `0.7` (local) | `0.25` local / `0.2` global | Buffer nav2 keeps from obstacles. Dominant nav-side safety/pass-ability knob. Sim runs fat; real trimmed to pass tight halls. | Robot clips corners / walls. | Robot treats narrow halls as impassable. |
+| `lethal_cost_threshold` | [5](#5-yaml-configs) | `65` | `65` | /map cell value nav2 treats as wall. | False obstacles from noisy map. | Robot drives through soft obstacles. |
+
+### Getting-unstuck (nav side)
+
+| Parameter | Section | Sim | Real | Effect |
+|---|---|---|---|---|
+| goal_checker `xy_goal_tolerance` / `yaw_goal_tolerance` | [5](#5-yaml-configs) | `0.5` / `3.15` | (default) / `1.0` | How precisely nav2 must hit the goal. Loose = fewer "can't reach goal" hangs during exploration. Sim yaw wide-open (3.15 ≈ any heading). |
+| MPPI `vx_max` / `wz_max` | [5](#5-yaml-configs) | `±0.45` / `az 3.2` | `±0.6` / `1.4` | Top speeds. Lower for tight/cluttered spaces, higher for open runs. |
+| `GOAL_TIMEOUT_S` / `STUCK_T_S` | [6](#6-hard-coded-constants) | `25.0` / `20.0` | `25.0` / `20.0` | Watchdog timeouts that break nav2 recovery loops (code-edit only, same both). See [[project_nav2_stuck_investigation]]. |
+
+**Rule of thumb**: tune exploration knobs (§1–2) first to change *what* the robot
+targets; tune nav2 YAML (§5) to change *how* it drives there. Don't chase a
+navigation symptom with an exploration knob or vice-versa.
 
 ---
 
@@ -170,3 +214,53 @@ These require a code edit to change.
 - **Known quirks**:
   - `blacklist_radius` is the only shared tuning with no ROS/launch exposure.
   - `goal_inset_m` is ROS-declared but no launch file sets it.
+
+---
+
+## 8. Launch-file inventory & redundancy
+
+All files in `launch/`. **Composed** = brings up a full stack (often via `bl.include`);
+**leaf** = one piece meant to be combined with others.
+
+### Real robot
+
+| File | Kind | Purpose |
+|---|---|---|
+| `robot_explore.launch.py` | composed | **Mode A** — slam_toolbox + Nav2 + explorer for autonomous map building. Primary real-robot exploration entry point. |
+| `robot_map.launch.py` | composed | slam_toolbox + Nav2 + dome_nav nodes, **no explorer** — manual (teleop) map building. |
+| `robot_nav.launch.py` | composed | **Mode B** — static saved map + AMCL + Nav2 for normal operation. Needs a map built by `robot_map`. |
+| `nav_experiment.launch.py` | composed | Experiment harness: slam + Nav2 + optional explorer (when `--map_name` given), both config yamls passed as args. Assumes driver stack runs separately. |
+| `nav2_experiment_navigation.launch.py` | leaf | Trimmed fork of nav2_bringup `navigation_launch.py` — drops 3 unused lifecycle servers to save Pi CPU. Included by the experiment path, not run directly. |
+
+### Simulation
+
+| File | Kind | Purpose |
+|---|---|---|
+| `sim_nav_full.launch.py` | composed | Single-command full sim stack; includes the four sim leaves in dependency order. **Everyday sim entry point.** |
+| `sim_robot.launch.py` | leaf | Gazebo + spawn + bridge + RSP + laser TF. Visible TF-correct robot, no slam/Nav2. |
+| `sim_slam.launch.py` | leaf | slam_toolbox online_async; split from sim_nav so `/map` can be confirmed before Nav2. |
+| `sim_nav2.launch.py` | leaf | Nav2 stack; split so it starts only after `/map` exists (else lifecycle abort). |
+| `sim_explore_node.launch.py` | leaf | explorer_manager_node only; needs sim_robot + sim_slam + sim_nav2 already up. Manual-debug counterpart of sim_nav_full's explorer. |
+| `sim_rviz.launch.py` | leaf | RViz2 with `use_sim_time`. Optional viz. |
+| `just_explorer.launch.py` | leaf | explorer_manager_node only, bring-your-own `/map` + Nav2. Sim/real-agnostic; all tuning via explicit launch args. |
+
+### Redundancy assessment
+
+- **`sim_explore_node.launch.py` ⇄ `sim_nav_full.launch.py:72-81` — real duplication.**
+  The explorer param block is copy-pasted in both (noted in §4). Only `sim_explore_node`'s
+  header even admits it ("same sim-only exploration defaults as sim_nav_full"). Change one,
+  the other drifts. **Candidate for dedupe**: factor the param dict into a shared helper both
+  include, or have `sim_nav_full` `bl.include(sim_explore_node)` like it does the other leaves.
+- **`just_explorer` vs `sim_explore_node`** — near-overlap (both = explorer-only). Not
+  redundant: `just_explorer` takes tuning as explicit args and is stack-agnostic;
+  `sim_explore_node` hard-codes sim defaults. Keep both, but `sim_explore_node` could become
+  a thin `just_explorer` wrapper.
+- **`robot_explore` vs `nav_experiment`** — overlap (both = slam + Nav2 + explorer). Not
+  redundant: `nav_experiment` swaps configs via args for A/B testing; `robot_explore` is the
+  fixed production stack. Purposeful split.
+- **`robot_map` vs `robot_explore`** — same node set minus the explorer. Distinct purpose
+  (manual vs autonomous mapping). Keep.
+
+**Verdict**: one genuine redundancy — the duplicated sim explorer params
+(`sim_explore_node` ⇄ `sim_nav_full`). Everything else is intentional
+leaf/composed layering from the F13 T04 split.
