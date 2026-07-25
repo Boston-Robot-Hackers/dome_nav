@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from dome_nav.explore_context import ExplorationContext, ExploreParams
 from dome_nav.frontier_algorithm import FrontierAlgorithm
+from dome_nav.frontier_params import FrontierParams, merge_tuning
 from dome_nav.frontier_explorer import (
     MapInfo,
     cell_to_world,
@@ -450,12 +451,17 @@ def main():
     robot_xy = find_robot_start(rows)
     data = uncover_around_robot(data, info, robot_xy, args.sensor_radius)
 
-    params = ExploreParams(
+    # F23 split: shared params live in ExploreParams, frontier tuning in
+    # FrontierParams; merge_tuning combines them into the per-tick FrontierTuning
+    # the pure functions consume. blacklist_radius must exceed goal_inset_m.
+    params = ExploreParams(blacklist_radius=max(0.5, args.inset + 0.01))
+    frontier_params = FrontierParams(
         min_frontier_size=args.min_size,
         min_frontier_dist=args.min_dist,
         goal_inset_m=args.inset,
     )
-    algo = FrontierAlgorithm()
+    tuning = merge_tuning(params, frontier_params)
+    algo = FrontierAlgorithm(frontier_params)
     blacklist: set[tuple[float, float]] = set()
     no_frontier_count = 0
     step = 0
@@ -464,7 +470,7 @@ def main():
                   else "away from unknown")
     compact_legend = (
         f"{colored('R', C_ROBOT)}=robot "
-        f"{colored('T', C_TARGET)}=target(nearest frontier cell) "
+        f"{colored('T', C_TARGET)}=target(best-scored frontier cell) "
         f"{colored('G', C_GOAL)}=goal(T nudged {args.inset}m {nudge_desc}) "
         f"{colored('A', BOLD + CLUSTER_COLORS[0])}=cluster "
         f"{colored('B', C_BLACKLIST)}=blacklisted "
@@ -474,8 +480,8 @@ def main():
     )
 
     print(f"\nMap: {args.map}  size: {info.width}x{info.height}  "
-          f"min_size={params.min_frontier_size}  "
-          f"min_dist={params.min_frontier_dist}  inset={params.goal_inset_m}  "
+          f"min_size={tuning.min_frontier_size}  "
+          f"min_dist={tuning.min_frontier_dist}  inset={tuning.goal_inset_m}  "
           f"nudge_mode={args.nudge_mode}\n")
 
     while True:
@@ -487,21 +493,18 @@ def main():
             start_xy=None,
             params=params,
         )
-        algo.latest_clusters = find_frontier_clusters(data, info)
+        algo.latest_clusters = find_frontier_clusters(
+            data, info, tuning.frontier_buffer_cells
+        )
         target_xy = pick_best_frontier(
-            algo.latest_clusters, info, robot_xy,
-            min_size=params.min_frontier_size,
-            blacklist=blacklist,
-            blacklist_radius=params.blacklist_radius,
-            min_dist=params.min_frontier_dist,
-            max_dist=params.max_frontier_dist,
-            prefer_farthest=params.prefer_farthest,
+            algo.latest_clusters, info, robot_xy, tuning,
+            blacklist=blacklist, data=data,
         )
         if target_xy is None:
             algo.latest_diag = frontier_diag(
                 algo.latest_clusters, info, robot_xy,
-                params.min_frontier_size, params.min_frontier_dist,
-                params.max_frontier_dist,
+                tuning.min_frontier_size, tuning.min_frontier_dist,
+                tuning.max_frontier_dist,
             )
             goal_xy = None
         else:
@@ -513,7 +516,7 @@ def main():
 
         print(compact_legend)
         print(render(data, info, robot_xy, goal_xy, target_xy, blacklist,
-                     algo.latest_clusters, params.min_frontier_size))
+                     algo.latest_clusters, tuning.min_frontier_size))
 
         if goal_xy is None:
             no_frontier_count += 1
@@ -532,7 +535,7 @@ def main():
             no_frontier_count = 0
             dist = math.sqrt((goal_xy[0] - robot_xy[0]) ** 2
                              + (goal_xy[1] - robot_xy[1]) ** 2)
-            legend = cluster_legend(algo.latest_clusters, params.min_frontier_size)
+            legend = cluster_legend(algo.latest_clusters, tuning.min_frontier_size)
             print(f"\nStep {step}: goal=({goal_xy[0]:.2f},{goal_xy[1]:.2f})"
                   f"  dist={dist:.2f}  blacklisted={len(blacklist)}{legend}")
             data = uncover_along_path(data, info, robot_xy, goal_xy, args.sensor_radius)

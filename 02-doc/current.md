@@ -5,6 +5,32 @@ Concise cold-start orientation. Detailed history lives in git log and the
 
 **Date:** 2026-07-24 · **Branch:** main
 
+## This session (2026-07-24, evening) — parameter inventory + algo_demo repair + wedge diagnosis
+
+- **`02-doc/tunable_parameters.md` created**: full inventory of every tuning knob
+  — explorer-manager ROS params, `FrontierParams` ROS params (incl. deprecated
+  `prefer_farthest`/`novelty_top_n`), slam_manager params, launch-file exposure
+  matrix, slam_toolbox/nav2 yaml deltas, and code-edit-only constants. Notes the
+  two gaps: `blacklist_radius` has no ROS/launch exposure; `goal_inset_m` is
+  ROS-declared but set by no launch file.
+- **`tools/algo_demo.py` repaired** (was `TypeError`-dead since the F23/F31 split;
+  chores.md entry): CLI args → `FrontierParams`, `merge_tuning` → `FrontierTuning`,
+  new `pick_best_frontier(tuning, blacklist=, data=)` signature. Verified with
+  `--auto` runs on room/maze/corridor + `--nudge-mode unknown`. Literate
+  `10-algo_demo.md` regenerated v1.1. Full suite **270 pass**.
+- **Wedge investigation narrowed (no code change)**: `collision_monitor_state`
+  confirmed oscillating 0 (DO_NOTHING) ↔ 3 (APPROACH, FootprintApproach). RViz
+  measure showed the costmap is *correct*: obstacle 0.20 m from body edge ⇒ robot
+  center ~0.35 m ⇒ global cost 0 (global `inflation_radius` 0.2 ends at 0.20 m;
+  the pink halo is geometrically right). Ghost-cell/mismapping theory ruled out.
+  **Open**: split `cmd_vel_smoothed` vs `cmd_vel` during a stall to decide
+  MPPI-stall vs monitor-gate. Prime suspect if MPPI: local `inflation_radius`
+  0.25 > actual 0.20 m clearance (global is 0.2) — body edge sits at ~cost 217
+  locally, path-through-obstacle + path-alignment critics stall all trajectories.
+  Secondary: slam `minimum_travel_distance`/`minimum_travel_heading` 0.5/0.5 (sim
+  uses 0.1/0.1) starves map updates while stuck — chicken-egg worth fixing
+  regardless.
+
 ## This session (2026-07-24) — docs cleanup + package-wide style-guide pass
 
 No behavior change. Cosmetic/quality + docs only; full suite still **266 pass**

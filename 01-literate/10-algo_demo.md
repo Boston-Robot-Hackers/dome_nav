@@ -1,5 +1,5 @@
 ---
-version: "1.0"
+version: "1.1"
 generated: "2026-07-24"
 ---
 
@@ -77,12 +77,30 @@ where that better model was prototyped.
 
 Each step mirrors one exploration tick: detect clusters, pick a target, nudge it
 to a goal, then either drive there (revealing new space) or blacklist it if the
-path is blocked.
+path is blocked. Since the F23/F31 split, tuning reaches the pure functions as a
+merged `FrontierTuning` — shared `ExploreParams` plus algorithm-owned
+`FrontierParams` combined by `merge_tuning`, exactly as the real
+`FrontierAlgorithm.next_goal` does it (`merge_tuning` enforces
+`blacklist_radius > goal_inset_m`, hence the `max()` guard):
 
 ```python
+params = ExploreParams(blacklist_radius=max(0.5, args.inset + 0.01))
+frontier_params = FrontierParams(
+    min_frontier_size=args.min_size,
+    min_frontier_dist=args.min_dist,
+    goal_inset_m=args.inset,
+)
+tuning = merge_tuning(params, frontier_params)
+algo = FrontierAlgorithm(frontier_params)
+
 while True:
-    algo.latest_clusters = find_frontier_clusters(data, info)
-    target_xy = pick_best_frontier(algo.latest_clusters, info, robot_xy, ...)
+    algo.latest_clusters = find_frontier_clusters(
+        data, info, tuning.frontier_buffer_cells
+    )
+    target_xy = pick_best_frontier(
+        algo.latest_clusters, info, robot_xy, tuning,
+        blacklist=blacklist, data=data,
+    )
     if target_xy is None:
         goal_xy = None
     elif args.nudge_mode == "unknown":
@@ -102,6 +120,11 @@ while True:
         robot_xy = goal_xy                  # "drive" there
         blacklist.add(goal_xy)
 ```
+
+Because `FrontierParams` defaults are used beyond the three CLI overrides, the
+demo exercises the real F31 pipeline — the preferred-distance scorer plus the
+clearance floor/bonus (`w_clearance` defaults to 1.0) — rather than a
+simplified nearest-cell pick.
 
 ## Rendering
 
@@ -134,14 +157,13 @@ cheaply before committing it to the real pipeline.
 
 ## Observations and possible improvements
 
-- **The demo is out of sync with the current pipeline.** Its call to
-  `pick_best_frontier` uses the *pre-F31* keyword signature
-  (`min_size=`, `blacklist_radius=`, `prefer_farthest=`), and it constructs
-  `ExploreParams(min_frontier_size=..., goal_inset_m=...)` with fields that moved
-  to `FrontierParams`. As written it would raise a `TypeError` against the current
-  `frontier_explorer.py`/`explore_context.py`. Bringing it up to the F31 API
-  (build a `FrontierTuning`, pass `data=`) is the highest-value fix here — a demo
-  that does not run cannot teach.
+- **The demo re-implements `next_goal` by hand.** It calls `find_frontier_clusters`
+  / `pick_best_frontier` / `nudge_toward_robot` directly — duplicating
+  `FrontierAlgorithm.next_goal`'s internals — because it needs the raw target
+  alongside the goal and the alternate nudge hook. That is also what bit it at the
+  F31 API change (it kept the pre-F31 keyword signature and raised `TypeError`
+  until repaired). Driving `algo.next_goal(ctx)` for the standard path and keeping
+  the raw calls only for `--nudge-mode unknown` would shrink the drift surface.
 - **No scoring introspection.** It shows the *winning* cell but not the
   per-scorer normalized costs. Printing the weighted breakdown for the winner (and
   runners-up) would make the F31 weighting visible, which is the whole point of
