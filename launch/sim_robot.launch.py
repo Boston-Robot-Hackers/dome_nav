@@ -59,7 +59,13 @@ def sim_robot_launch(world_name: str = "", urdf_name: str = "minimal_sim.urdf"):
     gazebo.spawn_topic_bridge(
         GazeboBridge.clock_bridge(),
         GazeboBridge("/scan", "sensor_msgs/msg/LaserScan", "gz2ros"),
-        GazeboBridge("/odom", "nav_msgs/msg/Odometry", "gz2ros"),
+        # KILTED: better_launch maps nav_msgs/Odometry -> gz.msgs.OdometryWithCovariance,
+        # but Gazebo's diff-drive plugin publishes gz.msgs.Odometry. Override the
+        # gazebo type so the bridge actually receives data.
+        GazeboBridge(
+            "/odom", "nav_msgs/msg/Odometry", "gz2ros",
+            gazebo_type="gz.msgs.Odometry",
+        ),
         GazeboBridge("/tf", "tf2_msgs/msg/TFMessage", "gz2ros"),
         GazeboBridge("/cmd_vel", "geometry_msgs/msg/Twist", "ros2gz"),
         GazeboBridge(
