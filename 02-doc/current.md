@@ -286,10 +286,10 @@ ros2 param set /collision_monitor FootprintApproach.enabled false   # dynamic es
 
 ## Next steps
 
-1. **Finish gate probe** (points-in-footprint count + cmd_vel ratio + reverse
-   test) → decides F29 design. Then write TF29 with probe as T01.
-   Probe script: `scratchpad/count_footprint_points.py` (R=0.17, min_points=6
-   confirmed vs mini config).
+1. ~~Finish gate probe → write TF29~~ — **F29 deferred 2026-07-29 (intentional).**
+   The wedge cure is parked; live-verify blocked on it (F10/F27/F31) is parked too.
+   Probe artifacts kept for whenever F29 is revived: `scratchpad/count_footprint_points.py`
+   (R=0.17, min_points=6).
 2. ~~TF31 T07/T08 verification~~ — **done 2026-07-29, F31 closed.**
 3. ~~Write TF30~~ — **F30 deferred 2026-07-29.**
 4. **Give the dev VM 4–6 vCPUs.**
@@ -304,8 +304,10 @@ ros2 param set /collision_monitor FootprintApproach.enabled false   # dynamic es
   T06 sim/T07 live marked done with the caveat that both are very hard to really
   verify (can't force a nudged goal onto a lethal cell on demand). Feature + task
   moved to `done/`.
-- **F29** BackUp escape: feature file only; probe in progress (this session);
-  no TF29 yet.
+- **F29** BackUp escape: **deferred (2026-07-29, intentional)** — feature file
+  only, no TF29; moved to `03-features/deferred/`. Was the intended start-wedge
+  cure; parking it means the F10/F27/F31 live-verify blocked on the wedge is
+  parked too (see those entries).
 - **F31** goal-scoring pipeline + clearance: **DONE (2026-07-29)** — T01–T08
   complete, sim+live verified. Clearance-weighted goals land off walls; directional
   effect confirmed but magnitude not quantified (no clean A/B metric). Feature +
@@ -313,13 +315,17 @@ ros2 param set /collision_monitor FootprintApproach.enabled false   # dynamic es
   wedge cure (F29 BackUp) still wanted.
 - **F30** path-distance ranking: **deferred (2026-07-29)** — feature file only,
   no TF30; moved to `03-features/deferred/`.
-- **F28** reason-tagged exclusion: feature file only; no TF28 yet.
+- **F28** reason-tagged exclusion: **deferred (2026-07-29)** — feature file only,
+  no TF28; moved to `03-features/deferred/`.
+- **F32** candidate-source abstraction: **deferred (2026-07-29)** — feature file
+  only, no TF32; moved to `03-features/deferred/`. (Depended on F31, now landed.)
 - **F26** survey-algorithms paper: TF26 T01–T05 not started.
 - **F15** novelty scoring: code done; T05 live verify + literate regen pending.
 - **F10** exploration: **trimmed 2026-07-29** to match reality (explore_lite
   dropped; custom `frontier_explorer` + `explorer_manager_node`; F10 =
   foundation for F15/F27/F31). Implementation + unit tests done; open only on live
-  verify T06/T07, **blocked on the start-wedge (F29)**. The single explorer node is
+  verify T06/T07, blocked on the start-wedge — and **its cure F29 is now deferred,
+  so live verify is parked indefinitely**. The single explorer node is
   `explorer_manager_node.py` (former `pluggable_explore_manager_node`, renamed in
   `206a93f`); the old "orphan `explore_manager_node.py` pending removal" note was
   stale — that file is gone, nothing to delete.

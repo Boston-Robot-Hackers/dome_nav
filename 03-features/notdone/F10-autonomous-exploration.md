@@ -58,8 +58,9 @@ scoring pipeline are all tenants of this explorer.
 Implementation and unit tests are done. What is left is **real-robot live
 verification** (TF10 T06 hardware questions + T07 live smoke). Both are blocked on
 the standing start-wedge problem — the robot stalls when it starts near an obstacle
-(current.md; F29 BackUp escape targets the cure). F10 closes once the robot explores
-hardware clean; the wedge is the gating dependency, not missing F10 code.
+(current.md). F29 BackUp escape was the intended cure but is now **deferred
+(2026-07-29)**, so live verify is parked indefinitely. F10 closes once the robot
+explores hardware clean; the wedge is the gating dependency, not missing F10 code.
 
 ## Cleanup — done, not pending
 
