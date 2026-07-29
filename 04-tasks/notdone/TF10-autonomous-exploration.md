@@ -1,5 +1,13 @@
 # TF10 — Autonomous Exploration for F10
 
+**Trimmed 2026-07-29**: T01–T05 + T08 are shipped; their descriptions are kept for
+traceability but frame historical decisions (`explore_lite` dropped, node converged
+onto the pluggable explorer). Only live-hardware verification (T06/T07) remains, and
+it is blocked on the start-wedge problem (F29). T08's orphan-node removal is **done**
+— the original file was removed and the pluggable node renamed to
+`explorer_manager_node.py` in commit `206a93f` (verified 2026-07-29); the old
+"pending removal" note was stale.
+
 ## T01 — Verify explore_lite available
 **Status**: N/A — superseded
 **Description**: Originally planned to use `ros-jazzy-explore-lite`. Decided instead to
@@ -32,13 +40,14 @@ publishes `/explore/status`. 84 tests pass including frontier_explorer pure test
 `exploration_start` / `exploration_stop` intents with correct JSON payload.
 
 ## T06 — Resolve open hardware questions
-**Status**: not done
+**Status**: not done — hardware, blocked on start-wedge (F29)
 **Description**: Answer on hardware:
 1. Does explore auto-stop cleanly when no frontiers remain?
-2. What speed cap avoids slam_toolbox degradation on linorobot2? (currently 0.12 m/s)
+2. What speed cap avoids slam_toolbox degradation? (real config now vx 0.4 m/s
+   after the 2026-07-29 tuning — supersedes the original 0.12 m/s in T02.)
 3. Do narrow doorways (<0.8 m) get traversed or blocked by costmap?
 Record answers in `02-doc/notes.md`. Adjust params or auto-stop logic as needed.
-**Test**: Manual — run Mode E launch on real robot, observe behavior, record findings.
+**Test**: Manual — run Mode E on real robot, observe, record findings.
 
 ## T08 — Converge real robot onto pluggable_explore_manager_node
 **Status**: done (launch switch) — orphaned original node not yet removed
@@ -53,15 +62,15 @@ back here), `min_frontier_dist 1.3`, `prefer_farthest False`, `min_frontier_size
 `ExploreParams`' own defaults, so behavior matches the original node's intent.
 **Test**: `colcon build` clean; full suite 181 passed, 4 deselected. Not yet live on
 hardware (real-robot run is T07).
-**Not yet done**: `dome_nav/explore_manager_node.py` (original) is now orphaned -- no
-launch references it. Removing it (plus `test/test_explore_manager_node.py`, the
-`setup.py` console entry, and `01-literate/07-explore_manager_node.md`) is a separate,
-explicitly-confirmed deletion step, pending user go-ahead.
+**Resolved 2026-07-29**: the orphan removal is done. Commit `206a93f` renamed
+`pluggable_explore_manager_node` → `explorer_manager_node.py` and the original
+`explore_manager_node.py` no longer exists in the tree. `setup.py` points the
+console entry at `explorer_manager_node`. Nothing left to delete.
 
 ## T07 — Manual live smoke test
-**Status**: not done
+**Status**: not done — hardware, blocked on start-wedge (F29)
 **Description**: Full end-to-end on real robot:
-1. `bl robot_explore.launch.py --map_name basement_explore`
+1. `bl dome_nav robot_explore.launch.py --map_name basement_explore`
 2. `nav explore` from dome_control CLI
 3. Observe robot driving autonomously, map growing in Foxglove
 4. `nav explore stop` → robot stops cleanly, map saved to `~/.dome/slam_maps/`

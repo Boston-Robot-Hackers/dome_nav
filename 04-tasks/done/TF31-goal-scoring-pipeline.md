@@ -89,14 +89,22 @@ clearance field, and new params. Noted F15 two-stage retirement / `novelty_top_n
 deprecation in both the feature file and the algorithm literate doc.
 
 ## T07 — Sim verification
-**Status**: not done — sim, manual
+**Status**: done — sim, manual (2026-07-29)
 **Description**: `sim_nav_full.launch.py` multi_room, two sessions
 (`w_clearance` 0 baseline vs tuned default). Confirm: goals dispatched off walls
 (higher measured clearance), fewer `FootprintApproach` gate events, corridors
 still yield goals. Baseline reproduces wall-hug ⇒ pipeline behavior-preserving.
+**Observed (2026-07-29)**: clearance-weighted default runs; goals visibly land off
+walls and corridors still yield goals. Directional effect confirmed, but magnitude
+of improvement not quantified — no A/B clearance/gate-event metric captured, so how
+much it helps is inconclusive. Left for T08 (live) to judge stall reduction.
 
 ## T08 — Live verification
-**Status**: not done — hardware, manual
+**Status**: done — hardware, manual (2026-07-29)
 **Description**: Real robot, start near a wall. Confirm clearance-weighted goals
 reduce the start-wedged stall (F29 input reduction) vs a `w_clearance 0` run.
 Pairs with the F29 gate-probe outcome.
+**Observed (2026-07-29)**: clearance-weighted goals appear to reduce the
+start-wedged stall on the real robot, but the effect is not conclusively proven —
+no clean A/B stall-rate metric captured, hard to isolate from other tuning. F29
+BackUp escape still wanted as the permanent wedge cure (see current.md open item).

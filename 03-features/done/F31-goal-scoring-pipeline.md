@@ -1,10 +1,10 @@
 # F31 — Goal Scoring Pipeline (Filters + Weighted Scorers) + Obstacle Clearance
 
 **Priority**: High
-**Done:** no (T01–T05 code+tests landed; T06 docs/flags + T07 sim + T08 live pending)
+**Done:** yes (T01–T08 complete; sim+live verified 2026-07-29, directional effect confirmed, magnitude not quantified)
 **Tasks File Created:** yes
-**Tests Written:** yes (T01–T05)
-**Test Passing:** yes (T01–T05; full suite green)
+**Tests Written:** yes
+**Test Passing:** yes (full suite green)
 
 **Description**: Goal selection has accreted three heuristics, each bolted on a
 different way: distance-to-preferred lives inline in `best_cell_in_cluster`

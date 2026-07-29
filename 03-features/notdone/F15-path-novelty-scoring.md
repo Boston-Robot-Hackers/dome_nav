@@ -35,7 +35,7 @@ the map rather than traversing already-explored corridors.
   unaffected by default.
 - `dome_nav/explore_context.py` — add `use_novelty_scoring: bool = False` to
   `ExploreParams`.
-- `dome_nav/pluggable_explore_manager_node.py` — declare ROS parameter
+- `dome_nav/explorer_manager_node.py` — declare ROS parameter
   `use_novelty_scoring` (default False). Wire into `ExploreParams`.
 - Launch files — add `use_novelty_scoring` arg; default False for both sim and real
   until live-verified.

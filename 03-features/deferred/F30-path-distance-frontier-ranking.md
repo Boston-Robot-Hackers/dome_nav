@@ -1,6 +1,7 @@
 # F30 — Path-Distance Frontier Ranking (Replace Euclidean)
 
 **Priority**: High
+**Status:** deferred (2026-07-29)
 **Done:** no
 **Tasks File Created:** no
 **Tests Written:** no

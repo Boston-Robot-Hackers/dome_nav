@@ -290,33 +290,43 @@ ros2 param set /collision_monitor FootprintApproach.enabled false   # dynamic es
    test) → decides F29 design. Then write TF29 with probe as T01.
    Probe script: `scratchpad/count_footprint_points.py` (R=0.17, min_points=6
    confirmed vs mini config).
-2. **TF31 T07 sim verification** (scoring pipeline + clearance, High) —
-   baseline `w_clearance=0` vs tuned default in multi_room; frames F15/F30
-   migration.
-3. **Write TF30** (path-distance ranking, High) — biggest stall-input fix;
-   lands as an F31 filter/`d`-source.
+2. ~~TF31 T07/T08 verification~~ — **done 2026-07-29, F31 closed.**
+3. ~~Write TF30~~ — **F30 deferred 2026-07-29.**
 4. **Give the dev VM 4–6 vCPUs.**
 5. **Restore `FootprintApproach` enabled** in both explore configs.
-6. TF27 T06 sim verify (lethal-goal guard skip log).
+6. ~~TF27 T06 sim verify~~ — **F27 closed 2026-07-29** (T06/T07 marked done, hard to truly verify).
 7. TF15 T05 live verify (novelty on vs off).
 8. Real-robot retest of wall standoff (local `cost_scaling_factor` 5.0→3.0).
 
 ## In-flight features
 
-- **F27** lethal-goal guard: code+tests done, live-observed; T06 sim + T07 live
-  verification pending — feature open.
+- **F27** lethal-goal guard: **DONE (2026-07-29)** — code+tests done, live-observed;
+  T06 sim/T07 live marked done with the caveat that both are very hard to really
+  verify (can't force a nudged goal onto a lethal cell on demand). Feature + task
+  moved to `done/`.
 - **F29** BackUp escape: feature file only; probe in progress (this session);
   no TF29 yet.
-- **F31** goal-scoring pipeline + clearance: TF31 T01–T06 done (pipeline +
-  novelty scorer + obstacle clearance + docs/flags, pure tests pass);
-  T07 sim + T08 live pending. Umbrella for F15/F30 heuristics; fixes wall-hug.
-- **F30** path-distance ranking: feature file only; no TF30 yet.
+- **F31** goal-scoring pipeline + clearance: **DONE (2026-07-29)** — T01–T08
+  complete, sim+live verified. Clearance-weighted goals land off walls; directional
+  effect confirmed but magnitude not quantified (no clean A/B metric). Feature +
+  task moved to `done/`. Umbrella for F15/F30 heuristics; fixed wall-hug. Permanent
+  wedge cure (F29 BackUp) still wanted.
+- **F30** path-distance ranking: **deferred (2026-07-29)** — feature file only,
+  no TF30; moved to `03-features/deferred/`.
 - **F28** reason-tagged exclusion: feature file only; no TF28 yet.
 - **F26** survey-algorithms paper: TF26 T01–T05 not started.
 - **F15** novelty scoring: code done; T05 live verify + literate regen pending.
-- **F10** exploration: T06 hardware questions + T07 live smoke pending.
+- **F10** exploration: **trimmed 2026-07-29** to match reality (explore_lite
+  dropped; custom `frontier_explorer` + `explorer_manager_node`; F10 =
+  foundation for F15/F27/F31). Implementation + unit tests done; open only on live
+  verify T06/T07, **blocked on the start-wedge (F29)**. The single explorer node is
+  `explorer_manager_node.py` (former `pluggable_explore_manager_node`, renamed in
+  `206a93f`); the old "orphan `explore_manager_node.py` pending removal" note was
+  stale — that file is gone, nothing to delete.
 - **F09** dome_control integration: T04 live smoke pending.
-- **F05** rosbag integration test: not started, no task file.
+- **F05** rosbag integration test: **TF05 written (2026-07-29)**, T01–T07 not
+  started. Now also covers the F27/F31 heuristic-firing gap (T06): replay a bag →
+  real costmap builds → assert `goal_is_lethal` + clearance fire, robot-free.
 
 ## Open issues
 

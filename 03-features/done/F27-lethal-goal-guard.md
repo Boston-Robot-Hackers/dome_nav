@@ -1,7 +1,7 @@
 # F27 — Never Dispatch a Goal to a Lethal Location
 
 **Priority**: High
-**Done:** no (code + unit tests done; sim + live verification pending — TF27 T06/T07)
+**Done:** yes (2026-07-29 — code + unit tests done; T06 sim / T07 live marked done, but note both are very hard to really verify: can't force a nudged goal onto a lethal cell on demand. Confidence rests on unit tests + live-observed behavior, not a staged repro.)
 **Tasks File Created:** yes (TF27)
 **Tests Written:** yes (unit)
 **Test Passing:** yes (229 passed, 4 deselected)

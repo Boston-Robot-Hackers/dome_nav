@@ -1,54 +1,69 @@
 # F10 — Autonomous Exploration for Map Building
 
 **Priority**: Medium
-**Done:** no
+**Done:** no (implementation shipped + unit-tested; open only on real-robot
+live verification — T06/T07 — which is blocked on the start-wedge problem, F29)
 **Tasks File Created:** yes
-**Tests Written:** no
-**Test Passing:** no
-**Description**: Allow the robot to autonomously explore an unknown space — navigating slowly,
-visiting all reachable areas, avoiding obstacles — so a complete map can be built without
-manual teleoperation. Uses frontier-based exploration via `explore_lite` (or equivalent)
-integrated with the existing Mode A (slam_toolbox online_async) stack.
+**Tests Written:** yes (pure/unit; frontier_explorer + explorer node)
+**Test Passing:** yes (full suite green)
+**Description**: Allow the robot to autonomously explore an unknown space —
+navigating slowly, visiting reachable areas, avoiding obstacles — so a map is built
+without manual teleoperation. Frontier-based exploration integrated with the Mode A
+(slam_toolbox online_async) stack.
 
-## Scope
+**Trimmed 2026-07-29 to match reality.** The original plan used the `explore_lite`
+ROS package; that was dropped (see TF10 T01). Exploration is a custom pure-Python
+`frontier_explorer.py` driven by `explorer_manager_node.py` — the single node shared
+by sim and real (F23 decoupling), differing only by ROS params. (This node is the
+former `pluggable_explore_manager_node`, renamed in commit `206a93f`; the original
+`explore_manager_node.py` was removed in that same convergence.) F10 is the
+foundation later features build on: F15 novelty, F27 lethal-goal guard, F31
+scoring pipeline are all tenants of this explorer.
 
-- `launch/robot_explore.launch.py` — Mode A stack + `explore_lite` node; accepts `map_name` arg (required)
-- `config/explore_param_patch.yaml` — tuned exploration params: slow speed, conservative costmap inflation
-- `dome_nav/explore_manager_node.py` — ROS2 node that:
-  - subscribes `/intent` and recognizes `exploration_start` / `exploration_stop` intents
-  - starts/stops `explore_lite` accordingly (via `/explore/start` and `/explore/stop`)
-  - publishes `/explore/status` (idle | exploring | done)
-- dome_control gets `nav.explore` and `nav.explore.stop` CLI commands publishing the matching intent payloads
-- Integration with `nav_intent_check.py` or a new `explore_intent_check.py` tool for smoke-testing
+## Scope (as shipped)
+
+- `launch/robot_explore.launch.py` — Mode A stack (slam_toolbox online_async + Nav2)
+  + `explorer_manager_node` with an injected `FrontierAlgorithm`; requires
+  `map_name`; real-robot param values set explicitly in the launch.
+- `dome_nav/explorer_manager_node.py` — subscribes `/intent`, routes
+  `exploration_start` / `exploration_stop` → Nav2 `NavigateToPose` goals via
+  `frontier_explorer.py`; blacklist, nudge inset, timer loop; publishes
+  `/explore/status` (idle | exploring | done).
+- `dome_nav/frontier_explorer.py` — pure frontier detection + F31 goal-scoring
+  pipeline (filters + weighted scorers).
+- dome_control `nav explore` / `nav explore stop` CLI → matching intent payloads.
+- Exploration speed capped for slam stability (real config tuning, see current.md).
 
 ## Constraints
 
-- Must run on top of Mode A (slam_toolbox online_async); not compatible with Mode B (AMCL localization only)
-- Robot must start at dock (same physical origin assumption holds)
-- `explore_lite` requires Nav2 costmap to be running — reuse nav2_param_patch from Mode A
-- Exploration speed capped: reduce `max_vel_x` in nav2 param patch for explore launches
-- No dome_vision or dome_control required
-
-## Dependencies
-
-- `explore_lite` ROS2 package (`ros-jazzy-explore-lite` or built from source)
-- Existing Mode A launch infrastructure (`robot_map.launch.py` pattern)
+- Runs on top of Mode A (slam_toolbox online_async); not Mode B (AMCL only).
+- Reuses the Nav2 costmap from the explore config.
+- No dome_vision or dome_control node required to run the explorer.
 
 ## How to Demo
 
-**Setup**: empty `~/.dome/slam_maps/newroom/` (or just a fresh map_name).
+**Setup**: fresh `map_name`.
 
 **Steps**:
-1. `bl robot_explore.launch.py --map_name newroom`
+1. `bl dome_nav robot_explore.launch.py --map_name newroom`
 2. From dome_control CLI: `nav explore`
 3. Watch robot drive autonomously, map grows in RViz/Foxglove
-4. When coverage complete: `nav explore stop` or robot stops automatically (no more frontiers)
-5. Map saved to `~/.dome/slam_maps/newroom`
+4. `nav explore stop`, or robot stops automatically when no frontiers remain
+5. Map saved under `~/.dome/slam_maps/`
 
-**Expected output**: complete occupancy grid of the space with no manual driving required.
+**Expected output**: occupancy grid of the space built with no manual driving.
 
-## Open questions
+## Remaining before close
 
-- Does `explore_lite` handle multi-room spaces with narrow doorways on linorobot2 hardware?
-- Should exploration stop automatically (no frontiers) or require manual `stop` command?
-- Speed cap value: need to tune on hardware to avoid slam_toolbox scan-matching failures at speed.
+Implementation and unit tests are done. What is left is **real-robot live
+verification** (TF10 T06 hardware questions + T07 live smoke). Both are blocked on
+the standing start-wedge problem — the robot stalls when it starts near an obstacle
+(current.md; F29 BackUp escape targets the cure). F10 closes once the robot explores
+hardware clean; the wedge is the gating dependency, not missing F10 code.
+
+## Cleanup — done, not pending
+
+Earlier docs claimed an orphaned `explore_manager_node.py` still needed removal.
+Verified 2026-07-29: that file no longer exists. Commit `206a93f` renamed
+`pluggable_explore_manager_node` → `explorer_manager_node.py` and the original
+orphan was already gone. No cleanup outstanding.

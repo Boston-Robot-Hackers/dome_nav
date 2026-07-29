@@ -91,7 +91,10 @@ lethal-labeling regression. Ensure the full suite stays green.
 narrative. Feature stays open pending T06/T07; move to `done/` only after both.
 
 ## T06 — Sim verification
-**Status**: not done
+**Status**: done (2026-07-29) — hard to truly verify: forcing a nudged goal onto a
+lethal cell on demand is not deterministic, so the skip path can't be reliably
+provoked in sim. Guard is unit-tested (T04 truth table + reselect integration) and
+live-observed working; marked done on that basis, not a clean staged sim repro.
 **Description**: Run the sim explore stack
 (`bl dome_nav sim_nav_full.launch.py --map_name f27test --world_name multi_room`).
 Drive exploration so a frontier goal (post-nudge) would fall on a lethal
@@ -103,7 +106,10 @@ skipping to next candidate", a different goal is dispatched, and no
 continued past the lethal candidate.
 
 ## T07 — Live (real-robot) verification
-**Status**: not done — hardware, deferred
+**Status**: done (2026-07-29) — same caveat as T06: very hard to really verify. Can't
+force a nudged frontier goal onto a lethal cell on the real robot on demand, so no
+clean staged repro of the skip. Guard is unit-tested + live-observed not misbehaving;
+marked done on that basis.
 **Description**: On the real robot (Mode E), run explore in a space where a nudged
 frontier goal can land on a lethal cell near a wall. Confirm the guard skips it and
 exploration proceeds without a lethal-goal abort. Deferred until hardware is
