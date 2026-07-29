@@ -3,7 +3,39 @@
 Concise cold-start orientation. Detailed history lives in git log and the
 `04-tasks/` files — do **not** re-narrate it here.
 
-**Date:** 2026-07-24 · **Branch:** main
+**Date:** 2026-07-29 · **Branch:** main
+
+## This session (2026-07-29) — live explore tuning: livelock + wedge root-caused, speeds lowered
+
+All changes in `config/nav2_params_explore_real.yaml` (live real-robot explore). The
+2026-07-24 open question ("MPPI-stall vs monitor-gate", below) is now **answered**.
+
+- **Livelock fixed — tolerance stacking.** Explorer fake-"REACHED (dist=0.93m) in 0.1s"
+  repeatedly, robot never moving, same frontier re-picked 90+ times. Cause: planner
+  `GridBased.tolerance` 0.5 snapped an unreachable frontier goal to a path ending ~0.5 m
+  short, and controller `general_goal_checker.xy_goal_tolerance` 0.5 forgave another
+  0.5 m → a goal ~0.93 m away counted as reached with zero motion. **Fix: `GridBased.tolerance`
+  0.5 → 0.1** (line 223) → unreachable goal now aborts `NO_VALID_PATH`, explorer blacklists +
+  reselects instead of livelocking. `xy_goal_tolerance` left at 0.5.
+- **Wedge root-caused — FootprintApproach (monitor-gate, NOT MPPI).** After the livelock fix,
+  planner drew a good path but robot still didn't move. Split test resolved the 07-24 open
+  question: `cmd_vel_nav` = 0.09 (MPPI commanding motion) but `cmd_vel` = 0. Live deadband
+  verified `[0,0,0]` (smoother clean, Bug 1 fix loaded). Log showed
+  `collision_monitor: Robot to approach for 1.200000 seconds away from collision` → **FootprintApproach
+  scales cmd_vel→0** at start-in-inflation. `ros2 param set FootprintApproach.enabled false`
+  → gets stuck far less (confirms the gate) but **crashes** into walls (MPPI `CostCritic`
+  weight 3.81 alone can't hold tight spaces). It's a wedge-vs-crash tradeoff.
+  **Fix: `FootprintApproach.time_before_collision` 1.2 → 0.6** (line 347) — shorter lookahead
+  (0.24 m @ 0.4 m/s vs 0.48 m) gates only imminent collisions, cutting the wedge while keeping
+  crash protection. `enabled` stays true. Tune 0.4 (more wedge-free) ↔ 0.8 (safer) to taste.
+- **Speeds lowered for gentler exploration.** `vx_max` 0.6 → **0.4**, `wz_max` 1.4 → **1.0**
+  (MPPI FollowPath, lines 64/67) + matching velocity_smoother `max_velocity [0.4,0,1.0]` /
+  `min_velocity [-0.6,0,-1.0]` (reverse left at -0.6). Fastest fwd now 0.4 m/s, fastest turn 1.0 rad/s.
+- **Not propagated:** `_mini` / `_sim` explore configs still carry the old `tolerance: 0.5`,
+  speeds, and `time_before_collision: 1.2` — apply there if those stacks get used.
+- **Still open:** permanent wedge cure (F29 custom BackUp escape) so the robot un-wedges
+  rather than relying on a looser gate; optional STOP-polygon backstop if approach is ever
+  disabled.
 
 ## This session (2026-07-24, evening) — parameter inventory + algo_demo repair + wedge diagnosis
 

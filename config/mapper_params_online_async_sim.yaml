@@ -7,7 +7,8 @@
 # and /map rebuilds just every 5 s), which starves early frontier exploration.
 # The three "# SIM" lines below are the only differences from mapper_params_online_async.yaml.
 # Loaded verbatim via online_async_launch.py (slam_params_file=); use_sim_time
-# comes from that include. map_file_name omitted (slam_manager_node persists).
+# comes from that include. map_file_name omitted: slam_manager_node persists and
+# resumes the saved posegraph on activate (missing file -> fresh map).
 #
 # Used by: sim_slam.launch.py, sim_explore.launch.py.
 # Author: Pito Salas and Claude Code

@@ -187,7 +187,7 @@ class ExplorerManagerNode(Node):
     def render_context(self, robot_xy: XY | None = None) -> RenderContext:
         return RenderContext(
             now=self.get_clock().now().to_msg(),
-            is_exploring=self.state == "exploring",
+            is_exploring=self.state == "EXPL",
             map_info=self.latest_map_info,
             robot_xy=robot_xy if robot_xy is not None else self.robot_xy_in_map(),
             blacklist=self.blacklist,
@@ -241,14 +241,14 @@ class ExplorerManagerNode(Node):
             )
             return
         name = intent.get("name", "")
-        if name == "exploration_start" and self.state in ("idle", "done"):
+        if name == "exploration_start" and self.state in ("IDLE", "DONE"):
             self.reset_session()
             self.start_tf()
             # start_xy stays None here: the fresh TF buffer is still empty, so
             # it is captured on the first tick where map->base_footprint resolves
             # (see explore_tick).
-            self.state = "exploring"
-            self.publish_status("exploring")
+            self.state = "EXPL"
+            self.publish_status("EXPL")
             radius_note = (
                 f", max_radius={self.params.max_explore_radius}m"
                 if self.params.max_explore_radius > 0 else ""
@@ -259,7 +259,7 @@ class ExplorerManagerNode(Node):
                 params=self.session_start_params(),
             )
         elif name == "exploration_stop":
-            self.stop_exploring("idle")
+            self.stop_exploring("IDLE")
         elif name == "exploration_resume":
             if self.paused_on_failure:
                 self.paused_on_failure = False
@@ -268,7 +268,7 @@ class ExplorerManagerNode(Node):
     def explore_tick(self):
         self.publish_status(self.state)
         self.publish_markers()
-        if self.state != "exploring":
+        if self.state != "EXPL":
             return
         if self.paused_on_failure:
             return
@@ -340,7 +340,7 @@ class ExplorerManagerNode(Node):
             goals_sent=self.goal_count,
         )
         self.dump_exhaustion(robot_xy)
-        self.stop_exploring("idle")
+        self.stop_exploring("IDLE")
 
     def check_goal_timeout(self):
         # Caller guarantees an active goal (goal_start_time seeded in send_nav_goal).
@@ -413,7 +413,7 @@ class ExplorerManagerNode(Node):
         if decision is not None and decision.outcome is GoalOutcome.EXPLORED_DONE:
             self.get_logger().info("Algorithm reports exploration complete.")
             self.dump_exhaustion(robot_xy)
-            self.stop_exploring("done")
+            self.stop_exploring("DONE")
             return
         self.handle_no_target(robot_xy)
 
@@ -445,10 +445,10 @@ class ExplorerManagerNode(Node):
                 return
             self.get_logger().info("No-target patience exhausted — exploration done.")
             self.dump_exhaustion(robot_xy)
-            self.stop_exploring("done")
+            self.stop_exploring("DONE")
 
     def reset_session(self):
-        self.state = "idle"
+        self.state = "IDLE"
         self.blacklist: set[XY] = set()
         self.start_xy: XY | None = None
         self.no_target_count = 0
@@ -645,7 +645,7 @@ class ExplorerManagerNode(Node):
             "reached": self.goals_reached,
             "failed": self.goals_failed,
         }
-        if status == "exploring":
+        if status == "EXPL":
             data["goal_num"] = self.goal_count
             data["blacklisted"] = len(self.blacklist)
             # "no_frontier_ticks" kept as a status wire contract; rename is a migration.
@@ -674,7 +674,7 @@ def main():
     finally:
         # stop_exploring owns session_end for normally-ended sessions; only an
         # interrupted active session needs the shutdown record here.
-        if node.state == "exploring":
+        if node.state == "EXPL":
             node.telemetry.write(
                 "session_end", reason="shutdown", goals_sent=node.goal_count,
                 reached=node.goals_reached, failed=node.goals_failed,

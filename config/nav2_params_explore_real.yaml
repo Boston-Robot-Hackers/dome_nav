@@ -61,10 +61,10 @@ controller_server:
       vx_std: 0.2
       vy_std: 0.2
       wz_std: 0.4
-      vx_max: 0.6  # upstream: 0.5; real robot spec max fwd
+      vx_max: 0.4  # was 0.6 (upstream 0.5): gentler exploration fwd cap
       vx_min: -0.6  # upstream: -0.35; real robot spec max reverse
       vy_max: 0.5
-      wz_max: 1.4  # upstream: 1.9; real robot spec max turn
+      wz_max: 1.0  # was 1.4 (upstream 1.9): gentler exploration turn cap
       iteration_count: 1
       prune_distance: 1.7
       transform_tolerance: 0.3  # upstream: 0.1; Pi TF stale >0.1s under MPPI load -> FOLLOW/TF_ERROR
@@ -220,7 +220,7 @@ planner_server:
     costmap_update_timeout: 1.0
     GridBased:
       plugin: nav2_smac_planner::SmacPlanner2D  # upstream: 'nav2_navfn_planner::NavfnPlanner'
-      tolerance: 0.5
+      tolerance: 0.1  # CHANGED from 0.5: 0.5 let an unreachable frontier goal snap to a path ending ~0.5m short; stacked with goal_checker xy_goal_tolerance 0.5 that faked "reached" ~0.93m away without moving (livelock). 0.1 -> unreachable goal aborts (NO_VALID_PATH) so the explorer blacklists and reselects.
       use_astar: false
       allow_unknown: true
       max_iterations: 1000000  # new (not in upstream)
@@ -304,14 +304,14 @@ velocity_smoother:
     stamp_smoothed_velocity_with_smoothing_time: false
     scale_velocities: false
     feedback: OPEN_LOOP
-    max_velocity:  # upstream: [0.5, 0.0, 2.0]; real robot spec: fwd 0.6, turn 1.4
-    - 0.6
+    max_velocity:  # fwd/turn capped to 0.4/1.0 for gentler exploration (was 0.6/1.4; upstream [0.5,0.0,2.0])
+    - 0.4
     - 0.0
-    - 1.4
-    min_velocity:  # upstream: [-0.5, 0.0, -2.0]; real robot spec: rev -0.6, turn -1.4
+    - 1.0
+    min_velocity:  # rev left at -0.6; turn -1.0 to match max (was -1.4; upstream [-0.5,0.0,-2.0])
     - -0.6
     - 0.0
-    - -1.4
+    - -1.0
     max_accel:  # upstream: [2.5, 0.0, 3.2]
     - 0.8
     - 0.0
@@ -344,7 +344,7 @@ collision_monitor:
       type: polygon
       action_type: approach
       footprint_topic: /local_costmap/published_footprint
-      time_before_collision: 1.2
+      time_before_collision: 0.6  # was 1.2: shorter lookahead gates only imminent collisions (0.24m @ 0.4m/s vs 0.48m), cuts the start-in-inflation wedge while keeping crash protection
       simulation_time_step: 0.1
       min_points: 6
       visualize: false

@@ -8,7 +8,7 @@ import rclpy
 from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
 from std_msgs.msg import String
 from nav_msgs.msg import OccupancyGrid
-from slam_toolbox.srv import SerializePoseGraph, SaveMap
+from slam_toolbox.srv import SerializePoseGraph, SaveMap, DeserializePoseGraph
 from dome_nav.utils import dome_home
 
 
@@ -32,6 +32,7 @@ class SlamManagerNode(LifecycleNode):
         self.status_pub = None
         self.serialize_client = None
         self.save_map_client = None
+        self.deserialize_client = None
 
     def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
         self.map_sub = self.create_subscription(OccupancyGrid, "/map", self.on_map, 10)
@@ -44,8 +45,42 @@ class SlamManagerNode(LifecycleNode):
         self.save_map_client = self.create_client(
             SaveMap, "/slam_toolbox/save_map"
         )
+        self.deserialize_client = self.create_client(
+            DeserializePoseGraph, "/slam_toolbox/deserialize_map"
+        )
         self.get_logger().info(f"Configured. path={self.map_persist_path}")
         return TransitionCallbackReturn.SUCCESS
+
+    def on_activate(self, state: LifecycleState) -> TransitionCallbackReturn:
+        # Reuse an existing map of the same name: if a posegraph was saved from a
+        # prior run, load it so this run continues that map instead of starting
+        # fresh. Missing file -> skip silently, slam_toolbox maps from scratch.
+        self.load_map_if_exists()
+        return TransitionCallbackReturn.SUCCESS
+
+    def load_map_if_exists(self):
+        posegraph = f"{self.map_persist_path}.posegraph"
+        if not os.path.exists(posegraph):
+            self.get_logger().info(f"No saved map at {posegraph} — starting fresh.")
+            return
+        if not self.deserialize_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().warning(
+                "deserialize_map service unavailable — starting fresh."
+            )
+            return
+        req = DeserializePoseGraph.Request()
+        req.filename = self.map_persist_path
+        # resume at the graph's first node (the dock origin), matching
+        # map_start_at_dock in the mapper config.
+        req.match_type = DeserializePoseGraph.Request.START_AT_FIRST_NODE
+        future = self.deserialize_client.call_async(req)
+        future.add_done_callback(self.on_load_done)
+
+    def on_load_done(self, future):
+        if future.result() is None:
+            self.get_logger().error("Failed to deserialize pose graph.")
+        else:
+            self.get_logger().info(f"Loaded saved map from {self.map_persist_path}")
 
     def on_cleanup(self, state: LifecycleState) -> TransitionCallbackReturn:
         self.destroy_entities()
@@ -70,6 +105,9 @@ class SlamManagerNode(LifecycleNode):
         if self.save_map_client is not None:
             self.destroy_client(self.save_map_client)
             self.save_map_client = None
+        if self.deserialize_client is not None:
+            self.destroy_client(self.deserialize_client)
+            self.deserialize_client = None
 
     def ensure_map_dir(self):
         parent = os.path.dirname(self.map_persist_path)

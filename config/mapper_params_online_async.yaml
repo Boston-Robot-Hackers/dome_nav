@@ -9,8 +9,9 @@
 # Loaded verbatim via the standard online_async_launch.py include
 # (slam_params_file=). use_sim_time is supplied by that include's own arg, not
 # baked here. map_file_name is intentionally omitted: slam_manager_node owns map
-# persistence (see its map_persist_path param), so each run starts a fresh map
-# and there is no auto-resume of a saved posegraph on startup.
+# persistence (see its map_persist_path param). It saves the posegraph on map
+# updates/shutdown and, on activate, deserializes that same path back in if it
+# exists — so a run of the same map name resumes it; a missing file maps fresh.
 #
 # Used by: robot_map.launch.py (Mode A), robot_explore.launch.py (Mode E real).
 # Sim uses mapper_params_online_async_sim.yaml (a copy of this with finer/faster map-update settings).

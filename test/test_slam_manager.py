@@ -32,6 +32,37 @@ def test_configure_creates_entities(node):
     assert node.status_pub is not None
     assert node.serialize_client is not None
     assert node.save_map_client is not None
+    assert node.deserialize_client is not None
+
+
+# --- load (reuse existing map) ---
+
+def test_load_skips_when_no_saved_map(node, tmp_path):
+    node.map_persist_path = str(tmp_path / "slam_map")
+    node.deserialize_client.call_async = MagicMock()
+    node.load_map_if_exists()
+    node.deserialize_client.call_async.assert_not_called()
+
+
+def test_load_calls_service_when_map_exists(node, tmp_path):
+    from slam_toolbox.srv import DeserializePoseGraph
+    node.map_persist_path = str(tmp_path / "slam_map")
+    (tmp_path / "slam_map.posegraph").write_text("")
+    node.deserialize_client.wait_for_service = MagicMock(return_value=True)
+    node.deserialize_client.call_async = MagicMock(return_value=MagicMock())
+    node.load_map_if_exists()
+    req = node.deserialize_client.call_async.call_args[0][0]
+    assert req.filename == node.map_persist_path
+    assert req.match_type == DeserializePoseGraph.Request.START_AT_FIRST_NODE
+
+
+def test_load_skips_when_service_unavailable(node, tmp_path):
+    node.map_persist_path = str(tmp_path / "slam_map")
+    (tmp_path / "slam_map.posegraph").write_text("")
+    node.deserialize_client.wait_for_service = MagicMock(return_value=False)
+    node.deserialize_client.call_async = MagicMock()
+    node.load_map_if_exists()
+    node.deserialize_client.call_async.assert_not_called()
 
 
 def test_export_legacy_map_default_true(node):

@@ -83,33 +83,33 @@ def make_intent(name):
 # --- on_intent state transitions ---
 
 def test_intent_start_from_idle(node):
-    node.state = "idle"
+    node.state = "IDLE"
     node.robot_xy_in_map = MagicMock(return_value=(1.0, 2.0))
     node.on_intent(make_intent("exploration_start"))
-    assert node.state == "exploring"
+    assert node.state == "EXPL"
 
 
 def test_intent_start_from_done(node):
-    node.state = "done"
+    node.state = "DONE"
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
     node.on_intent(make_intent("exploration_start"))
-    assert node.state == "exploring"
+    assert node.state == "EXPL"
 
 
 def test_intent_start_while_exploring_ignored(node):
-    node.state = "exploring"
+    node.state = "EXPL"
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
     node.goal_count = 3
     node.on_intent(make_intent("exploration_start"))
-    assert node.state == "exploring"
+    assert node.state == "EXPL"
     assert node.goal_count == 3  # not reset
 
 
 def test_intent_stop_sets_idle(node):
-    node.state = "exploring"
+    node.state = "EXPL"
     node.goal_handle = None
     node.on_intent(make_intent("exploration_stop"))
-    assert node.state == "idle"
+    assert node.state == "IDLE"
 
 
 def test_intent_malformed_json_no_crash(node):
@@ -119,13 +119,13 @@ def test_intent_malformed_json_no_crash(node):
 
 
 def test_intent_unknown_name_no_state_change(node):
-    node.state = "idle"
+    node.state = "IDLE"
     node.on_intent(make_intent("navigation_go"))
-    assert node.state == "idle"
+    assert node.state == "IDLE"
 
 
 def test_intent_start_resets_blacklist(node):
-    node.state = "idle"
+    node.state = "IDLE"
     node.blacklist = {(1.0, 2.0), (3.0, 4.0)}
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
     node.on_intent(make_intent("exploration_start"))
@@ -133,7 +133,7 @@ def test_intent_start_resets_blacklist(node):
 
 
 def test_intent_start_resets_counters(node):
-    node.state = "idle"
+    node.state = "IDLE"
     node.goal_count = 5
     node.goals_reached = 3
     node.goals_failed = 2
@@ -149,7 +149,7 @@ def test_intent_start_resets_counters(node):
 # --- find_and_send_goal via MockAlgorithm ---
 
 def test_find_frontier_no_map_early_return(node):
-    node.state = "exploring"
+    node.state = "EXPL"
     node.latest_map = None
     node.send_nav_goal = MagicMock()
     node.find_and_send_goal()
@@ -157,7 +157,7 @@ def test_find_frontier_no_map_early_return(node):
 
 
 def test_find_frontier_no_robot_xy_early_return(node):
-    node.state = "exploring"
+    node.state = "EXPL"
     node.latest_map = make_map()
     node.robot_xy_in_map = MagicMock(return_value=None)
     node.send_nav_goal = MagicMock()
@@ -166,7 +166,7 @@ def test_find_frontier_no_robot_xy_early_return(node):
 
 
 def test_find_frontier_blocked_increments_count(node):
-    node.state = "exploring"
+    node.state = "EXPL"
     node.latest_map = make_map()
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
     node.no_target_count = 0
@@ -180,7 +180,7 @@ def test_find_frontier_blocked_increments_count(node):
 def test_find_frontier_explored_done_ends_session_immediately(node):
     # EXPLORED_DONE ends the session at once — no NO_TARGET_PATIENCE wait, and
     # WITHOUT the node reading latest_clusters to decide.
-    node.state = "exploring"
+    node.state = "EXPL"
     node.latest_map = make_map()
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
     node.no_target_count = 0
@@ -188,14 +188,14 @@ def test_find_frontier_explored_done_ends_session_immediately(node):
     node.dump_exhaustion = MagicMock()
     node.algorithm = MockAlgorithm(GoalDecision.done())
     node.find_and_send_goal()
-    assert node.state == "done"
+    assert node.state == "DONE"
     node.send_nav_goal.assert_not_called()
 
 
 def test_find_frontier_blocked_patience_clears_blacklist_once(node):
     # First patience exhaustion on a block clears the blacklist and retries —
     # it does NOT declare done.
-    node.state = "exploring"
+    node.state = "EXPL"
     node.latest_map = make_map()
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
     node.no_target_count = node.NO_TARGET_PATIENCE - 1
@@ -204,7 +204,7 @@ def test_find_frontier_blocked_patience_clears_blacklist_once(node):
     node.send_nav_goal = MagicMock()
     node.algorithm = MockAlgorithm(GoalDecision.blocked())
     node.find_and_send_goal()
-    assert node.state == "exploring"
+    assert node.state == "EXPL"
     assert node.blacklist == set()
     assert node.blacklist_cleared_once is True
     assert node.no_target_count == 0
@@ -212,7 +212,7 @@ def test_find_frontier_blocked_patience_clears_blacklist_once(node):
 
 def test_find_frontier_blocked_patience_after_clear_sets_done(node):
     # A second patience exhaustion (blacklist already cleared) gives up → done.
-    node.state = "exploring"
+    node.state = "EXPL"
     node.latest_map = make_map()
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
     node.no_target_count = node.NO_TARGET_PATIENCE - 1
@@ -221,12 +221,12 @@ def test_find_frontier_blocked_patience_after_clear_sets_done(node):
     node.dump_exhaustion = MagicMock()
     node.algorithm = MockAlgorithm(GoalDecision.blocked())
     node.find_and_send_goal()
-    assert node.state == "done"
+    assert node.state == "DONE"
     node.send_nav_goal.assert_not_called()
 
 
 def test_find_frontier_found_resets_patience_count(node):
-    node.state = "exploring"
+    node.state = "EXPL"
     node.latest_map = make_map()
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
     node.no_target_count = 5
@@ -238,7 +238,7 @@ def test_find_frontier_found_resets_patience_count(node):
 
 
 def test_find_frontier_sends_algorithm_goal(node):
-    node.state = "exploring"
+    node.state = "EXPL"
     node.latest_map = make_map()
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
     node.send_nav_goal = MagicMock()
@@ -271,7 +271,7 @@ def test_publish_markers_no_hook_does_not_publish(node):
 
 def test_handle_no_target_writes_telemetry_without_cluster_state(node):
     # A stub exposing no clusters/diag still produces valid no_frontier telemetry.
-    node.state = "exploring"
+    node.state = "EXPL"
     node.no_target_count = 0
     node.blacklist = set()
     node.telemetry.write = MagicMock()
@@ -346,8 +346,8 @@ def test_publish_status_idle_json(node):
     node.robot_xy_in_map = MagicMock(return_value=None)
     published = []
     node.status_pub.publish = lambda m: published.append(json.loads(m.data))
-    node.publish_status("idle")
-    assert published == [{"state": "idle", "reached": 0, "failed": 0}]
+    node.publish_status("IDLE")
+    assert published == [{"state": "IDLE", "reached": 0, "failed": 0}]
 
 
 def test_publish_status_done_carries_counters(node):
@@ -356,8 +356,8 @@ def test_publish_status_done_carries_counters(node):
     node.robot_xy_in_map = MagicMock(return_value=None)
     published = []
     node.status_pub.publish = lambda m: published.append(json.loads(m.data))
-    node.publish_status("done")
-    assert published[0] == {"state": "done", "reached": 5, "failed": 1}
+    node.publish_status("DONE")
+    assert published[0] == {"state": "DONE", "reached": 5, "failed": 1}
 
 
 def test_publish_status_exploring_no_goal(node):
@@ -370,9 +370,9 @@ def test_publish_status_exploring_no_goal(node):
     node.robot_xy_in_map = MagicMock(return_value=(1.0, 2.0))
     published = []
     node.status_pub.publish = lambda m: published.append(json.loads(m.data))
-    node.publish_status("exploring")
+    node.publish_status("EXPL")
     d = published[0]
-    assert d["state"] == "exploring"
+    assert d["state"] == "EXPL"
     assert d["reached"] == 1
     assert d["goal_num"] == 2
     assert d["no_frontier_ticks"] == 3
@@ -391,9 +391,9 @@ def test_publish_status_exploring_with_goal_fields(node):
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
     published = []
     node.status_pub.publish = lambda m: published.append(json.loads(m.data))
-    node.publish_status("exploring")
+    node.publish_status("EXPL")
     d = published[0]
-    assert d["state"] == "exploring"
+    assert d["state"] == "EXPL"
     assert d["reached"] == 2
     assert d["failed"] == 0
     assert d["goal_num"] == 3
@@ -414,7 +414,7 @@ def test_publish_status_dist_correct(node):
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
     published = []
     node.status_pub.publish = lambda m: published.append(json.loads(m.data))
-    node.publish_status("exploring")
+    node.publish_status("EXPL")
     assert published[0]["dist_m"] == 3.0
 
 
@@ -460,7 +460,7 @@ def test_shared_only_plugin_declares_no_frontier_params(node):
 def test_shared_only_plugin_ticks_without_frontier_params(node):
     # A find-and-send tick must run cleanly for a plugin carrying no frontier
     # tuning (frontier_params is None) — no frontier param lookups blow up.
-    node.state = "exploring"
+    node.state = "EXPL"
     node.latest_map = make_map()
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
     node.send_nav_goal = MagicMock()
@@ -569,7 +569,7 @@ def test_goal_is_lethal_false_out_of_bounds(node):
 def test_find_and_send_goal_skips_lethal_candidate(node):
     # A lethal (post-nudge) candidate is excluded and next_goal is re-asked; the
     # next free candidate is dispatched instead of aborting on a lethal goal.
-    node.state = "exploring"
+    node.state = "EXPL"
     node.latest_map = make_map()
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
     node.send_nav_goal = MagicMock()
@@ -663,24 +663,24 @@ def make_stuck(node, goal_xy, robot_xy):
 
 
 def test_wedge_same_pose_stucks_stop_session(node):
-    node.state = "exploring"
+    node.state = "EXPL"
     for i in range(node.WEDGED_STUCK_LIMIT):
         make_stuck(node, (5.0 + i, 0.0), (1.0, 1.0))
-    assert node.state == "idle"
+    assert node.state == "IDLE"
     assert node.stuck_streak == node.WEDGED_STUCK_LIMIT
 
 
 def test_wedge_streak_resets_when_pose_changes(node):
-    node.state = "exploring"
+    node.state = "EXPL"
     make_stuck(node, (5.0, 0.0), (1.0, 1.0))
     make_stuck(node, (6.0, 0.0), (2.0, 2.0))  # moved — streak restarts
     make_stuck(node, (7.0, 0.0), (2.0, 2.0))
-    assert node.state == "exploring"
+    assert node.state == "EXPL"
     assert node.stuck_streak == 2
 
 
 def test_wedge_streak_resets_on_reached_goal(node):
-    node.state = "exploring"
+    node.state = "EXPL"
     make_stuck(node, (5.0, 0.0), (1.0, 1.0))
     make_stuck(node, (6.0, 0.0), (1.0, 1.0))
     assert node.stuck_streak == 2
@@ -691,7 +691,7 @@ def test_wedge_streak_resets_on_reached_goal(node):
         goal_result_future(GoalStatus.STATUS_SUCCEEDED), xy=(2.0, 2.0)
     )
     assert node.stuck_streak == 0
-    assert node.state == "exploring"
+    assert node.state == "EXPL"
 
 
 # --- goal rejection clears full active-goal state (stale status regression) ---
