@@ -290,8 +290,9 @@ ros2 param set /collision_monitor FootprintApproach.enabled false   # dynamic es
    test) → decides F29 design. Then write TF29 with probe as T01.
    Probe script: `scratchpad/count_footprint_points.py` (R=0.17, min_points=6
    confirmed vs mini config).
-2. **Write TF31** (scoring pipeline + clearance, High) — fixes wall-hug goals,
-   frames F15/F30 migration.
+2. **TF31 T07 sim verification** (scoring pipeline + clearance, High) —
+   baseline `w_clearance=0` vs tuned default in multi_room; frames F15/F30
+   migration.
 3. **Write TF30** (path-distance ranking, High) — biggest stall-input fix;
    lands as an F31 filter/`d`-source.
 4. **Give the dev VM 4–6 vCPUs.**
@@ -306,8 +307,8 @@ ros2 param set /collision_monitor FootprintApproach.enabled false   # dynamic es
   verification pending — feature open.
 - **F29** BackUp escape: feature file only; probe in progress (this session);
   no TF29 yet.
-- **F31** goal-scoring pipeline + clearance: TF31 T01–T05 done (pipeline +
-  novelty scorer + obstacle clearance, pure tests pass); T06 literate/flags +
+- **F31** goal-scoring pipeline + clearance: TF31 T01–T06 done (pipeline +
+  novelty scorer + obstacle clearance + docs/flags, pure tests pass);
   T07 sim + T08 live pending. Umbrella for F15/F30 heuristics; fixes wall-hug.
 - **F30** path-distance ranking: feature file only; no TF30 yet.
 - **F28** reason-tagged exclusion: feature file only; no TF28 yet.

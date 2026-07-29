@@ -1,10 +1,10 @@
 # F31 — Goal Scoring Pipeline (Filters + Weighted Scorers) + Obstacle Clearance
 
 **Priority**: High
-**Done:** no
+**Done:** no (T01–T05 code+tests landed; T06 docs/flags + T07 sim + T08 live pending)
 **Tasks File Created:** yes
-**Tests Written:** no
-**Test Passing:** no
+**Tests Written:** yes (T01–T05)
+**Test Passing:** yes (T01–T05; full suite green)
 
 **Description**: Goal selection has accreted three heuristics, each bolted on a
 different way: distance-to-preferred lives inline in `best_cell_in_cluster`
@@ -17,6 +17,12 @@ hug walls and feed the F29 wedge — the same bolt-on way means more sprawl. Thi
 feature refactors selection into one **filters + weighted scorers** pipeline (the
 shape Nav2's own MPPI `CriticManager` uses), then adds obstacle clearance as its
 first new tenant to prove the pipeline composes.
+
+> **Status note (T03 done):** F15 path-novelty scoring is now a pipeline scorer
+> with weight `w_novelty`; the old two-stage short-list-then-re-rank branch in
+> `FrontierAlgorithm.select_target` is retired. `novelty_top_n` is a deprecated
+> no-op. See `01-literate/06-frontier_explorer.md` and
+> `01-literate/08-frontier_algorithm.md` for the current design.
 
 ## Problem being fixed (observed 2026-07-22)
 

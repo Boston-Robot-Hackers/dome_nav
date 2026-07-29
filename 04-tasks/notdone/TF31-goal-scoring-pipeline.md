@@ -82,10 +82,11 @@ cells on a fixture; `merge_tuning` blacklist_radius > goal_inset_m invariant
 still enforced.
 
 ## T06 — Feature file + literate regen
-**Status**: not done
-**Description**: Set F31 flags; update `01-literate/` for changed
-`frontier_explorer.py` / `frontier_params.py` / `frontier_algorithm.py`. Note
-that F15's two-stage description is superseded (novelty is now a scorer).
+**Status**: done
+**Description**: Set F31 flags; updated `01-literate/06-frontier_explorer.md`
+(v1.2) and `01-literate/08-frontier_algorithm.md` (v1.1) for the F31 pipeline,
+clearance field, and new params. Noted F15 two-stage retirement / `novelty_top_n`
+deprecation in both the feature file and the algorithm literate doc.
 
 ## T07 — Sim verification
 **Status**: not done — sim, manual

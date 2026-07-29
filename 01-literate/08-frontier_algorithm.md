@@ -1,6 +1,6 @@
 ---
-version: "1.0"
-generated: "2026-07-24"
+version: "1.1"
+generated: "2026-07-29"
 ---
 
 # The Frontier Algorithm — wrapping the pure core in a protocol
@@ -25,10 +25,10 @@ on the decision `next_goal` just made.
 
 ```python
 class FrontierAlgorithm:
-    def __init__(self, frontier_params=None):
-        self.latest_clusters = []
-        self.latest_diag = None
-        self.latest_novelty = None
+    def __init__(self, frontier_params: FrontierParams | None = None):
+        self.latest_clusters: list[list[int]] = []
+        self.latest_diag: dict | None = None
+        self.latest_novelty: int | None = None
         self.frontier_params = frontier_params or FrontierParams()
 ```
 
@@ -47,9 +47,14 @@ def next_goal(self, ctx: ExplorationContext) -> GoalDecision:
     self.latest_clusters = clusters
     target = self.select_target(clusters, ctx, tuning)
     if target is None:
-        self.latest_diag = frontier_diag(clusters, ctx.map_info, ctx.robot_xy,
-            tuning.min_frontier_size, tuning.min_frontier_dist,
-            tuning.max_frontier_dist)
+        self.latest_diag = frontier_diag(
+            clusters,
+            ctx.map_info,
+            ctx.robot_xy,
+            tuning.min_frontier_size,
+            tuning.min_frontier_dist,
+            tuning.max_frontier_dist,
+        )
         # No clusters -> done; clusters but all filtered -> blocked, not done.
         if not clusters:
             return GoalDecision.done()
@@ -88,16 +93,26 @@ it stashes the winning goal's raw novelty count for telemetry, so per-goal
 algorithm state rides along with the goal itself.
 
 ```python
-def select_target(self, clusters, ctx, tuning):
-    target = pick_best_frontier(clusters, ctx.map_info, ctx.robot_xy, tuning,
-        blacklist=ctx.blacklist, start_xy=ctx.start_xy, data=ctx.map_data)
+def select_target(
+    self, clusters: list[list[int]], ctx: ExplorationContext,
+    tuning: "FrontierTuning",
+) -> tuple[float, float] | None:
+    target = pick_best_frontier(
+        clusters, ctx.map_info, ctx.robot_xy, tuning,
+        blacklist=ctx.blacklist, start_xy=ctx.start_xy, data=ctx.map_data,
+    )
     if tuning.use_novelty_scoring and target is not None:
         self.latest_novelty = path_novelty_score(
-            ctx.robot_xy, target, ctx.map_data, ctx.map_info)
+            ctx.robot_xy, target, ctx.map_data, ctx.map_info
+        )
     else:
         self.latest_novelty = None
     return target
 ```
+
+> **F15 migration note:** The old two-stage short-list-then-re-rank branch is
+> gone. Novelty is now just another scorer registered by `build_registry`; the
+> only special handling left above is the telemetry stash.
 
 ## The optional hooks
 
@@ -106,24 +121,37 @@ The remaining methods are the opaque hooks the node calls *if present* (via
 something the node treats as a black box:
 
 ```python
-def render_markers(self, rc):        # -> MarkerArray for RViz
-def exhaustion_report(self, rc):     # -> human string: why exploration ended
-def failure_report(self, rc):        # -> human string: cluster summary on failure
-def telemetry_extra(self):           # -> dict merged into telemetry rows
-def session_params(self):            # -> dict logged at session start
-```
+def render_markers(self, rc: RenderContext) -> MarkerArray:        # -> RViz
+    return build_explore_markers(...)
 
-`telemetry_extra` is a good illustration of the pattern — it publishes the
-algorithm's private latest-tick state as an opaque dict the node merges blindly:
+def exhaustion_report(self, rc: RenderContext) -> str:             # why ended
+    tuning = merge_tuning(rc.params, self.frontier_params)
+    return format_frontier_exhaustion(...)
 
-```python
-def telemetry_extra(self) -> dict:
+def failure_report(self, rc: RenderContext) -> str:                # cluster summary
+    return format_cluster_summary(self.latest_clusters, rc.map_info)
+
+def telemetry_extra(self) -> dict:                                 # merged into rows
     diag = self.latest_diag or {}
     extra = {"raw_clusters": len(self.latest_clusters), **diag}
     if self.latest_novelty is not None:
         extra["novelty_score"] = self.latest_novelty
     return extra
+
+def session_params(self) -> dict:                                  # logged at start
+    fp = self.frontier_params
+    return {
+        "min_frontier_dist": fp.min_frontier_dist,
+        "max_frontier_dist": fp.max_frontier_dist,
+        "goal_inset": fp.goal_inset_m,
+        "min_frontier_size": fp.min_frontier_size,
+        "use_novelty_scoring": fp.use_novelty_scoring,
+        "novelty_top_n": fp.novelty_top_n,
+    }
 ```
+
+`telemetry_extra` is a good illustration of the pattern — it publishes the
+algorithm's private latest-tick state as an opaque dict the node merges blindly.
 
 ## The parameter plumbing (`frontier_params.py`)
 
@@ -146,27 +174,74 @@ an excluded cell's raw counterpart would sit outside the exclusion radius and ge
 reselected every single tick — an infinite loop. So:
 
 ```python
-def merge_tuning(shared, frontier) -> FrontierTuning:
+def merge_tuning(shared: ExploreParams, frontier: FrontierParams) -> FrontierTuning:
     if shared.blacklist_radius <= frontier.goal_inset_m:
         raise ValueError(
             f"blacklist_radius ({shared.blacklist_radius}) must exceed "
             f"goal_inset_m ({frontier.goal_inset_m}); exclusion is stored "
             "post-nudge but filtered against raw cells.")
-    ...
+    preferred = shared.preferred_goal_distance
+    if frontier.prefer_farthest:
+        has_max = frontier.max_frontier_dist > 0.0
+        preferred = frontier.max_frontier_dist if has_max else 1000.0
+    return FrontierTuning(...)
 ```
 
-Declaring the params keeps every frontier name in one place, `declare_frontier_params`,
-which the node calls once at startup via the protocol's `declare_params` hook:
+### The F31 scoring weights and clearance params
+
+The scoring pipeline introduced in F31 adds a small family of weights and
+clearance tuning. All scorer outputs are normalized to `[0, 1]` per cycle, so the
+weights are directly comparable:
+
+```python
+@dataclass
+class FrontierParams:
+    # ... existing fields ...
+    use_novelty_scoring: bool = False  # opt-in: adds the novelty scorer
+    novelty_top_n: int = 5             # deprecated no-op
+    w_distance: float = 1.0            # distance-to-preferred scorer weight
+    w_novelty: float = 1.0             # novelty weight (only when use_novelty_scoring)
+    w_clearance: float = 1.0           # clearance scorer weight; 0 disables clearance
+    robot_radius: float = 0.17         # R_inscribed for the clearance floor
+    clearance_margin_m: float = 0.05   # floor = robot_radius + this; keep small
+```
+
+- `w_distance` weights the existing `preferred_goal_distance` preference.
+- `w_novelty` is active only when `use_novelty_scoring` is true; setting the
+  weight to 0 is equivalent to leaving the feature off.
+- `w_clearance` controls obstacle-clearance scoring. Setting it to 0 disables
+  both the clearance bonus scorer and the clearance floor filter, avoiding the
+  cost of computing `clearance_field` entirely.
+- `robot_radius` and `clearance_margin_m` set the floor: a candidate is rejected
+  if its clearance is less than `robot_radius + clearance_margin_m`. The margin
+  is deliberately small so corridors remain selectable.
+
+### Declaring the params
+
+Declaring the params keeps every frontier name in one place,
+`declare_frontier_params`, which the node calls once at startup via the
+protocol's `declare_params` hook:
 
 ```python
 def declare_frontier_params(node) -> FrontierParams:
     defaults = FrontierParams()
     node.declare_parameter("min_frontier_size", defaults.min_frontier_size)
+    node.declare_parameter("min_frontier_dist", defaults.min_frontier_dist)
+    node.declare_parameter("max_frontier_dist", defaults.max_frontier_dist)
+    node.declare_parameter("goal_inset_m", defaults.goal_inset_m)
+    node.declare_parameter("frontier_buffer_cells", defaults.frontier_buffer_cells)
+    node.declare_parameter("prefer_farthest", defaults.prefer_farthest)
     node.declare_parameter("use_novelty_scoring", defaults.use_novelty_scoring)
+    node.declare_parameter("novelty_top_n", defaults.novelty_top_n)
+    node.declare_parameter("w_distance", defaults.w_distance)
+    node.declare_parameter("w_novelty", defaults.w_novelty)
     node.declare_parameter("w_clearance", defaults.w_clearance)
-    ...
+    node.declare_parameter("robot_radius", defaults.robot_radius)
+    node.declare_parameter("clearance_margin_m", defaults.clearance_margin_m)
     return FrontierParams(
-        min_frontier_size=node.get_parameter("min_frontier_size").value, ...)
+        min_frontier_size=node.get_parameter("min_frontier_size").value,
+        ...
+    )
 ```
 
 ## Observations and possible improvements

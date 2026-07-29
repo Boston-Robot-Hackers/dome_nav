@@ -1,6 +1,6 @@
 ---
-version: "1.1"
-generated: "2026-07-24"
+version: "1.2"
+generated: "2026-07-29"
 ---
 
 # Frontier Detection and Goal Scoring — `frontier_explorer.py`
@@ -83,7 +83,7 @@ def cell_to_world(idx: int, info: MapInfo) -> tuple[float, float]:
     return (x, y)
 
 
-def world_to_cell(xy, info):
+def world_to_cell(xy: tuple[float, float], info: MapInfo) -> tuple[int, int]:
     # math.floor, not int(): int() truncates toward zero, so a point just left
     # of the origin would land in cell 0 (in-bounds) instead of -1.
     col = math.floor((xy[0] - info.origin_x) / info.resolution)
@@ -145,7 +145,8 @@ patch of frontier becomes one candidate region:
 for seed in is_frontier:
     if seed in visited:
         continue
-    cluster, stack = [], [seed]
+    cluster: list[int] = []
+    stack = [seed]
     while stack:
         cell = stack.pop()
         if cell in visited or cell not in is_frontier:
@@ -171,23 +172,30 @@ BFS distance transform**: seed the queue with every wall cell at distance 0, the
 relax outward, 8-connected, with diagonal steps costing √2.
 
 ```python
-def clearance_field(data, info):
+def clearance_field(data: Sequence[int], info: MapInfo) -> list[float]:
+    width, height = info.width, info.height
     dist = [float("inf")] * (width * height)
-    queue = deque()
+    queue: deque[int] = deque()
     for idx, value in enumerate(data):
         if value >= OCCUPIED_THRESHOLD:
             dist[idx] = 0.0
             queue.append(idx)
-    steps = ((-1,0,1.0),(1,0,1.0),(0,-1,1.0),(0,1,1.0),
-             (-1,-1,SQRT2),(-1,1,SQRT2),(1,-1,SQRT2),(1,1,SQRT2))
+    steps = (
+        (-1, 0, 1.0), (1, 0, 1.0), (0, -1, 1.0), (0, 1, 1.0),
+        (-1, -1, SQRT2), (-1, 1, SQRT2), (1, -1, SQRT2), (1, 1, SQRT2),
+    )
     while queue:
         idx = queue.popleft()
+        row, col = divmod(idx, width)
         base = dist[idx]
         for dr, dc, step in steps:
-            ...
-            if base + step < dist[nidx]:
-                dist[nidx] = base + step
-                queue.append(nidx)
+            nr, nc = row + dr, col + dc
+            if 0 <= nr < height and 0 <= nc < width:
+                nidx = nr * width + nc
+                nd = base + step
+                if nd < dist[nidx]:
+                    dist[nidx] = nd
+                    queue.append(nidx)
     return dist
 ```
 
@@ -204,7 +212,10 @@ straight line from robot to goal, using Bresenham's line algorithm to walk the
 raster:
 
 ```python
-def path_novelty_score(start_xy, end_xy, data, info) -> int:
+def path_novelty_score(
+    start_xy: tuple[float, float], end_xy: tuple[float, float],
+    data: Sequence[int], info: MapInfo,
+) -> int:
     r0, c0 = world_to_cell(start_xy, info)
     r1, c1 = world_to_cell(end_xy, info)
     score = 0
@@ -236,17 +247,21 @@ assembles the active filters and weighted scorers for this tick, adding the
 novelty and clearance tenants only when enabled:
 
 ```python
-def build_registry(tuning, info, start_xy) -> Registry:
-    scorers = [(tuning.w_distance, score_distance_to_preferred)]
+def build_registry(
+    tuning: "FrontierTuning", info: MapInfo, start_xy: tuple[float, float] | None
+) -> Registry:
+    scorers: list[WeightedScorer] = [(tuning.w_distance, score_distance_to_preferred)]
     if tuning.use_novelty_scoring:
         scorers.append((tuning.w_novelty, score_novelty))
-    cell_filters = [keep_off_blacklist, keep_within_dist_range]
+    cell_filters: list[Filter] = [keep_off_blacklist, keep_within_dist_range]
     if tuning.w_clearance > 0.0:
         cell_filters.append(keep_clearance_floor)
         scorers.append((tuning.w_clearance, score_clearance_bonus))
     return Registry(
-        cluster_filters=[make_min_size_filter(tuning),
-                         make_max_radius_filter(tuning, info, start_xy)],
+        cluster_filters=[
+            make_min_size_filter(tuning),
+            make_max_radius_filter(tuning, info, start_xy),
+        ],
         cell_filters=cell_filters,
         scorers=scorers,
     )
@@ -257,17 +272,25 @@ convention — everything is a *cost*, lower is better, so "more is better"
 quantities are negated:
 
 ```python
-def score_distance_to_preferred(ctx):
+def score_distance_to_preferred(ctx: CellCtx) -> float:
     reach = ctx.dist_to_robot_m - ctx.tuning.goal_inset_m  # account for the nudge
     return abs(reach - ctx.tuning.preferred_goal_distance)
 
-def score_novelty(ctx):
-    return -float(path_novelty_score(ctx.robot_world_xy, ctx.world_xy,
-                                     ctx.map_data, ctx.map_info))
 
-def score_clearance_bonus(ctx):
+def score_novelty(ctx: CellCtx) -> float:
+    return -float(path_novelty_score(
+        ctx.robot_world_xy, ctx.world_xy, ctx.map_data, ctx.map_info
+    ))
+
+
+def score_clearance_bonus(ctx: CellCtx) -> float:
     return -ctx.clearance_cells   # more open = lower cost
 ```
+
+> **F15 migration note:** Path novelty used to be a two-stage
+> short-list-then-re-rank special case in `FrontierAlgorithm.select_target`. With
+> the F31 pipeline it is simply one weighted scorer among others; `novelty_top_n`
+> is retired as a deprecated no-op.
 
 ### The key trick: per-scorer normalization
 
@@ -279,17 +302,25 @@ sum. Normalization is inherently cross-cell, so it lives in the selector, not in
 the scorers:
 
 ```python
-def select_cell(cells, cell_filters, scorers):
+def select_cell(
+    cells: list[CellCtx],
+    cell_filters: list[Filter],
+    scorers: list[WeightedScorer],
+) -> tuple[float, float] | None:
     survivors = [c for c in cells if all(f(c) for f in cell_filters)]
     if not survivors:
         return None
-    columns = [(weight, minmax_normalize([scorer(c) for c in survivors]))
-               for weight, scorer in scorers]
-    best_xy, best_cost = None, float("inf")
+    columns = [
+        (weight, minmax_normalize([scorer(c) for c in survivors]))
+        for weight, scorer in scorers
+    ]
+    best_xy: tuple[float, float] | None = None
+    best_cost = float("inf")
     for i, cell in enumerate(survivors):
         cost = sum(weight * col[i] for weight, col in columns)
         if cost < best_cost:
-            best_cost, best_xy = cost, cell.world_xy
+            best_cost = cost
+            best_xy = cell.world_xy
     return best_xy
 ```
 
@@ -300,7 +331,7 @@ weighted sum. It compares `lo == hi` rather than the span so `inf` stays
 finite-safe:
 
 ```python
-def minmax_normalize(values):
+def minmax_normalize(values: list[float]) -> list[float]:
     lo, hi = min(values), max(values)
     if lo == hi:
         return [0.0] * len(values)
@@ -318,14 +349,22 @@ that "hollow centroid" trap, and the blacklist is likewise per-cell.
 clearance field only when clearance scoring is actually on:
 
 ```python
-def pick_best_frontier(clusters, info, robot_xy, params, blacklist=None,
-                       start_xy=None, data=()):
+def pick_best_frontier(
+    clusters: list[list[int]],
+    info: MapInfo,
+    robot_xy: tuple[float, float],
+    params: "FrontierTuning",
+    blacklist: set[tuple[float, float]] | None = None,
+    start_xy: tuple[float, float] | None = None,
+    data: Sequence[int] = (),
+) -> tuple[float, float] | None:
     registry = build_registry(params, info, start_xy)
     use_clearance = params.w_clearance > 0.0 and bool(data)
     clearance = clearance_field(data, info) if use_clearance else None
-    cells = cell_contexts(clusters, data, info, robot_xy, params,
-                          blacklist or set(), start_xy,
-                          registry.cluster_filters, clearance)
+    cells = cell_contexts(
+        clusters, data, info, robot_xy, params, blacklist or set(), start_xy,
+        registry.cluster_filters, clearance,
+    )
     return select_cell(cells, registry.cell_filters, registry.scorers)
 ```
 
@@ -335,13 +374,15 @@ Cluster-level filters run first and cheaply (min size, max radius from start).
 Cell-level filters cull individual candidates:
 
 ```python
-def keep_off_blacklist(ctx):
+def keep_off_blacklist(ctx: CellCtx) -> bool:
     br = ctx.tuning.blacklist_radius
     wx, wy = ctx.world_xy
-    return not any(math.sqrt((wx-bx)**2 + (wy-by)**2) < br
-                   for bx, by in ctx.blacklist)
+    return not any(
+        math.sqrt((wx - bx) ** 2 + (wy - by) ** 2) < br for bx, by in ctx.blacklist
+    )
 
-def keep_clearance_floor(ctx):
+
+def keep_clearance_floor(ctx: CellCtx) -> bool:
     floor_m = ctx.tuning.robot_radius + ctx.tuning.clearance_margin_m
     return ctx.clearance_cells * ctx.map_info.resolution >= floor_m
 ```
@@ -358,13 +399,16 @@ becomes a Nav2 goal it is pulled `inset_m` back toward the robot, keeping it
 inside the costmap and off the unknown boundary:
 
 ```python
-def nudge_toward_robot(xy, robot_xy, inset_m):
-    dx, dy = robot_xy[0]-xy[0], robot_xy[1]-xy[1]
-    dist = math.sqrt(dx*dx + dy*dy)
+def nudge_toward_robot(
+    xy: tuple[float, float], robot_xy: tuple[float, float], inset_m: float
+) -> tuple[float, float]:
+    dx = robot_xy[0] - xy[0]
+    dy = robot_xy[1] - xy[1]
+    dist = math.sqrt(dx * dx + dy * dy)
     if dist < inset_m:
         return xy
     scale = inset_m / dist
-    return (xy[0] + dx*scale, xy[1] + dy*scale)
+    return (xy[0] + dx * scale, xy[1] + dy * scale)
 ```
 
 This is why `score_distance_to_preferred` subtracts `goal_inset_m`: the score
