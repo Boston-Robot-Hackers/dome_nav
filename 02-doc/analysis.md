@@ -287,3 +287,88 @@ files — it constrains everything downstream.
 5. Sim/test strategy for the integrated mode without OAK hardware: fake
    detection producer vs rosbag (F05 synergy)? (G6)
 6. CPU headroom measurement on the Pi with vision + explore both live. (G7)
+
+---
+
+## Part 6 — Does the scoring pipeline belong in the frontier explorer or one level up?
+
+**Question (2026-07-29):** should the F31 target-scoring pipeline stay in
+`frontier_explorer.py`, or move up so other exploration algorithms can use it?
+
+**Answer:** one level up — but as a **shared pure sibling module** at the same
+layer as `frontier_explorer.py`, *not* in the node and *not* inside
+`explore_context.py`. This is the split deferred F32 already describes; the
+vision requirement (Part 2) is its motivating second tenant.
+
+### The pipeline is three tiers, not one thing
+
+Reading `frontier_explorer.py:184-402`, the F31 code splits by how
+frontier-coupled it actually is:
+
+- **Tier 1 — already generic.** `CellCtx`, `Filter`/`Scorer` types,
+  `minmax_normalize`, `select_cell`. `CellCtx` carries only geometry (world xy,
+  cell index, distance, clearance) plus shared map/robot/blacklist refs —
+  nothing about frontiers. `select_cell` is a generic weighted-normalized
+  ranker that would rank any candidate points.
+- **Tier 2 — generic heuristics with a frontier-branded config.**
+  `score_novelty`, `score_clearance_bonus`, `keep_clearance_floor`,
+  `keep_off_blacklist`, `score_distance_to_preferred`. None know what a
+  frontier is. The real coupling is that they read `ctx.tuning`, typed as
+  `FrontierTuning`: scoring configuration (weights, preferred distance,
+  blacklist radius) is fused with generator configuration (`min_frontier_size`,
+  `frontier_buffer_cells`) in one dataclass.
+- **Tier 3 — genuinely frontier-specific.** `find_frontier_clusters`, cluster
+  filters (`make_min_size_filter`, `make_max_radius_filter` — operate on
+  `list[int]` clusters), `cell_contexts`, `nudge_toward_robot`, and the
+  `goal_inset_m` adjustment inside `score_distance_to_preferred`.
+
+Tiers 1+2 move up; Tier 3 stays in `frontier_explorer.py`.
+
+### Why "up" is a sibling module, not the node
+
+F23 forbids the node: `select_cell` is invoked inside `next_goal`, which is
+algorithm-side by contract (`explore_context.py:89-107`); ranking in the node
+would force one policy on every algorithm. `explore_context.py` is the right
+layer but the wrong file — 107 lines of pure type declarations vs 220 lines of
+pipeline logic. A new pure module (e.g. `goal_scoring.py`) importing only from
+`explore_context` preserves the layering rule (nodes → algorithms → cores →
+context) and keeps the no-ROS test story.
+
+### Why now, not "when a second algorithm exists"
+
+Three queued requirements are all second tenants of this exact seam:
+
+- **F32** (candidate-source abstraction) is deferred on precisely this split:
+  algorithm = one `CandidateSource` + the shared ranking pipeline; frontier
+  becomes one source among grid/random/hybrid.
+- **Vision integration** (Part 5, Option B): semantic targets as candidates or
+  vision-aware scorers — a Tier-2 scorer plus a new candidate source.
+- **F26** (survey paper): swappable, benchmarkable generation strategies are
+  its experimental scaffold.
+
+### Cost and sequencing
+
+The lift is cheap in algorithm code but touches the worst wart: `FrontierTuning`
+is hand-transcribed 4× in `frontier_params.py`. Splitting tuning into
+scoring-config vs generator-config adds a fifth consumer unless the deferred
+`dataclasses.fields()` plumbing dedup lands **first or in the same task** — it
+stops being cosmetic and becomes the enabler. One design decision to settle:
+blacklist is already shared (in `ExploreParams`, because node reselection uses
+it), but `preferred_goal_distance` sits in `ExploreParams` while its scorer
+sits in the algorithm — the lift either resolves that split cleanly or makes
+it worse.
+
+### Load-bearing caveat (from F32)
+
+Frontier candidates guarantee information gain **structurally** (they sit on
+the known/unknown boundary); a generic candidate source does not. Any
+non-frontier source must be paired with an info-gain scorer (novelty or
+better) or it explores worse, not better. The lifted pipeline must make
+info-gain scoring easy to enable, not an afterthought.
+
+### Conclusion
+
+Lift Tiers 1+2 into a shared pure scoring module so `FrontierAlgorithm` — and
+future semantic/sampling algorithms — become "candidate source + shared
+ranker"; Tier 3 stays put. Dedup the param plumbing in the same task or first.
+**Revive F32 with this framing rather than writing a new feature.**
