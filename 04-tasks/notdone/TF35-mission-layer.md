@@ -167,7 +167,8 @@ in step with the code, so a record never leads its implementation:
   relocated into T05). F06 localization-status borderline → stays for now.
 
 ## T05 — go-to-target: typed-msg consumer + label→pose (supersedes TF33 T05)
-**Status**: not done
+**Status**: done (2026-07-31)
+
 **Description**: This is the relocated TF33 T05 (F33 G9). dome_mission
 subscribes `SemanticTargetArray` (`dome_semantic_msgs`), resolves label→pose
 (typed fields incl. yaw), and issues drive-to-pose via the T01 interface. The
@@ -175,10 +176,34 @@ G2 contract bug fix lives here — schemaless JSON gone, typed msg in — but th
 consumer is dome_mission, so **dome_nav keeps no `dome_semantic_msgs`
 dependency**. Retarget `tools/nav_intent_check.py` to publish the typed msg to
 dome_mission.
-**Test**: regression — old JSON payload rejected with a clear log; valid
-`SemanticTargetArray` + `navigation_go can` resolves to the recorded can pose
-and emits the correct drive-to-pose command. Carry over the current
-go-to-label unit expectations.
+
+**Done (2026-07-31)**: `label_resolver.py` (pure) — `TargetPose` dataclass
+(`x_m`/`y_m`/`yaw_rad`), `SemanticTargetStore.resolve(label, robot_xy)` = typed
+successor to nav_manager `find_nearest_confirmed` (nearest match; `robot_xy`
+None → first), `yaw_from_quaternion` helper. `mission_node` subscribes
+`SemanticTargetArray` on `/semantic/targets`, gates `schema_version`
+(EXPECTED=1, mismatches dropped + warned), converts each `Pose`→`TargetPose` at
+the boundary (pure stays ROS-free), tracks robot pose from `/amcl_pose`. On a
+`DRIVE_TO_TARGET` command it resolves the label and drives via Nav2
+`NavigateToPose` directly (no dome_nav hop); a missing label warns +
+`on_done(DRIVE_FAILED)` so the FSM settles back to IDLE.
+
+**Tool**: `nav_intent_check.py` retargeted + **moved to `dome_mission/tools/`**
+(it needs `dome_semantic_msgs`, which T06 forbids in dome_nav). Publishes a
+typed `SemanticTargetArray` on `/semantic/targets`; the schemaless
+`/targets/confirmed` JSON path is gone. Terminal-status assertion dropped —
+dome_mission has no status topic yet (F08).
+
+**Contract note**: topic `/semantic/targets` is the dome_semantic → dome_mission
+contract; must match the dome_semantic publisher (TF33). `schema_version` gating
+is the "old payload rejected" path (wrong version dropped with a warning).
+
+**Test**: `test/test_label_resolver.py` (8: nearest-match carried over from
+test_nav_manager, robot-None-first, yaw conversion) + node tests in
+`test_mission_node.py` (ingest populates store; schema mismatch dropped;
+Pose→yaw conversion; unknown label fails cleanly to IDLE; `goal_pose` encodes
+x/y/yaw). **45 dome_mission tests pass.** Full live drive verification lands in
+T07 sim bring-up.
 
 ## T06 — dome_nav cleanup: primitives only
 **Status**: not done
