@@ -136,8 +136,9 @@ clients land T05/T07).
 
 **Caveat — single-handler invariant not yet complete**: dome_nav's
 `explorer_manager_node` + `nav_manager_node` **still** subscribe `/intent`;
-their removal is T06. Until T06, running dome_mission alongside dome_nav
-double-handles `/intent`. The "exactly one handler" state is reached at T06,
+their removal is deferred to **T07** (the `/intent`→ExploreArea action swap,
+see T06 scope note). Until then, running dome_mission alongside dome_nav
+double-handles `/intent`. The "exactly one handler" state is reached at T07,
 not here.
 
 **Test**: `test/test_intent_parser.py` (10 pure) + `test/test_mission_node.py`
@@ -206,27 +207,66 @@ x/y/yaw). **45 dome_mission tests pass.** Full live drive verification lands in
 T07 sim bring-up.
 
 ## T06 — dome_nav cleanup: primitives only
-**Status**: not done
+**Status**: done (2026-07-31) — deletion scope; explorer `/intent`→action swap deferred to T07
+
 **Description**: Remove mission/label logic from dome_nav: `nav_manager`
 label lookup and `is_valid_target` (`nav_manager.py:10-23`,
 `nav_manager_node.py:83`) move to dome_mission or delete; `explorer_manager_node`
 loses `/intent`, keeps its explore primitive + watchdog (per T03 boundary
 decision). dome_nav `package.xml` has no `dome_semantic_msgs` /
 `dome_semantic` dep. Verify dome_nav still builds and its unit suite is green.
+
+**Scope decision (2026-07-31)**: T06 = **deletion only**. The go-to-label logic
+fully landed in dome_mission at T05, so it is deleted here. The
+`explorer_manager_node` `/intent`→`ExploreArea` action-server swap is
+**deferred to T07**, paired with mission_node's ExploreArea client + sim verify,
+so an untested action server never ships and `/intent`-triggered explore never
+breaks mid-sequence. Consequence: explorer_manager_node **still subscribes
+`/intent`** after T06 — the single-`/intent`-handler invariant (T04) is met at
+**T07**, not here (until then explorer + mission_node both handle `/intent`).
+
+**Done (2026-07-31)**:
+- Deleted `nav_manager.py`, `nav_manager_node.py`, `test_nav_manager.py`,
+  `test_nav_manager_pure.py`, and their literate (`01-literate/03-nav_manager_node.md`,
+  `05-nav_manager.md`).
+- Removed the `nav_manager_node` entry point (`setup.py`) and the `nav_manager`
+  `bl.node` block from `robot_nav.launch.py` + `robot_map.launch.py` (both now
+  carry a one-line note that dome_mission provides go-to-target via T07).
+- Moved F02/TF02 records to `dome_mission/03-features/done/` +
+  `04-tasks/done/` with a relocation banner.
+- dome_nav has no `dome_semantic` / `dome_semantic_msgs` dep (never did; F33
+  uncoded). explorer_manager_node untouched.
+
 **Test**: full dome_nav suite green (`/usr/bin/python3 -m pytest test/`);
 `colcon build --packages-select dome_nav` clean; grep-assert no
 `dome_semantic` import/dep in dome_nav.
 
-## T07 — Top-level launch (composes TF33 T08 sub-stack)
+**Result**: `colcon build --packages-select dome_nav` clean; grep for
+`dome_semantic` / `nav_manager` in dome_nav = none. Suite **231 pass**; the 4
+`test_map_validation` failures are the known live-stack tests (need a running
+robot), unrelated to this change.
+
+## T07 — Explore action swap + top-level launch (composes TF33 T08 sub-stack)
 **Status**: not done
+
 **Description**: **Owns the top-level launch (settled 2026-07-31).** Composes
 via `bl.include`: pulls in the TF33 T08 sub-stack (OAK-D + slam + Nav2 +
 explorer_manager + dome_semantic) and adds `dome_mission` on top as the
 `/intent` front-end. No `/intent` wiring into the explorer anywhere — that is
 dome_mission's alone (T04). `better_launch` per style guide. TF33 T08 is the
 included sub-stack, not a second top-level launch.
+
+**Also (moved from T06, 2026-07-31)**: swap `explorer_manager_node` from its
+`/intent` subscription to an **`ExploreArea` action server** (goal=start,
+cancel=stop, feedback=frontiers/area/current_goal, result=outcome), and wire
+mission_node's ExploreArea **client** (replacing the T05 START_EXPLORE/
+CANCEL_EXPLORE logging stub). This is the atomic point where explorer loses
+`/intent` and the single-`/intent`-handler invariant (T04) is finally met, with
+sim bring-up verifying it end-to-end. Adds the `dome_nav_msgs` dep to dome_nav.
+
 **Test**: sim bring-up: `nav explore` via dome_mission drives exploration;
-`nav go <label>` drives to a recorded target. Marked ROS2-runtime.
+`nav go <label>` drives to a recorded target; assert exactly one `/intent`
+subscriber. Marked ROS2-runtime.
 
 ## T08 — Docs, literate, current.md
 **Status**: not done

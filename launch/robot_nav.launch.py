@@ -35,9 +35,5 @@ def robot_nav_launch(use_sim_time: str = "false"):
         params_file=nav_config, use_sim_time=use_sim_time,
         use_docking_server="False")
 
-    bl.node(
-        "dome_nav",
-        "nav_manager_node",
-        name="nav_manager",
-        ros_waittime=30.0,
-    )
+    # Go-to-target moved to dome_mission (F35); the top-level launch that adds
+    # mission_node is TF35 T07. Mode B here brings up Nav2 only.

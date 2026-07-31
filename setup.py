@@ -24,7 +24,6 @@ setup(
     entry_points={
         "console_scripts": [
             "slam_manager_node = dome_nav.slam_manager_node:main",
-            "nav_manager_node = dome_nav.nav_manager_node:main",
             "explorer_manager_node = dome_nav.explorer_manager_node:main",
         ],
     },

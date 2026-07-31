@@ -42,9 +42,5 @@ def robot_launch(use_sim_time: str = "false", map_name: str = ""):
         lifecycle_waittime=None,
     )
 
-    bl.node(
-        "dome_nav",
-        "nav_manager_node",
-        name="nav_manager",
-        ros_waittime=30.0,
-    )
+    # Go-to-target moved to dome_mission (F35); mission_node is added by the
+    # TF35 T07 top-level launch, not here.
