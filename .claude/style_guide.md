@@ -1,146 +1,133 @@
 # Code Review Checklist
 
-Version: 3.2
+Version: 4.0 — universal Python review guide.
 
-Use this for Python source reviews. `MUST` items are blocking unless explicitly
-waived in the task or PR notes. `SHOULD` items are expected defaults. `CONSIDER`
-items are review prompts, not mechanical rules.
+`MUST` blocks unless waived in the task/PR. `SHOULD` = expected default.
+`CONSIDER` = review prompt, not a mechanical rule. Prefer a linter/type-checker
+for mechanical items (line length, imports, quotes, unused names) and spend
+human review on the judgment items below.
 
-## Workflow
-1. Confirm the work has a corresponding feature file and task file.
-2. Review the target file against the `MUST` sections first.
-3. Record material violations as tasks in the feature's task file.
-4. Keep process changes and source changes reviewable; commit only when requested.
-5. Run relevant tests and update task status.
-6. Before opening a PR: regenerate the literate version of each changed Python
-   source file by applying `.claude/literate.md` and saving the result to
-   `01-literate/<module>.md`.
+## Process
+- No code without a matching feature + task file; no task file without a feature.
+- Update feature/task status when work completes or defers.
+- Resolve or document mismatches between `02-doc/current.md` and the
+  feature/task/issue files before relying on either.
+- Run relevant tests; commit only when requested.
+- Before a PR: regenerate `01-literate/<module>.md` for each changed source file.
 
-## Must Pass
-- [ ] MUST: No code changes without a corresponding feature and task file
-- [ ] MUST: No task file without a corresponding feature file
-- [ ] MUST: Feature/task status is updated when work is completed or deferred
-- [ ] MUST: When `02-doc/current.md` and `03-features/`, `04-tasks/`, `05-issues/` disagree, resolve or document the mismatch before relying on either
-- [ ] MUST: No ROS2 imports (`rclpy`, `sensor_msgs`, etc.) in `oak_roboflow/`
-- [ ] MUST: ROS2 code lives under `oak_roboflow_ros/oak_roboflow_ros/`
-- [ ] MUST: No secrets, API keys, passwords, or tokens committed in code or config examples
-- [ ] MUST: Sensitive values come from environment variables or local untracked config
-- [ ] MUST: Logs and exceptions do not expose passwords, tokens, PII, or API-key-bearing URLs
-- [ ] MUST: No side effects at module import time
-- [ ] MUST: No mutable default arguments
-- [ ] MUST: No bare `except Exception:` or silent `except X: pass`
-- [ ] MUST: Validation happens at system boundaries: user input, config, hardware, ROS, or external APIs
+## Errors — report, don't guess and "fix"
+When code hits something wrong or unexpected, report it (raise or warn). Do not
+infer intent and "correct" it — a guess-and-repair hides a real bug or invents
+new wrong behavior. If the bad value came from our own code, fix it at source.
 
-### Report Errors, Don't Guess And "Fix" Them
-When code detects something wrong or unexpected, report it (raise/die, or warn) —
-do not infer what was meant and correct it. A guess-and-repair either hides a real
-bug or invents new wrong behavior. If the wrong value came from our own code or
-content, it's a bug to fix at the source.
-- [ ] MUST: Do not compensate for a violated expectation by reinterpreting, coercing, defaulting, or branching to "make it work"
-- [ ] MUST: On a problem, raise with context; never return the bad value unchanged or a silent fallback, and never swallow with `except: return None`/`continue`
-- [ ] MUST: Validate once at the boundary, then trust it
-- [ ] SHOULD: Only genuinely external, untrusted input gets validate-and-reject — and even then, reject, don't silently fix
-- [ ] MUST: Bug fixes include regression tests unless the case is hardware-only or otherwise documented
-- [ ] MUST: JSON map/tracker format changes preserve old saved files or include migration/default handling
-- [ ] MUST: Lifecycle nodes stop worker threads, timers, publishers/subscribers, and OAK resources cleanly on deactivate/cleanup
-- [ ] MUST: OAK-D, ROS2 runtime, robot firmware, and physical-motion tests are marked manual and separated from plain pytest tests
+**MUST**
+- Don't compensate for a violated expectation by coercing, defaulting, or
+  branching to "make it work".
+- On a problem, raise with context; never return the bad value or a silent
+  fallback; never swallow with `except: return None` / `continue`.
+- Validate once at each boundary (user input, config, hardware, external APIs),
+  then trust the value.
+- No bare `except Exception:` or silent `except X: pass`.
+- Bug fixes include a regression test unless the case is hardware-only.
+- Persisted-format changes preserve old files or ship migration/defaults.
 
-## Repo-Specific Checks
-- [ ] SHOULD: New config fields are added to dataclasses, YAML parsing, examples where relevant, and tests
-- [ ] SHOULD: New ROS parameters are declared, read, launch-overridable where useful, and covered by tests
-- [ ] SHOULD: Config defaults are defined in one place whenever practical
-- [ ] SHOULD: Dataclass fields are not hand-transcribed into YAML parsing or ROS parameter declaration when `dataclasses.fields()` can reasonably be used
-- [ ] MUST: Launch files use `better_launch` (`@launch_this`, `bl.node`, `bl.group`, `bl.include`). CLI invocation: `bl <launch_file>.launch.py --param_name value`. Error messages in launch files must use this form, not `ros2 launch` syntax.
-- [ ] SHOULD: ROS2 runtime deps are declared as `exec_depend` in `package.xml`, not in `pyproject.toml`
-- [ ] SHOULD: Tests in `tests/` run with plain `pytest`; no `colcon test` dependency
-- [ ] SHOULD: Optional topics and missing ROS graph dependencies do not crash the node
-- [ ] SHOULD: Standalone library modules have no `main()` or `argparse`; config comes from YAML dataclasses
-- [ ] SHOULD: Current package layout includes expected build descriptors and `resource/<package_name>` marker for active packages
-- [ ] SHOULD: If F37 repo restructure is complete, standalone install path is `pip3 install -e standalone/ --break-system-packages`
+## Correctness
+**MUST**
+- No side effects at import time. No mutable default arguments.
+- Keep pure logic free of framework/hardware imports; isolate those in adapters.
+- Runtime-only, hardware, and physical-motion tests are marked manual and kept
+  out of the plain test run.
+- No secrets in code or config; sensitive values come from env/untracked config;
+  logs never expose secrets or PII.
 
-## Geometry And Persistence
-- [ ] MUST: Changes to depth, intrinsics, projection, TF, frame IDs, or xyz math include frame-convention tests
-- [ ] SHOULD: Camera-frame and world-frame values are named distinctly enough to prevent frame confusion
-- [ ] SHOULD: Units are explicit at boundaries: `m` vs `mm`, pixels vs normalized coordinates
-- [ ] SHOULD: Serialization tests cover missing optional fields from older saved files
-- [ ] SHOULD: Persisted IDs and labels keep stable meanings across versions
+## Imports & packaging
+**MUST**
+- Absolute imports only; no relative imports; no wildcard or unused imports.
+- Every `.py` starts with `#!/usr/bin/env python3`.
+
+**SHOULD**
+- All imports at the top, sorted consistently.
+- Runtime deps declared in the right package metadata.
+
+## Naming & style
+**MUST**
+- File header: module name, one-line description, `Author: <name>`,
+  `Open Source Under MIT license`.
+- No `from __future__ import annotations`.
+- No leading-underscore prefix on any custom identifier.
+- Line length <= 88 unless a longer line is materially clearer.
+- Fields self-explanatory without surrounding code — no bare `xy`/`data`/`info`/
+  `params`; spell out the meaning (`world_xy`, `map_data`, `tuning`).
+- f-strings for formatting.
+
+**SHOULD**
+- Double quotes; single only when required.
+- `X | None`, not `Optional[X]`.
+- Booleans named `is_x` / `has_x` / `can_x`.
+- No single-letter names except loop counters `i`, `j`.
+- Put units in names (`dist_to_robot_m`, `clearance_cells`); document non-obvious
+  encodings inline.
+- `is` / `is not` for `None` / `True` / `False`; `enumerate()` over manual counters.
+
+## Design
+Numeric limits below are smells, not laws — they flag a function doing too much,
+not a hard cap.
+
+**MUST**
+- Functions <= ~50 lines, files <= ~300 lines where practical.
+- Avoid if/else nesting > 1 deep and if-chains > 3 branches; extract helpers,
+  return early, or use a lookup table. Extraction for branching or naming beats
+  the "no tiny methods" rule.
+- Avoid 1-2 line methods unless they are properties, protocol/boundary adapters,
+  or genuinely improve naming.
+- No duplicated logic (DRY): actively scan bodies for identical/near-identical
+  method bodies, repeated 3+ line sequences, and repeated construction patterns;
+  extract a helper when found.
+
+**CONSIDER**
+- <= 3 behavioral args; group travelling params into a dataclass/config.
+- Defaults fine in dataclasses/config/CLI/public APIs; avoid hidden behavioral
+  defaults in internal logic.
+- Minimal public API; no god methods, feature envy, or unrelated responsibilities
+  in one class.
+- No features not required by the current spec.
+
+## Comments & types
+**MUST**
+- Any complicated/obscure function explains what it does and its inputs/outputs —
+  in the docstring. That is the one place for a fuller explanation; it does not
+  license narrative comment blocks in the body.
+- No multi-line narrative comment blocks in code. A comment is a short "why",
+  not prose; long rationale goes to the docstring or `01-literate/`.
+
+**SHOULD**
+- A module-level docstring below the file header states the file's purpose and
+  its key algorithms/design (e.g. states, invariants, non-obvious decisions), so
+  the file is understandable from the top without reading the code.
+- Obvious methods need no docstring; complex ones explain why the mechanism
+  exists and any non-obvious pre/postconditions.
+- Comments explain why, not what; one or two lines each; no task/fix references.
+- Annotate non-obvious parameter and return types; prefer simple annotations,
+  precise collection types only when they prevent caller ambiguity.
 
 ## Tests
-- [ ] SHOULD: Every public method has at least one test when practical
-- [ ] SHOULD: Edge cases are covered: empty inputs, `None` values, and boundary conditions
-- [ ] SHOULD: Non-obvious behavior explained by a comment has a test encoding that expectation
-- [ ] SHOULD: External APIs, hardware, filesystems, time, and ROS2 graph dependencies are mocked or isolated where practical
-- [ ] SHOULD: Test output directories are ignored by git
-- [ ] SHOULD: No commented-out tests
-- [ ] SHOULD: Manual test notes include command, setup, expected observation, and actual result
+**SHOULD**
+- Every public method has a test where practical; cover edge cases (empty, `None`,
+  boundaries).
+- Behavior explained by a comment has a test encoding it.
+- Isolate/mock external APIs, hardware, filesystem, time, and runtime graph deps.
+- Test output dirs are git-ignored; no commented-out tests.
+- Manual test notes record command, setup, expected observation, actual result.
 
-## Imports And Packaging
-- [ ] SHOULD: All imports are at the top of the file
-- [ ] MUST: Project modules use absolute imports; no relative imports
-- [ ] MUST: No unused imports or wildcard imports (`from module import *`)
-- [ ] SHOULD: Imports are sorted consistently
-- [ ] SHOULD: Dependencies are declared in the correct package metadata
-- [ ] MUST: All .py files have shebang line `#!/usr/bin/env python3`
+## Runtime quality
+**MUST**
+- No unreachable/commented-out code, debug prints, or breakpoints.
 
-## Style Preferences
-- [ ] MUST: File header includes module name, one-line description, `Author: Pito Salas and Claude Code`, and `Open Source Under MIT license`
-- [ ] SHOULD: Double quotes throughout; single quotes only when required
-- [ ] MUST: No `from __future__ import annotations`
-- [ ] SHOULD: No `Optional[X]`; use `X | None`
-- [ ] MUST: No leading underscore prefix on methods, functions, instance variables, or other custom identifiers
-- [ ] MUST: Line length <= 88 chars unless a longer line is materially clearer
-- [ ] SHOULD: Boolean variables/params are named `is_X`, `has_X`, or `can_X`
-- [ ] SHOULD: No single-letter variables except loop counters `i`, `j`
-- [ ] MUST: Dataclass/struct fields are self-explanatory without the surrounding code — no bare `xy`/`data`/`info`/`params`; spell out the meaning (`world_xy`, `map_data`, `map_info`, `tuning`). A vague name that reads fine as a function arg is not acceptable as a stored field.
-- [ ] SHOULD: Put units in names when a value has them (`dist_to_robot_m`, `clearance_cells`, `time_before_collision`), and document non-obvious encodings inline (e.g. OccupancyGrid: -1 unknown, 0 free, >=lethal occupied).
-- [ ] SHOULD: Use `is` / `is not` for comparisons with `None`, `True`, and `False`
-- [ ] MUST: Use f-strings for string formatting
-- [ ] SHOULD: Use `enumerate()` instead of manual counter variables when the index is needed
-
-## Design Prompts
-- [ ] MUST: Functions and methods stay <= 50 lines where practical
-- [ ] MUST: Files stay near 300 lines where practical
-- [ ] SHOULD: One class per file; dataclasses co-located with their constructing class are allowed
-- [ ] MUST: Identifiers are short enough to read and intention-revealing
-- [ ] MUST: Avoid if/else nesting more than 1 deep; extract helpers or return early when clearer
-- [ ] MUST: Avoid if statements with more than 3 branches; use lookup tables or helpers when clearer
-- [ ] MUST: Avoid 1-line or 2-line methods unless they are properties, protocol adapters, or improve naming
-- [ ] MUST: Avoid simple wrappers unless they isolate a boundary, adapt a framework API, or preserve a public interface
-- [ ] CONSIDER: Prefer <=3 behavioral arguments; use dataclasses/config objects when parameter groups travel together
-- [ ] CONSIDER: Defaults are acceptable in dataclasses, config, CLI, launch args, and stable public APIs; avoid hidden behavioral defaults in internal logic
-- [ ] MUST: Avoid throwaway temporaries unless they clarify meaning, avoid recomputation, or aid debugging
-- [ ] CONSIDER: No god methods, feature envy, data clumps, or unrelated responsibilities in one class
-- [ ] CONSIDER: Mutable state is necessary and class invariants are enforced
-- [ ] CONSIDER: Public API is minimal; internal helpers are clearly separated from public interface
-- [ ] MUST: No duplicated logic (DRY) — read every method body and actively look for repeated patterns, not just obvious copy-paste. Check: identical or near-identical method bodies, the same 3+ line sequence in multiple places, repeated object construction patterns. Extract a helper when found
-
-## Comments And Types
-- [ ] SHOULD: Simple methods with obvious bodies have no docstring
-- [ ] SHOULD: Complex methods may use multi-line docstrings explaining why the mechanism exists and any non-obvious preconditions or postconditions
-- [ ] MUST: Any function or method that does something complicated or obscure explains what it does and what its inputs and outputs are — preferably in the docstring. This is the one sanctioned place for a fuller explanation; it does not license narrative comment blocks inside the body (see below).
-- [ ] SHOULD: Comments explain why, not what
-- [ ] MUST: No multi-line narrative comment blocks embedded in code. A comment is a short "why" note, not prose paragraphs. Long explanatory passages break the flow of the code and belong in the literate docs (`01-literate/`) or a docstring, not as a wall of consecutive comment lines above the logic.
-- [ ] SHOULD: One or two lines per comment. If the "why" needs more, it is design rationale — move it to the module docstring or literate doc and leave a one-line pointer.
-- [ ] SHOULD: No task/fix/caller references in comments
-- [ ] SHOULD: Public method parameters have type annotations where the type is non-obvious
-- [ ] SHOULD: Return type is annotated when callers would otherwise have to guess
-- [ ] MUST: Prefer simple annotations where possible; use precise collection types when they prevent caller ambiguity
-
-## Web Assets (CSS / JS / HTML)
-- [ ] MUST: No inline CSS strings inside Python source files; CSS lives in `.css` files loaded at runtime
-- [ ] MUST: No inline JavaScript strings inside Python source files; JS lives in `.js` files loaded at runtime
-- [ ] MUST: No inline HTML template strings inside Python source files; HTML templates live in `.html` files loaded at runtime
-- [ ] MUST: Python loads asset files via `Path(__file__).parent / "filename"` and passes the content to the framework
-- [ ] SHOULD: One CSS file per module that needs custom styles; shared styles go in a shared asset file
-
-## Runtime Quality
-- [ ] MUST: No unreachable code, commented-out code blocks, debug print statements, or breakpoints
-- [ ] SHOULD: Use context managers (`with`) for file handles and resources that require cleanup
-- [ ] SHOULD: Use logging for runtime errors; do not leave debug `print()` calls in library or ROS2 modules
-- [ ] SHOULD: No blocking network, file I/O, model loading, or expensive setup inside per-frame inference loops
-- [ ] SHOULD: Avoid unnecessary image copies, large allocations, and repeated object construction in hot paths
-- [ ] SHOULD: Optional per-frame outputs skip work when there are no subscribers or consumers
-- [ ] SHOULD: Instrumentation does not materially change the timing of the path being measured
-- [ ] SHOULD: Use the concurrency model expected by the framework; isolate threads and make shutdown deterministic
-- [ ] CONSIDER: Avoid nested comprehensions unless simple enough to read at a glance or there is a clear performance reason
-- [ ] CONSIDER: No features not required by current spec
+**SHOULD**
+- Context managers for files/resources needing cleanup.
+- Logging (not `print`) for runtime errors in library/service modules.
+- No blocking I/O, model loading, or expensive setup in hot loops; avoid repeated
+  large allocations there.
+- Optional outputs skip work when no consumer is listening.
+- Use the framework's concurrency model; make shutdown deterministic.
+- Lifecycle components release threads, timers, pub/sub, and hardware cleanly.
