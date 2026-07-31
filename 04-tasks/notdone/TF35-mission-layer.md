@@ -148,6 +148,24 @@ not here.
 `navigation_go {label}`, `navigation_cancel`) drive the FSM to the right
 behavior; regression asserting dome_nav nodes no longer subscribe `/intent`.
 
+## Feature/task record relocation (staged, 2026-07-31)
+
+dome_mission is now a full package (own `.claude`, bootstrap scaffold, git repo
+`Boston-Robot-Hackers/dome_mission`). Feature/task *records* move from dome_nav
+in step with the code, so a record never leads its implementation:
+
+- **F08 / TF08** (typed intent/status, deferred) — **moved now** to
+  `dome_mission/03-features/deferred/` + `04-tasks/deferred/` (no code to
+  desync; `/intent`+`nav_status` become dome_mission's contract).
+- **F02** (intent-navigation, done) — **moves at T06**, when `nav_manager`
+  label/nearest-target logic physically relocates/deletes.
+- **F35 / TF35** (this file) — **moves at T08** as dome_mission's founding
+  record, once the extraction is complete. Stays in dome_nav until then because
+  it also drives the dome_nav-side removal (T06).
+- **Stay in dome_nav**: all frontier/SLAM/nav primitives (F10/F15/F31/F27/F34/
+  F22/F23/F01/F03/F13…), F33 explore side (its go-to-label consumer already
+  relocated into T05). F06 localization-status borderline → stays for now.
+
 ## T05 — go-to-target: typed-msg consumer + label→pose (supersedes TF33 T05)
 **Status**: not done
 **Description**: This is the relocated TF33 T05 (F33 G9). dome_mission
