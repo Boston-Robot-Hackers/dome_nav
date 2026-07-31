@@ -26,12 +26,36 @@ feature implements the integration it describes.
   `SemanticTarget` msg replacing the schemaless `/targets/confirmed` JSON.
   This also fixes the live bug where `nav_manager.is_valid_target` silently
   drops every dome_vision target today.
+- **G2a msgs-package scope: domain-scoped, not a broad `dome_msgs`**
+  (2026-07-31). Decided narrow. Rationale: (1) follows the existing
+  `dome_telemetry_msgs` precedent (workspace already scopes interface pkgs by
+  concern; no broad `dome_msgs` exists); (2) interface pkgs force all
+  dependents to rebuild on any change — a grab-bag couples unrelated domains,
+  a narrow pkg isolates blast radius (same reason `nav2_msgs`/`geometry_msgs`
+  are domain-scoped, not "everything"); (3) matches G4 neutral ownership —
+  `dome_semantic_msgs` expresses who owns the contract; a shared bag blurs it;
+  (4) YAGNI — no concrete cross-domain second consumer exists. Scope the pkg to
+  the whole **semantic-perception** domain (SemanticTarget, SemanticTargetArray,
+  future SemanticMap / describe-scene types land here), so it is extensible
+  without becoming a dumping ground. Revisit only if a truly cross-cutting type
+  shared by unrelated domains (nav + voice + control) ever appears.
 - **G4 ownership: new neutral package.** The semantic-map node (adapted from
   dome_vision's `SemanticMapNode` + `WorldTracker`) moves to a new package
   (working name `dome_semantic`) that depends only on the msgs package and TF.
   Neither dome_nav nor dome_vision depends on the other.
 - **G5 scope: semantic map is an output first, an input later.** Phase A/C
   treat it as output only; Phase B (below) makes it an input to goal selection.
+- **G9 mission-sequencing layer → new `dome_mission` package (F35)**
+  (2026-07-31). High-level sequencing (`explore` / `locate targets` /
+  `go to target`) and the `/intent` contract move out of dome_nav into a new
+  neutral `dome_mission` package, **extracted in Phase A** (see F35). Effect on
+  this feature: the typed-msg consumer (**T05** below) moves to dome_mission —
+  label→pose resolution lives there, and **dome_nav never depends on
+  `dome_semantic_msgs`**. dome_nav becomes navigation primitives only. This also
+  resolves the G3 open question (where dwell/sequencing lives: dome_mission,
+  not the explorer node FSM / algorithm plugin / Nav2 BT). TF33 T05 is
+  superseded by the F35 task file; keep the G2 contract bug fix (typed msg
+  replacing schemaless JSON) but its consumer is dome_mission.
 
 ## Phasing (per analysis.md recommendation sketch)
 

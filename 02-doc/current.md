@@ -7,7 +7,7 @@ Concise cold-start orientation. Detailed history lives in git log and the
 
 ## This session (2026-07-30) — F34 tuning single-source DONE + F33 written
 
-F34 complete (T01–T05); F33 written. Work uncommitted — full diff loose in tree.
+F34 complete (T01–T05); F33 written. Committed in `d4a16f4`.
 
 - **F34 tuning single-source — DONE.** Dataclass = single source of truth for
   explorer tuning. **T01**: `declare_frontier_params` declares/reads via
@@ -24,7 +24,7 @@ F34 complete (T01–T05); F33 written. Work uncommitted — full diff loose in t
   files set it by name, now declared by the algorithm); `tunable_parameters.md`
   reconciled. **T05**: suite 281 pass, colcon clean, literate `07`/`08`
   regenerated, DRY chore removed, F34/TF34 moved to `done/`. F34 is the
-  **enabler** for F33 Phase B. **Not yet committed.**
+  **enabler** for F33 Phase B. **Committed** (`d4a16f4`, with F33 files).
 - **F33 semantic exploration** (dome_nav × dome_vision) written — explore + recognize
   objects → semantic map in SLAM-map coords, reusable by Mode B go-to-label.
   Settled: frame of record = `map`; contract = typed `SemanticTarget` msg in new
@@ -32,7 +32,7 @@ F34 complete (T01–T05); F33 written. Work uncommitted — full diff loose in t
   A (contract+adapter+launch) / C (explore-then-survey) / B (vision-aware explore,
   depends F32 revival). **TF33 = Phase A only, T01–T10 not started.** Motivation:
   `02-doc/analysis.md`.
-- **Uncommitted** — F34 T01/T02 work not yet committed.
+- **Committed** — F34 (T01–T05) + F33 feature/task files landed in `d4a16f4`.
 
 ## This session (2026-07-29) — live explore tuning: livelock + wedge root-caused, speeds lowered
 

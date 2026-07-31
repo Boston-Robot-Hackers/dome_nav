@@ -5,6 +5,20 @@ the decisions (see F33 feature file). Settled decisions: frame of record =
 `map`; contract = typed `SemanticTarget` msg in a new msgs package; semantic
 map owned by a new neutral package.
 
+**Interleaves with TF35 (F33 G9, 2026-07-31).** F35 extracts the mission layer
+(`dome_mission`) in Phase A: `/intent` ownership + the semantic-target consumer
+move out of dome_nav. This TF33 file is *not* an independent sequence — real
+build order across the two files:
+```
+TF35 T01 (done) → TF35 T02 (dome_mission skeleton + ExploreArea action)
+TF33 T01–T04 (msgs, tracker, map-frame, publish)   — parallel to TF35 T02
+TF35 T03/T04 (mission FSM; /intent moves to dome_mission)
+TF35 T05     (consumes SemanticTargetArray — needs TF33 T04 publishing done)
+TF35 T06     (dome_nav cleanup: drops /intent + semantic dep)
+TF33 T08 sub-stack ⊂ TF35 T07 (ONE launch — see T08 below)
+```
+Consumer of everything TF33 publishes = dome_mission, never dome_nav.
+
 ## T01 — `dome_semantic_msgs` package
 **Status**: not done
 **Description**: New msgs-only package in the workspace. `SemanticTarget.msg`:
@@ -47,12 +61,17 @@ counted, no crash.
 (replacing the JSON String — coordinated with T05), `/targets/markers` in
 `map` frame, `/targets/assoc_diag`, and the `/describe_scene` Trigger service.
 Params for confirmation thresholds (min_frames, min_time_s, tolerances) are
-ROS-declared and launch-overridable.
+ROS-declared and launch-overridable. **Consumer is dome_mission (TF35 T05),
+not dome_nav** — this task only publishes; nothing in dome_nav subscribes.
 **Test**: node-level test with a stubbed TF buffer: N detections over T
 seconds → one confirmed target in the array with correct label/pose/count.
 
 ## T05 — nav_manager consumes the typed msg
-**Status**: not done
+**Status**: superseded by F35 (2026-07-31) — consumer moves to `dome_mission`,
+not dome_nav (F33 G9). label→pose resolution lives in the mission layer;
+dome_nav never depends on `dome_semantic_msgs`. Keep the G2 contract bug fix
+(typed msg replaces schemaless JSON), but the consuming node is defined in the
+F35 task file. This task stays here only as the pointer.
 **Description**: Replace the schemaless JSON contract in
 `dome_nav/nav_manager.py` (`is_valid_target`, `nav_manager.py:10-23`) and
 `nav_manager_node.py:83` with subscription to `SemanticTargetArray`. Label
@@ -84,14 +103,19 @@ T08 integration test.
 **Test**: smoke test — node under test confirms a scripted object end-to-end
 in sim time.
 
-## T08 — Combined launch + integration test
+## T08 — Perception+SLAM+explore+semantic sub-stack (included by TF35 T07)
 **Status**: not done
-**Description**: `launch/robot_explore_semantic.launch.py` (better_launch):
-OAK-D + slam_toolbox + Nav2 + explorer_manager + dome_semantic, with
-documented ordering constraints (TF chain before detections flow — reuse the
-`sim_nav_full` map→odom wait pattern). Includes the Phase A ingestion-gating
-decision (F33 constraints): gate semantic ingestion on robot motion or accept
-degraded association while driving — measure and pick one, record why.
+**Description**: **Launch ownership settled (F33 G9 / TF35 T07, 2026-07-31):
+the top-level launch lives in TF35 T07 with `dome_mission` as the `/intent`
+front-end; this task owns only the sub-stack it composes.** T08 delivers the
+OAK-D + slam_toolbox + Nav2 + explorer_manager + dome_semantic group (in
+`robot_explore_semantic.launch.py` or a dedicated include file), with documented
+ordering constraints (TF chain before detections flow — reuse the
+`sim_nav_full` map→odom wait pattern). No direct `/intent` wiring into the
+explorer here — that is dome_mission's (TF35 T04); TF35 T07 pulls this sub-stack
+in via `bl.include`. Includes the Phase A ingestion-gating decision (F33
+constraints): gate semantic ingestion on robot motion or accept degraded
+association while driving — measure and pick one, record why.
 Sim variant uses the T07 fake producer.
 **Test**: sim integration test (marked ROS2-runtime per style guide): explore
 with fake detections → semantic map contains the scripted objects in `map`
