@@ -117,12 +117,33 @@ watchdog's internal recovery is invisible here; only its final give-up
 (`/usr/bin/python3 -m pytest`).
 
 ## T04 — `/intent` ownership moves to dome_mission
-**Status**: not done
+**Status**: done (2026-07-31)
+
 **Description**: dome_mission node subscribes `/intent` and drives the FSM.
 dome_nav's `explorer_manager_node` and `nav_manager_node` **stop** subscribing
 `/intent`; they expose the T01 primitives instead. Exactly one `/intent`
 handler in the system after this task. Coordinate with TF33 T04 (which assumed
 dome_nav-side consumption).
+
+**Done (2026-07-31)**: dome_mission side wired. `intent_parser.py` (pure):
+`parse_intent(json_str) -> ParsedIntent | None` maps the JSON contract
+(`exploration_start`→EXPLORE_START w/ optional `slots.map_name`,
+`exploration_stop`→EXPLORE_STOP, `navigation_go`→GO_TO_TARGET w/ `slots.label`,
+`navigation_cancel`→CANCEL; unknown/malformed → None). `mission_node`
+subscribes `/intent`, parses, drives `MissionFsm`, and executes emitted
+commands (execution stubbed to logging — real ExploreArea/NavigateToPose
+clients land T05/T07).
+
+**Caveat — single-handler invariant not yet complete**: dome_nav's
+`explorer_manager_node` + `nav_manager_node` **still** subscribe `/intent`;
+their removal is T06. Until T06, running dome_mission alongside dome_nav
+double-handles `/intent`. The "exactly one handler" state is reached at T06,
+not here.
+
+**Test**: `test/test_intent_parser.py` (10 pure) + `test/test_mission_node.py`
+(6, rclpy — feeds `/intent` String payloads, asserts FSM state + the
+`/intent`-subscription invariant). 33 dome_mission tests pass total.
+
 **Test**: node test — `/intent` payloads (`exploration_start/stop`,
 `navigation_go {label}`, `navigation_cancel`) drive the FSM to the right
 behavior; regression asserting dome_nav nodes no longer subscribe `/intent`.
