@@ -247,7 +247,7 @@ breaks mid-sequence. Consequence: explorer_manager_node **still subscribes
 robot), unrelated to this change.
 
 ## T07 — Explore action swap + top-level launch (composes TF33 T08 sub-stack)
-**Status**: not done
+**Status**: done (2026-07-31) — code + unit + node-introspection smoke; full sim bring-up pending a sim host
 
 **Description**: **Owns the top-level launch (settled 2026-07-31).** Composes
 via `bl.include`: pulls in the TF33 T08 sub-stack (OAK-D + slam + Nav2 +
@@ -263,6 +263,33 @@ mission_node's ExploreArea **client** (replacing the T05 START_EXPLORE/
 CANCEL_EXPLORE logging stub). This is the atomic point where explorer loses
 `/intent` and the single-`/intent`-handler invariant (T04) is finally met, with
 sim bring-up verifying it end-to-end. Adds the `dome_nav_msgs` dep to dome_nav.
+
+**Done (2026-07-31)**:
+- **Explorer action server**: `explorer_manager_node` drops `/intent`; exposes
+  the `ExploreArea` action on `explore_area`. Blocking `execute_callback` +
+  `MultiThreadedExecutor` + a `ReentrantCallbackGroup` (timer + action) so the
+  1Hz tick advances the session while the callback publishes feedback
+  (`frontiers_remaining` via optional `frontier_count` hook, `explored_area_m2`
+  from known map cells, `current_goal`). Session start extracted to
+  `start_session(map_name)`; the two DONE paths set `session_outcome`
+  (EXPLORED_DONE vs NO_TARGETS_BLOCKED); cancel → STOPPED. `dome_nav_msgs` dep
+  added to dome_nav.
+- **Mission client**: `mission_node.start_explore` sends the `ExploreArea` goal
+  (execute() is now a 4-way dispatch table); result outcome maps back to the FSM
+  via `on_done`; `cancel_explore` cancels the goal. Server-not-ready → STOPPED.
+- **Top-level launch**: `dome_mission/launch/mission_explore.launch.py`
+  `bl.include`s dome_nav `robot_explore.launch.py` + adds `mission_node`.
+  dome_semantic/OAK-D sub-stack omitted (TF33 uncoded) — noted in the launch.
+- **Invariant met**: explorer no longer subscribes `/intent`; mission_node is
+  the sole handler.
+
+**Verification**: dome_nav 64 explorer tests + dome_mission 45 tests pass
+(outcome mapping, feedback build, known-area, session transitions, action
+accept/reject). Live smoke: booted `explorer_manager_node`, confirmed
+`/explore_area` advertised (`dome_nav_msgs/action/ExploreArea`) and **no
+`/intent` subscription**. **Not yet done**: full sim bring-up (drive a real
+explore + go-to-label in gz) — needs a sim host; this Pi can't run gz+Nav2. Left
+as the ROS2-runtime verification below.
 
 **Test**: sim bring-up: `nav explore` via dome_mission drives exploration;
 `nav go <label>` drives to a recorded target; assert exactly one `/intent`

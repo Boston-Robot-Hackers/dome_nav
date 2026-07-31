@@ -11,7 +11,6 @@ import pytest
 import rclpy
 from action_msgs.msg import GoalStatus
 from nav_msgs.msg import OccupancyGrid
-from std_msgs.msg import String
 from dome_nav.explore_context import ExploreParams, GoalDecision, GoalOutcome
 from dome_nav.frontier_params import FrontierParams
 from dome_nav.frontier_algorithm import FrontierAlgorithm
@@ -74,76 +73,111 @@ def make_map():
     return OccupancyGrid()
 
 
-def make_intent(name):
-    msg = String()
-    msg.data = json.dumps({"name": name, "source": "cli", "slots": {}})
-    return msg
+# --- ExploreArea session transitions (F35 T07) ---
 
-
-# --- on_intent state transitions ---
-
-def test_intent_start_from_idle(node):
+def test_start_session_from_idle(node):
     node.state = "IDLE"
     node.robot_xy_in_map = MagicMock(return_value=(1.0, 2.0))
-    node.on_intent(make_intent("exploration_start"))
+    assert node.start_session() is True
     assert node.state == "EXPL"
 
 
-def test_intent_start_from_done(node):
+def test_start_session_from_done(node):
     node.state = "DONE"
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
-    node.on_intent(make_intent("exploration_start"))
+    assert node.start_session() is True
     assert node.state == "EXPL"
 
 
-def test_intent_start_while_exploring_ignored(node):
+def test_start_session_while_exploring_rejected(node):
     node.state = "EXPL"
-    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
     node.goal_count = 3
-    node.on_intent(make_intent("exploration_start"))
+    assert node.start_session() is False
     assert node.state == "EXPL"
     assert node.goal_count == 3  # not reset
 
 
-def test_intent_stop_sets_idle(node):
+def test_start_session_sets_map_name(node):
+    node.state = "IDLE"
+    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
+    node.start_session("kitchen")
+    assert node.map_name == "kitchen"
+
+
+def test_stop_exploring_sets_idle(node):
     node.state = "EXPL"
     node.goal_handle = None
-    node.on_intent(make_intent("exploration_stop"))
+    node.stop_exploring("IDLE")
     assert node.state == "IDLE"
 
 
-def test_intent_malformed_json_no_crash(node):
-    msg = String()
-    msg.data = "not json {"
-    node.on_intent(msg)  # must not raise
+def test_explore_goal_rejected_while_exploring(node):
+    from rclpy.action import GoalResponse
+    node.state = "EXPL"
+    assert node.on_explore_goal(object()) == GoalResponse.REJECT
 
 
-def test_intent_unknown_name_no_state_change(node):
+def test_explore_goal_accepted_when_idle(node):
+    from rclpy.action import GoalResponse
     node.state = "IDLE"
-    node.on_intent(make_intent("navigation_go"))
-    assert node.state == "IDLE"
+    node.active_goal_handle = None
+    assert node.on_explore_goal(object()) == GoalResponse.ACCEPT
 
 
-def test_intent_start_resets_blacklist(node):
+def test_start_session_resets_blacklist_and_counters(node):
     node.state = "IDLE"
     node.blacklist = {(1.0, 2.0), (3.0, 4.0)}
-    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
-    node.on_intent(make_intent("exploration_start"))
-    assert node.blacklist == set()
-
-
-def test_intent_start_resets_counters(node):
-    node.state = "IDLE"
     node.goal_count = 5
     node.goals_reached = 3
     node.goals_failed = 2
     node.no_target_count = 4
     node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
-    node.on_intent(make_intent("exploration_start"))
+    node.start_session()
+    assert node.blacklist == set()
     assert node.goal_count == 0
     assert node.goals_reached == 0
     assert node.goals_failed == 0
     assert node.no_target_count == 0
+
+
+# --- ExploreArea feedback + outcome (F35 T07) ---
+
+def test_known_area_none_map_is_zero(node):
+    assert node.known_area_m2(None) == 0.0
+
+
+def test_known_area_counts_known_cells(node):
+    grid = OccupancyGrid()
+    grid.info.resolution = 0.5
+    grid.data = [-1, 0, 100, -1]  # 2 known cells, each 0.25 m^2
+    assert node.known_area_m2(grid) == pytest.approx(0.5)
+
+
+def test_explore_feedback_reports_current_goal(node):
+    node.current_goal_xy = (1.5, -2.0)
+    node.explored_area_m2 = 3.0
+    feedback = node.explore_feedback()
+    assert feedback.current_goal.x == pytest.approx(1.5)
+    assert feedback.current_goal.y == pytest.approx(-2.0)
+    assert feedback.explored_area_m2 == pytest.approx(3.0)
+
+
+def test_explore_feedback_no_goal_is_origin(node):
+    node.current_goal_xy = None
+    feedback = node.explore_feedback()
+    assert feedback.current_goal.x == 0.0
+    assert feedback.current_goal.y == 0.0
+
+
+def test_explored_done_sets_outcome(node):
+    from dome_nav_msgs.action import ExploreArea
+    node.state = "EXPL"
+    node.robot_xy_in_map = MagicMock(return_value=(0.0, 0.0))
+    node.algorithm = MockAlgorithm(GoalDecision.done())
+    node.latest_map = make_map()
+    node.find_and_send_goal()
+    assert node.state == "DONE"
+    assert node.session_outcome == ExploreArea.Result.EXPLORED_DONE
 
 
 # --- find_and_send_goal via MockAlgorithm ---

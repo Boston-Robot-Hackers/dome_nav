@@ -11,11 +11,15 @@ import time
 import rclpy
 import tf2_ros
 from action_msgs.msg import GoalStatus
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import Point, PoseStamped
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import OccupancyGrid
-from rclpy.action import ActionClient
+from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+
+from dome_nav_msgs.action import ExploreArea
 from rclpy.qos import (
     QoSDurabilityPolicy,
     QoSHistoryPolicy,
@@ -98,9 +102,20 @@ class ExplorerManagerNode(Node):
         self.nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
         self.status_pub = self.create_publisher(String, "/explore/status", 10)
         self.marker_pub = self.create_publisher(MarkerArray, "/explore/markers", 10)
-        self.intent_sub = self.create_subscription(
-            String, "/intent", self.on_intent, 10
+        # Explore is exposed as a cancellable primitive (F35): dome_mission drives
+        # it via the ExploreArea action, not /intent. Timer + action share a
+        # reentrant group so the blocking execute callback and the 1Hz tick run
+        # concurrently under a MultiThreadedExecutor (see main).
+        self.explore_cb_group = ReentrantCallbackGroup()
+        self.explore_action_server = ActionServer(
+            self, ExploreArea, "explore_area",
+            execute_callback=self.execute_explore,
+            goal_callback=self.on_explore_goal,
+            cancel_callback=self.on_explore_cancel,
+            callback_group=self.explore_cb_group,
         )
+        self.active_goal_handle = None
+        self.explored_area_m2 = 0.0
         # Grids fetched on demand (fetch_grid) while exploring, not held as standing
         # subs (idle deserialize burned 10-20% CPU on the Pi). Must match the latched
         # publishers' QoS for wait_for_message to return the last grid.
@@ -114,7 +129,10 @@ class ExplorerManagerNode(Node):
         # deserialize for a 1Hz pose. Started in exploration_start, torn down in stop.
         self.tf_buffer: tf2_ros.Buffer | None = None
         self.tf_listener: tf2_ros.TransformListener | None = None
-        self.create_timer(1.0 / self.EXPLORE_HZ, self.explore_tick)
+        self.create_timer(
+            1.0 / self.EXPLORE_HZ, self.explore_tick,
+            callback_group=self.explore_cb_group,
+        )
 
         # Shared params only; algorithm-specific tuning is declared by the
         # algorithm itself (declare_params below). The shared set is declared
@@ -232,38 +250,73 @@ class ExplorerManagerNode(Node):
         # the real stop. Flag/resume intent kept for manual pause paths.
         self.paused_on_failure = False
 
-    def on_intent(self, msg: String):
+    def start_session(self, map_name: str = "") -> bool:
+        """Begin an exploration session. Only from IDLE/DONE; returns False if a
+        session is already running. `map_name` empty keeps the current map."""
+        if self.state not in ("IDLE", "DONE"):
+            return False
+        if map_name:
+            self.map_name = map_name
+        self.reset_session()
+        self.start_tf()
+        # start_xy stays None here: the fresh TF buffer is still empty, so it is
+        # captured on the first tick where map->base_footprint resolves.
+        self.state = "EXPL"
+        self.publish_status("EXPL")
+        radius_note = (
+            f", max_radius={self.params.max_explore_radius}m"
+            if self.params.max_explore_radius > 0 else ""
+        )
+        self.get_logger().info(f"Exploration started{radius_note}.")
+        self.telemetry.write(
+            "session_start", map_name=self.map_name, start_xy=None,
+            params=self.session_start_params(),
+        )
+        return True
+
+    def on_explore_goal(self, goal_request) -> GoalResponse:
+        if self.state == "EXPL" or self.active_goal_handle is not None:
+            self.get_logger().warning("ExploreArea goal rejected: already exploring.")
+            return GoalResponse.REJECT
+        return GoalResponse.ACCEPT
+
+    def on_explore_cancel(self, goal_handle) -> CancelResponse:
+        return CancelResponse.ACCEPT
+
+    def execute_explore(self, goal_handle):
+        """Drive one exploration session for an ExploreArea goal. Blocks in this
+        callback (its own thread under the MultiThreadedExecutor) publishing
+        feedback while the 1Hz tick advances the session; the tick sets DONE +
+        session_outcome, cancel maps to STOPPED."""
+        self.active_goal_handle = goal_handle
+        self.start_session(goal_handle.request.map_name)
         try:
-            intent = json.loads(msg.data)
-        except json.JSONDecodeError:
-            self.get_logger().warning(
-                f"Malformed intent JSON on /intent: {msg.data!r}"
-            )
-            return
-        name = intent.get("name", "")
-        if name == "exploration_start" and self.state in ("IDLE", "DONE"):
-            self.reset_session()
-            self.start_tf()
-            # start_xy stays None here: the fresh TF buffer is still empty, so
-            # it is captured on the first tick where map->base_footprint resolves
-            # (see explore_tick).
-            self.state = "EXPL"
-            self.publish_status("EXPL")
-            radius_note = (
-                f", max_radius={self.params.max_explore_radius}m"
-                if self.params.max_explore_radius > 0 else ""
-            )
-            self.get_logger().info(f"Exploration started{radius_note}.")
-            self.telemetry.write(
-                "session_start", map_name=self.map_name, start_xy=None,
-                params=self.session_start_params(),
-            )
-        elif name == "exploration_stop":
-            self.stop_exploring("IDLE")
-        elif name == "exploration_resume":
-            if self.paused_on_failure:
-                self.paused_on_failure = False
-                self.get_logger().info("Resumed by exploration_resume intent.")
+            while rclpy.ok():
+                if goal_handle.is_cancel_requested:
+                    self.stop_exploring("IDLE")
+                    goal_handle.canceled()
+                    return ExploreArea.Result(outcome=ExploreArea.Result.STOPPED)
+                if self.state != "EXPL":
+                    goal_handle.succeed()
+                    return ExploreArea.Result(outcome=self.session_outcome)
+                goal_handle.publish_feedback(self.explore_feedback())
+                time.sleep(0.5)
+            goal_handle.abort()
+            return ExploreArea.Result(outcome=self.session_outcome)
+        finally:
+            self.active_goal_handle = None
+
+    def explore_feedback(self) -> ExploreArea.Feedback:
+        feedback = ExploreArea.Feedback()
+        feedback.frontiers_remaining = int(
+            self.call_hook("frontier_count", self.render_context(), default=0)
+        )
+        feedback.explored_area_m2 = float(self.explored_area_m2)
+        goal_xy = self.current_goal_xy
+        feedback.current_goal = Point(
+            x=goal_xy[0], y=goal_xy[1], z=0.0
+        ) if goal_xy is not None else Point()
+        return feedback
 
     def explore_tick(self):
         self.publish_status(self.state)
@@ -285,8 +338,17 @@ class ExplorerManagerNode(Node):
         # Fetch grids on demand only when about to pick a goal — keeps the idle
         # node free of standing grid subscriptions (the CPU sink).
         self.latest_map = self.fetch_grid("/map")
+        self.explored_area_m2 = self.known_area_m2(self.latest_map)
         self.latest_global_costmap = self.fetch_grid("/global_costmap/costmap")
         self.find_and_send_goal()
+
+    def known_area_m2(self, grid: OccupancyGrid | None) -> float:
+        """Known-space area: cells >= 0 (free or occupied; -1 is unknown) times
+        the cell area. 0.0 when no map yet."""
+        if grid is None:
+            return 0.0
+        cell_area = grid.info.resolution * grid.info.resolution
+        return sum(1 for cell in grid.data if cell >= 0) * cell_area
 
     def check_stuck(self):
         # Abandon a no-progress goal before GOAL_TIMEOUT_S; blacklisting also
@@ -413,6 +475,7 @@ class ExplorerManagerNode(Node):
         if decision is not None and decision.outcome is GoalOutcome.EXPLORED_DONE:
             self.get_logger().info("Algorithm reports exploration complete.")
             self.dump_exhaustion(robot_xy)
+            self.session_outcome = ExploreArea.Result.EXPLORED_DONE
             self.stop_exploring("DONE")
             return
         self.handle_no_target(robot_xy)
@@ -445,10 +508,12 @@ class ExplorerManagerNode(Node):
                 return
             self.get_logger().info("No-target patience exhausted — exploration done.")
             self.dump_exhaustion(robot_xy)
+            self.session_outcome = ExploreArea.Result.NO_TARGETS_BLOCKED
             self.stop_exploring("DONE")
 
     def reset_session(self):
         self.state = "IDLE"
+        self.session_outcome = ExploreArea.Result.EXPLORED_DONE
         self.blacklist: set[XY] = set()
         self.start_xy: XY | None = None
         self.no_target_count = 0
@@ -667,8 +732,11 @@ class ExplorerManagerNode(Node):
 def main():
     rclpy.init()
     node = ExplorerManagerNode()
+    # MultiThreadedExecutor so the blocking ExploreArea execute callback and the
+    # 1Hz explore tick (both in the reentrant group) run concurrently.
+    executor = MultiThreadedExecutor()
     try:
-        rclpy.spin(node)
+        rclpy.spin(node, executor)
     except KeyboardInterrupt:
         pass
     finally:
