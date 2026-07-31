@@ -9,7 +9,12 @@ on `dome_semantic_msgs`. Interleaves with TF33 — ordering notes on each task.
 **Status**: done (2026-07-31)
 **Decision (locked 2026-07-31)**:
 - **Transport: ROS actions** (not topics/services). Rationale below.
-- **explore = new `ExploreArea` action** on dome_nav. Long-running,
+- **Interface home = new `dome_nav_msgs` (ament_cmake)** (2026-07-31).
+  dome_nav is `ament_python` and cannot generate rosidl interfaces, so the
+  action lives in a domain-scoped interfaces package `dome_nav_msgs` — parity
+  with G2a (`dome_semantic_msgs` for semantic) and the `dome_telemetry_msgs`
+  precedent. Not a broad shared bag; isolates rebuild blast-radius.
+- **explore = new `ExploreArea` action** in `dome_nav_msgs`. Long-running,
   cancellable (preempt on `explore stop`), feedback for progress.
   - **Goal**: `string map_name` (SLAM map identity, matches slam_manager;
     empty = use the running session's map). No bounds field for now — explore
@@ -56,13 +61,23 @@ which would break the pure-Python discipline).
 **Test**: n/a (design decision). Interface files get tests when defined in T02.
 
 ## T02 — `dome_mission` package skeleton + interface artifacts
-**Status**: not done
-**Description**: New `dome_mission` package (pure/ROS split per dome_nav L0/L1).
-Add the T01 interface artifacts (e.g. `ExploreArea.action` if chosen — likely
-in `dome_nav`'s interface surface or a small shared interfaces pkg; decided in
-T01). Package builds clean, empty FSM node boots.
-**Test**: `colcon build` clean across dome_nav, dome_mission; node starts and
-idles; `ros2 interface show` matches the T01 spec.
+**Status**: done (2026-07-31)
+**Description**: Two parts. (a) **`dome_nav_msgs`** (ament_cmake) holding
+`ExploreArea.action` per the T01 spec — the interface package, built first
+(ROS convention: interfaces before nodes). (b) **`dome_mission`** package
+(ament_python, pure/ROS split per dome_nav L0/L1); empty FSM node boots.
+`dome_mission` depends on `dome_nav_msgs` + `dome_semantic_msgs`.
+**Done (2026-07-31)**: `dome_nav_msgs` (ament_cmake) holds
+`action/ExploreArea.action` matching T01 exactly (goal `map_name`; result
+`outcome` w/ EXPLORED_DONE/STOPPED/NO_TARGETS_BLOCKED; feedback
+`frontiers_remaining`/`explored_area_m2`/`current_goal`). `dome_mission`
+(ament_python) skeleton created: `mission_node` boots+idles, depends
+`dome_nav_msgs`+`dome_semantic_msgs`. Both are ungit'd `ws/src/` siblings of
+dome_nav (not in this repo). `colcon build` clean; `ros2 interface show`
+verified; node spins idle.
+**Test**: `colcon build` clean across `dome_nav_msgs`, `dome_mission`;
+`ros2 interface show dome_nav_msgs/action/ExploreArea` matches the T01 spec;
+node starts and idles.
 
 ## T03 — Mission FSM core (pure) + the three behaviors
 **Status**: not done
