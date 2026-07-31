@@ -80,17 +80,41 @@ verified; node spins idle.
 node starts and idles.
 
 ## T03 — Mission FSM core (pure) + the three behaviors
-**Status**: not done
+
+**Status**: done (2026-07-31)
+
 **Description**: Pure, ROS-free mission FSM: states for idle / exploring /
 locating / going-to-target, transitions driven by intent events + behavior
 completion. Three behaviors defined as sequencing logic (not yet wired to ROS):
+
 **explore** (start→run→done-on-no-frontiers), **locate targets** (explore or
 survey while semantic ingest runs — the stateful cross-package sequence, F33
 Phase C's home), **go to target** (label→pose→drive). Boundary decision
 (F35 open q): which stop/abort authority stays in dome_nav's explorer watchdog
 vs moves up to the mission FSM — record it here.
-**Test**: pure unit tests over the FSM: intent sequences → expected state
-transitions and emitted primitive commands; no ROS graph.
+
+**Done (2026-07-31)**: `dome_mission/mission_fsm.py` — pure, no ROS import.
+`MissionFsm.on_intent(intent, label, map_name)` and `on_done(outcome)` return
+`list[Command]` and mutate `state`; stray/inapplicable events are no-ops
+(return `[]`, state unchanged) so the FSM can't wedge. States `IDLE /
+EXPLORING / LOCATING / GOING_TO_TARGET`; commands `START_EXPLORE /
+CANCEL_EXPLORE / DRIVE_TO_TARGET / CANCEL_DRIVE`. LOCATING drives the same
+explore primitive (semantic ingest is external always-on; differs only in
+mission intent). GO_TO_TARGET is IDLE-only for now (concurrent preempt deferred
+to T05). `Command.label` carries the payload; label→pose resolution stays
+downstream (T05).
+
+**Boundary decision (settled)**: per-goal stop/abort authority (goal timeouts,
+`STUCK_T_S`, blacklist exhaustion, per-goal reselection) stays DOWN in
+dome_nav's explorer watchdog and never surfaces as an FSM event. The FSM owns
+only mission-level authority — start/stop/preempt intents + the single terminal
+`ExploreArea` outcome (EXPLORED_DONE / STOPPED / NO_TARGETS_BLOCKED). The
+watchdog's internal recovery is invisible here; only its final give-up
+(NO_TARGETS_BLOCKED) ends the behavior. Recorded in the module docstring.
+
+**Test**: `test/test_mission_fsm.py` — 17 pure unit tests over intent sequences
+→ expected transitions + emitted commands, no ROS graph. All pass
+(`/usr/bin/python3 -m pytest`).
 
 ## T04 — `/intent` ownership moves to dome_mission
 **Status**: not done
