@@ -7,20 +7,24 @@ import functools
 import json
 import math
 import time
+
 import rclpy
-from rclpy.node import Node
+import tf2_ros
+from action_msgs.msg import GoalStatus
+from geometry_msgs.msg import PoseStamped
+from nav2_msgs.action import NavigateToPose
+from nav_msgs.msg import OccupancyGrid
 from rclpy.action import ActionClient
+from rclpy.node import Node
 from rclpy.qos import (
-    QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy, QoSHistoryPolicy,
+    QoSDurabilityPolicy,
+    QoSHistoryPolicy,
+    QoSProfile,
+    QoSReliabilityPolicy,
 )
 from rclpy.wait_for_message import wait_for_message
-from action_msgs.msg import GoalStatus
 from std_msgs.msg import String
-from geometry_msgs.msg import PoseStamped
-from nav_msgs.msg import OccupancyGrid
 from visualization_msgs.msg import MarkerArray
-from nav2_msgs.action import NavigateToPose
-import tf2_ros
 
 from dome_nav.explore_context import (
     ExplorationAlgorithm,
@@ -29,13 +33,14 @@ from dome_nav.explore_context import (
     GoalOutcome,
     MapInfo,
     RenderContext,
+    declare_dataclass_params,
 )
-from dome_nav.explore_telemetry import TelemetryWriter
 from dome_nav.explore_diagnostics import (
     LETHAL_THRESHOLD,
     costmap_cell_cost,
     format_failure_diagnostics,
 )
+from dome_nav.explore_telemetry import TelemetryWriter
 from dome_nav.frontier_algorithm import FrontierAlgorithm
 from dome_nav.hello_world_algorithm import HelloWorldAlgorithm
 
@@ -112,19 +117,15 @@ class ExplorerManagerNode(Node):
         self.create_timer(1.0 / self.EXPLORE_HZ, self.explore_tick)
 
         # Shared params only; algorithm-specific tuning is declared by the
-        # algorithm itself (declare_params below).
+        # algorithm itself (declare_params below). The shared set is declared
+        # and read back generically from the ExploreParams dataclass.
         self.declare_parameter("explore_algorithm", DEFAULT_ALGORITHM)
-        self.declare_parameter("max_explore_radius", 0.0)
-        self.declare_parameter("preferred_goal_distance", 1.0)
         self.declare_parameter("map_name", "unknown")
         self.map_name: str = self.get_parameter("map_name").value
 
         self.telemetry = TelemetryWriter(self.get_logger().info, map_name=self.map_name)
 
-        self.params = ExploreParams(
-            max_explore_radius=self.get_parameter("max_explore_radius").value,
-            preferred_goal_distance=self.get_parameter("preferred_goal_distance").value,
-        )
+        self.params = declare_dataclass_params(self, ExploreParams)
         if algorithm is not None:
             self.algorithm = algorithm
         else:
@@ -211,7 +212,6 @@ class ExplorerManagerNode(Node):
         params: dict = {
             "timeout_s": self.GOAL_TIMEOUT_S,
             "max_radius": self.params.max_explore_radius,
-            "preferred_goal_distance": self.params.preferred_goal_distance,
         }
         params.update(self.call_hook("session_params", default={}))
         return params

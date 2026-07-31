@@ -422,8 +422,37 @@ def test_publish_status_dist_correct(node):
 
 def test_shared_params_default_from_explore_params(node):
     # The node's shared params default to the ExploreParams dataclass values.
-    assert node.params.preferred_goal_distance == ExploreParams().preferred_goal_distance
-    assert node.params.max_explore_radius == ExploreParams().max_explore_radius
+    defaults = ExploreParams()
+    assert node.params.max_explore_radius == defaults.max_explore_radius
+    assert node.params.blacklist_radius == defaults.blacklist_radius
+
+
+def test_blacklist_radius_is_a_ros_param(node):
+    # Declared on the node itself (shared param), so it is yaml/launch-settable
+    # regardless of which algorithm plugin runs.
+    assert node.has_parameter("blacklist_radius")
+
+
+def test_blacklist_radius_override_reaches_explore_params(ros):
+    # Injected at construction (declare-time), mirroring a yaml/launch override.
+    from rclpy.node import Node
+    from dome_nav.explorer_manager_node import ExplorerManagerNode
+
+    real_declare = Node.declare_parameter
+
+    def declare_with_radius_override(self, name, value=None, *args, **kwargs):
+        if name == "blacklist_radius":
+            value = 0.7
+        return real_declare(self, name, value, *args, **kwargs)
+
+    with patch("tf2_ros.TransformListener"), \
+         patch("rclpy.action.ActionClient"), \
+         patch("dome_nav.explorer_manager_node.TelemetryWriter",
+               return_value=MagicMock()), \
+         patch.object(Node, "declare_parameter", declare_with_radius_override):
+        n = ExplorerManagerNode(algorithm=MockAlgorithm())
+    assert n.params.blacklist_radius == 0.7
+    n.destroy_node()
 
 
 # --- FrontierAlgorithm self-declares its frontier ROS params (F23 T03) ---
@@ -453,7 +482,7 @@ def test_shared_only_plugin_declares_no_frontier_params(node):
     # MockAlgorithm needs only the shared params; the node must NOT have declared
     # any frontier ROS param on its behalf.
     for name in ("min_frontier_size", "min_frontier_dist", "max_frontier_dist",
-                 "frontier_buffer_cells", "goal_inset_m", "prefer_farthest"):
+                 "frontier_buffer_cells", "goal_inset_m"):
         assert not node.has_parameter(name)
 
 

@@ -52,7 +52,7 @@ def wait_for_map_odom_tf(bl: BetterLaunch, timeout_s: float = 30.0) -> None:
     while time.time() - start < timeout_s:
         if buffer.can_transform("map", "odom", rclpy.time.Time()):
             elapsed = time.time() - start
-            bl.logger.info(f"*********** Map->odom transform available after {elapsed:.1f}s")
+            bl.logger.info(f"******* Map->odom TF available after {elapsed:.1f}s")
             return
         time.sleep(0.2)
 
@@ -94,7 +94,16 @@ def sim_nav_full_launch(
     bl.include("dome_nav", "sim_slam.launch.py")
     wait_for_map_odom_tf(bl)
     bl.include("dome_nav", "sim_nav2.launch.py")
-    bl.include("dome_nav", "sim_explore_node.launch.py")
+    # Forward the explorer args explicitly — the include does not inherit them,
+    # and sim_explore_node raises when map_name is empty.
+    bl.include("dome_nav", "sim_explore_node.launch.py", **{
+        "map_name": map_name,
+        "max_explore_radius": max_explore_radius,
+        "max_frontier_dist": max_frontier_dist,
+        "min_frontier_dist": min_frontier_dist,
+        "preferred_goal_distance": preferred_goal_distance,
+        "min_frontier_size": min_frontier_size,
+    })
 
     slam_map_path = os.path.join(dome_home(), "slam_maps", map_name)
     bl.node(

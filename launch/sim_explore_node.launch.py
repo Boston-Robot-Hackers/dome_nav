@@ -25,6 +25,7 @@ def sim_explore_node_launch(
     max_frontier_dist: float = 15.0,
     min_frontier_dist: float = 0.9,
     preferred_goal_distance: float = 2.0,
+    blacklist_radius: float = 0.5,
     min_frontier_size: int = 5,
     w_distance: float = 1.0,
     w_novelty: float = 1.0,
@@ -49,8 +50,9 @@ def sim_explore_node_launch(
             "max_frontier_dist": max_frontier_dist,
             "min_frontier_dist": min_frontier_dist,
             "preferred_goal_distance": preferred_goal_distance,
+            "blacklist_radius": blacklist_radius,
             "min_frontier_size": min_frontier_size,
-            # F31 goal-scoring weights + clearance floor; w_clearance:=0.0 = T07 baseline.
+            # F31 scorer weights + clearance floor; w_clearance:=0.0 = T07 baseline.
             "w_distance": w_distance,
             "w_novelty": w_novelty,
             "w_clearance": w_clearance,

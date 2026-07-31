@@ -98,18 +98,20 @@ flowchart TD
 There are two kinds of knobs. Some are *session-level* and the node itself uses
 them (`blacklist_radius` drives the node's own reselection policy). Others are
 *strategy-specific* and belong to the algorithm (frontier cluster size, novelty
-weights — see `frontier_params.py`). The shared ones live here:
+weights — see `frontier_params.py`). The **ownership rule (F34 T03)** is precise:
+a field is shared iff the *node itself* reads it. Only two qualify:
 
 ```python
 @dataclass
 class ExploreParams:
     max_explore_radius: float = 0.0
     blacklist_radius: float = 0.5
-    preferred_goal_distance: float = 1.0
 ```
 
 Keeping strategy tuning *out* of this shared struct is what stops the contract
-from bloating every time a new algorithm needs a new knob.
+from bloating every time a new algorithm needs a new knob. `preferred_goal_distance`
+used to live here, but only algorithm scorers read it, so T03 moved it into
+`FrontierParams` — the node no longer owns it.
 
 ## The protocol, with optional hooks
 

@@ -15,8 +15,11 @@
       "Bash(ln:*)",
       "Bash(git add:*)",
       "Bash(git commit -m ':*)",
-      "Bash(git push:*)"
-
+      "Bash(git push:*)",
+      "Bash(ros2 topic info *)",
+      "Bash(ros2 topic list*)",
+      "Bash(ros2 node list*)",
+      "Bash(ros2 pkg prefix *)"
     ]
   }
 }

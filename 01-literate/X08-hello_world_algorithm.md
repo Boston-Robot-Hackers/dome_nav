@@ -23,16 +23,18 @@ class HelloWorldAlgorithm:
 
     def __init__(self):
         self.emitted = False
+        self.step_distance_m = 1.0
 
     def declare_params(self, node):
-        pass  # no tuning of its own
+        node.declare_parameter("preferred_goal_distance", self.step_distance_m)
+        self.step_distance_m = node.get_parameter("preferred_goal_distance").value
 
     def next_goal(self, ctx: ExplorationContext) -> GoalDecision:
         if self.emitted:
             return GoalDecision.done()
         self.emitted = True
         rx, ry = ctx.robot_xy
-        return GoalDecision.new_goal((rx + ctx.params.preferred_goal_distance, ry))
+        return GoalDecision.new_goal((rx + self.step_distance_m, ry))
 ```
 
 ## What it teaches
@@ -44,9 +46,12 @@ concrete:
   (`render_markers`, `telemetry_extra`, and friends) are simply *absent*. The node
   calls them via `getattr` and falls back to a default when they are missing, so
   omitting them costs nothing — no stubs, no `NotImplementedError`.
-- **`declare_params` can be a no-op.** An algorithm with no tuning of its own
-  still implements the hook, but its body is `pass`. Contrast with
-  `FrontierAlgorithm`, whose `declare_params` registers a dozen ROS parameters.
+- **`declare_params` declares one knob of its own.** Since F34 T03 moved
+  `preferred_goal_distance` out of the shared `ExploreParams`, HelloWorld — a
+  second reader — declares its own same-named step param (default `1.0`) rather
+  than borrowing the node's. Contrast with `FrontierAlgorithm`, whose
+  `declare_params` registers a dozen ROS parameters; a truly tuning-free
+  algorithm could still leave the body `pass`.
 - **`GoalDecision` is how you speak to the node.** One goal, then
   `GoalDecision.done()` — the same `done` the node interprets as "session
   complete." A minimal algorithm never needs `GoalDecision.blocked()`; that
@@ -58,7 +63,7 @@ signature — the payoff of using a `typing.Protocol` for the contract.
 
 ```mermaid
 flowchart TD
-    A["first next_goal"] --> B["emit goal:<br/>robot_x + preferred_goal_distance"]
+    A["first next_goal"] --> B["emit goal:<br/>robot_x + step_distance_m"]
     B --> C["set emitted = True"]
     D["second next_goal"] --> E["GoalDecision.done"]
 ```

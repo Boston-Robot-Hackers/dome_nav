@@ -146,7 +146,6 @@ def session_params(self) -> dict:                                  # logged at s
         "goal_inset": fp.goal_inset_m,
         "min_frontier_size": fp.min_frontier_size,
         "use_novelty_scoring": fp.use_novelty_scoring,
-        "novelty_top_n": fp.novelty_top_n,
     }
 ```
 
@@ -154,6 +153,11 @@ def session_params(self) -> dict:                                  # logged at s
 algorithm's private latest-tick state as an opaque dict the node merges blindly.
 
 ## The parameter plumbing (`frontier_params.py`)
+
+> Note (2026-07-30): the plumbing described below was replaced by the
+> `dataclasses.fields()`-driven single-source design (F34 T01) — see
+> `07-frontier_params.md` for the current mechanism. The protocol and
+> invariant discussion here still applies.
 
 Frontier tuning is split into three pieces, and the split is deliberate:
 
@@ -180,10 +184,6 @@ def merge_tuning(shared: ExploreParams, frontier: FrontierParams) -> FrontierTun
             f"blacklist_radius ({shared.blacklist_radius}) must exceed "
             f"goal_inset_m ({frontier.goal_inset_m}); exclusion is stored "
             "post-nudge but filtered against raw cells.")
-    preferred = shared.preferred_goal_distance
-    if frontier.prefer_farthest:
-        has_max = frontier.max_frontier_dist > 0.0
-        preferred = frontier.max_frontier_dist if has_max else 1000.0
     return FrontierTuning(...)
 ```
 
@@ -198,7 +198,6 @@ weights are directly comparable:
 class FrontierParams:
     # ... existing fields ...
     use_novelty_scoring: bool = False  # opt-in: adds the novelty scorer
-    novelty_top_n: int = 5             # deprecated no-op
     w_distance: float = 1.0            # distance-to-preferred scorer weight
     w_novelty: float = 1.0             # novelty weight (only when use_novelty_scoring)
     w_clearance: float = 1.0           # clearance scorer weight; 0 disables clearance
@@ -218,46 +217,33 @@ class FrontierParams:
 
 ### Declaring the params
 
-Declaring the params keeps every frontier name in one place,
-`declare_frontier_params`, which the node calls once at startup via the
-protocol's `declare_params` hook:
+`declare_frontier_params` keeps every frontier name in one place and is driven by
+`dataclasses.fields()` (F34 T01) — it delegates to the generic
+`declare_dataclass_params`, so adding a field to `FrontierParams` auto-declares,
+auto-reads, and auto-merges with no edits here:
 
 ```python
 def declare_frontier_params(node) -> FrontierParams:
-    defaults = FrontierParams()
-    node.declare_parameter("min_frontier_size", defaults.min_frontier_size)
-    node.declare_parameter("min_frontier_dist", defaults.min_frontier_dist)
-    node.declare_parameter("max_frontier_dist", defaults.max_frontier_dist)
-    node.declare_parameter("goal_inset_m", defaults.goal_inset_m)
-    node.declare_parameter("frontier_buffer_cells", defaults.frontier_buffer_cells)
-    node.declare_parameter("prefer_farthest", defaults.prefer_farthest)
-    node.declare_parameter("use_novelty_scoring", defaults.use_novelty_scoring)
-    node.declare_parameter("novelty_top_n", defaults.novelty_top_n)
-    node.declare_parameter("w_distance", defaults.w_distance)
-    node.declare_parameter("w_novelty", defaults.w_novelty)
-    node.declare_parameter("w_clearance", defaults.w_clearance)
-    node.declare_parameter("robot_radius", defaults.robot_radius)
-    node.declare_parameter("clearance_margin_m", defaults.clearance_margin_m)
-    return FrontierParams(
-        min_frontier_size=node.get_parameter("min_frontier_size").value,
-        ...
-    )
+    return declare_dataclass_params(node, FrontierParams)
 ```
+
+The node calls it once at startup via the protocol's `declare_params` hook. The
+full machinery — type discipline, metadata descriptors, the `fields()` loop, and
+the two-field shared overlay in `merge_tuning` — is documented in
+[07-frontier_params.md](07-frontier_params.md); this module just consumes the
+merged `FrontierTuning`.
 
 ## Observations and possible improvements
 
-- **Several params are deprecated but still declared.** `prefer_farthest` (mapped
-  to a `preferred_goal_distance` sentinel inside `merge_tuning`) and
-  `novelty_top_n` (a retired no-op) linger for backward compatibility. A cleanup
-  pass could drop them, or at least route their declarations through a
-  `_DEPRECATED` list so they are obviously legacy.
-- **`merge_tuning` restates every field by hand.** The `FrontierParams` →
-  `FrontierTuning` copy is fifteen lines of `field=frontier.field`. If the two
-  dataclasses stay in lockstep, a `dataclasses.asdict` merge would remove the
-  transcription risk.
-- **`declare_frontier_params` lists each param name three times** (declare, get,
-  construct). A table of `(name, default)` tuples driving all three would make
-  adding a param a one-line change and eliminate the copy-paste.
+- **The deprecated `prefer_farthest` / `novelty_top_n` wires are gone**
+  (2026-07-30) — the field, the `merge_tuning` mapping shim, and the
+  telemetry echo were all removed once `preferred_goal_distance` and the F31
+  pipeline fully superseded them.
+- **The hand-listed declare/merge is gone** (F34 T01/T03). Declaration and
+  read-back are a `fields()` loop; `merge_tuning` is a `fields()` pass-through
+  plus a two-field shared overlay (`blacklist_radius`, `max_explore_radius`).
+  `preferred_goal_distance` moved into `FrontierParams` (T03), so the algorithm
+  now owns every knob its scorers read.
 - **`latest_novelty`/`latest_diag`/`latest_clusters` are mutable per-tick state**
   on a shared object. Fine single-threaded, but if the node ever ran ticks
   concurrently these would race; the state properly belongs to the decision, not

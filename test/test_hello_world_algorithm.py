@@ -10,7 +10,7 @@ from dome_nav.frontier_explorer import MapInfo
 from dome_nav.hello_world_algorithm import HelloWorldAlgorithm
 
 
-def make_ctx(robot_xy=(0.0, 0.0), step=1.0):
+def make_ctx(robot_xy=(0.0, 0.0)):
     return ExplorationContext(
         map_data=[],
         map_info=MapInfo(width=0, height=0, resolution=1.0,
@@ -18,15 +18,17 @@ def make_ctx(robot_xy=(0.0, 0.0), step=1.0):
         robot_xy=robot_xy,
         blacklist=set(),
         start_xy=None,
-        params=ExploreParams(preferred_goal_distance=step),
+        params=ExploreParams(),
     )
 
 
 # --- first call: NEW_GOAL one step ahead in map +x ---
 
 def test_first_call_new_goal():
+    # step_distance_m is the algorithm's own param (F34 T03), not off ctx.params.
     algo = HelloWorldAlgorithm()
-    decision = algo.next_goal(make_ctx(robot_xy=(2.0, 5.0), step=1.5))
+    algo.step_distance_m = 1.5
+    decision = algo.next_goal(make_ctx(robot_xy=(2.0, 5.0)))
     assert decision.outcome is GoalOutcome.NEW_GOAL
     assert decision.xy == (3.5, 5.0)
 

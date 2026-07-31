@@ -14,14 +14,18 @@ class HelloWorldAlgorithm:
 
     def __init__(self):
         self.emitted = False
+        # Own step distance (F34 T03): preferred_goal_distance moved to
+        # FrontierParams, so this algorithm no longer reads it off ctx.params.
+        self.step_distance_m = 1.0
 
     def declare_params(self, node):
-        pass  # no tuning of its own
+        node.declare_parameter("preferred_goal_distance", self.step_distance_m)
+        self.step_distance_m = node.get_parameter("preferred_goal_distance").value
 
     def next_goal(self, ctx: ExplorationContext) -> GoalDecision:
         if self.emitted:
             return GoalDecision.done()
         self.emitted = True
-        # preferred_goal_distance metres straight ahead; heading ignored.
+        # step_distance_m metres straight ahead; heading ignored.
         rx, ry = ctx.robot_xy
-        return GoalDecision.new_goal((rx + ctx.params.preferred_goal_distance, ry))
+        return GoalDecision.new_goal((rx + self.step_distance_m, ry))

@@ -31,6 +31,7 @@ def nav_experiment_launch(
     use_sim_time: str = "false",
     map_name: str = "",
     max_explore_radius: float = 0.0,
+    blacklist_radius: float = 0.5,
 ):
     if not slam_config or not nav2_config:
         raise ValueError(
@@ -75,6 +76,7 @@ def nav_experiment_launch(
             name="explore_manager",
             params={
                 "max_explore_radius": max_explore_radius,
+                "blacklist_radius": blacklist_radius,
                 "max_frontier_dist": 0.0,
                 "min_frontier_dist": 0.5,
                 "preferred_goal_distance": 2.0,

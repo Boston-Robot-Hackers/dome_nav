@@ -62,29 +62,29 @@ navigation symptom with an exploration knob or vice-versa.
 
 ## 1. ROS2 parameters — explorer manager (shared)
 
-Declared in `dome_nav/explorer_manager_node.py:116-119`, read into `ExploreParams`
-(`dome_nav/explore_context.py:49-59`). Owned by the node, shared by all algorithms.
+Declared on the node from the `ExploreParams` dataclass via
+`declare_dataclass_params()` (`dome_nav/explore_context.py`); owned by the
+node, shared by all algorithms. **Ownership rule (F34 T03): a field is shared
+iff the node itself reads it** — radius gating (`max_explore_radius`) or
+blacklist reselection (`blacklist_radius`). Tuning only an algorithm's scorer
+reads (e.g. `preferred_goal_distance`) lives in that algorithm (§2), not here.
+`explore_algorithm` and `map_name` are hand-declared on the node.
 
 | Parameter | Default | Type | What it tunes |
 |---|---|---|---|
 | `explore_algorithm` | `"frontier"` | str | Algorithm selection from `ALGORITHM_REGISTRY` (`frontier` / `hello`, explorer_manager_node.py:47-51). Unknown name → warning + fallback. |
 | `max_explore_radius` | `0.0` (unlimited) | float | Radius from session start pose beyond which frontier clusters are filtered out (frontier_explorer.py:303-308). |
-| `preferred_goal_distance` | `1.0` | float | Target travel distance per goal; scoring minimizes \|actual reach − preferred\| (frontier_explorer.py:269-273). |
+| `blacklist_radius` | `0.5` | float | Exclusion radius around failed goals; node reselection suppresses this neighborhood. Kept `> goal_inset_m` by `merge_tuning` (frontier_params.py). |
 | `map_name` | `"unknown"` | str | Telemetry filename tag only (`~/.dome/telemetry/e<map><date>.json`); no effect on mapping. |
-
-Shared tuning that is **not** a ROS parameter (code-edit only, `explore_context.py:49-59`):
-
-- `blacklist_radius = 0.5` — exclusion radius around failed goals (kept `> goal_inset_m`
-  by `merge_tuning`, frontier_params.py:51-63). This is the one shared knob with no ROS
-  or launch exposure anywhere; robot_explore.launch.py:53-61 notes this is deliberate.
 
 ---
 
 ## 2. ROS2 parameters — frontier algorithm
 
-Defaults live in the `FrontierParams` dataclass (`dome_nav/frontier_params.py:11-27`);
-each is declared via `declare_frontier_params()` (frontier_params.py:90-123) when the
-algorithm registers itself. All runtime-configurable.
+Defaults live in the `FrontierParams` dataclass (`dome_nav/frontier_params.py`);
+each field carries its description/range as dataclass metadata and is declared
+via the `fields()`-driven `declare_frontier_params()` when the algorithm
+registers itself. All runtime-configurable.
 
 ### Goal / frontier filtering
 
@@ -93,6 +93,7 @@ algorithm registers itself. All runtime-configurable.
 | `min_frontier_size` | `15` | int | Drop frontier clusters smaller than this many cells (frontier_explorer.py:299-300). |
 | `min_frontier_dist` | `1.3` | float | Goal must be at least this far from the robot (0 disables). |
 | `max_frontier_dist` | `0.0` (unlimited) | float | Upper bound on robot-to-goal distance (0 disables). |
+| `preferred_goal_distance` | `1.0` | float | Target travel distance per goal; scoring minimizes \|actual reach − preferred\| (frontier_explorer.py:269-273). Algorithm-owned (F34 T03); `HelloWorldAlgorithm` declares its own same-named step param. |
 | `goal_inset_m` | `0.3` | float | Pull the frontier goal this far toward the robot so it stays inside the costmap (frontier_explorer.py:460-474). ROS-declared but set by no launch file in the repo. |
 | `frontier_buffer_cells` | `2` | int | How many free-cell rings inside the unknown boundary count as frontier during detection (frontier_explorer.py:23-89). |
 
@@ -107,13 +108,6 @@ algorithm registers itself. All runtime-configurable.
 | `robot_radius` | `0.17` | float | Inscribed radius used for the clearance floor (frontier_explorer.py:291-296). |
 | `clearance_margin_m` | `0.05` | float | Clearance floor = `robot_radius + clearance_margin_m`. |
 
-### Deprecated
-
-| Parameter | Default | Status |
-|---|---|---|
-| `prefer_farthest` | `False` | Deprecated; maps to farthest-first selection via `preferred_goal_distance` override (frontier_params.py:64-69). |
-| `novelty_top_n` | `5` | Deprecated no-op (two-stage shortlist retired in F31); still logged in session params. |
-
 ---
 
 ## 3. ROS2 parameters — slam manager
@@ -125,7 +119,9 @@ Declared in `dome_nav/slam_manager_node.py:22-28`. Runtime-configurable.
 | `map_persist_path` | `$DOME_HOME/slam_map` | Pose-graph / legacy map save destination. Launch files set it per-map to `~/.dome/slam_maps/<map_name>`. |
 | `export_legacy_map` | `True` | Also export `.pgm`/`.yaml` via `slam_toolbox/save_map`. |
 
-`nav_manager_node` and `hello_world_algorithm` declare no parameters.
+`nav_manager_node` declares no parameters. `hello_world_algorithm` declares its
+own `preferred_goal_distance` (step distance, default `1.0`) since the shared
+field moved to `FrontierParams` (F34 T03).
 
 ---
 
@@ -136,9 +132,9 @@ means "keep the node default".
 
 | Launch file | Explorer params set | Config files used |
 |---|---|---|
-| `just_explorer.launch.py` | `map_name`, `use_sim_time`, `min_frontier_dist`, `max_frontier_dist`, `min_frontier_size`, `preferred_goal_distance`, `max_explore_radius`, `use_novelty_scoring`, `novelty_top_n`, `w_distance`, `w_novelty`, `w_clearance`, `robot_radius`, `clearance_margin_m` | — (explorer only) |
-| `sim_explore_node.launch.py` (duplicated in `sim_nav_full.launch.py:72-81`) | `max_frontier_dist=15.0`, `min_frontier_dist=0.9`, `preferred_goal_distance=2.0`, `min_frontier_size=5`, `w_*=1.0`, `robot_radius=0.17`, `clearance_margin_m=0.05`, `max_explore_radius=0.0`, `map_name` (required), `use_sim_time=True` | sim yamls |
-| `robot_explore.launch.py` | `max_frontier_dist=0.0`, `min_frontier_dist=0.5`, `preferred_goal_distance=2.0`, `frontier_buffer_cells=0`, `min_frontier_size=10`, `w_*=1.0`, `robot_radius=0.17`, `clearance_margin_m=0.05`; sets `slam_manager_node.map_persist_path` | `mapper_params_online_async.yaml`, `nav2_params_explore_real.yaml` |
+| `just_explorer.launch.py` | `map_name`, `use_sim_time`, `min_frontier_dist`, `max_frontier_dist`, `min_frontier_size`, `preferred_goal_distance`, `max_explore_radius`, `blacklist_radius`, `use_novelty_scoring`, `w_distance`, `w_novelty`, `w_clearance`, `robot_radius`, `clearance_margin_m` | — (explorer only) |
+| `sim_explore_node.launch.py` (duplicated in `sim_nav_full.launch.py:72-81`) | `max_frontier_dist=15.0`, `min_frontier_dist=0.9`, `preferred_goal_distance=2.0`, `blacklist_radius=0.5`, `min_frontier_size=5`, `w_*=1.0`, `robot_radius=0.17`, `clearance_margin_m=0.05`, `max_explore_radius=0.0`, `map_name` (required), `use_sim_time=True` | sim yamls |
+| `robot_explore.launch.py` | `max_frontier_dist=0.0`, `min_frontier_dist=0.5`, `preferred_goal_distance=2.0`, `blacklist_radius=0.5`, `frontier_buffer_cells=0`, `min_frontier_size=10`, `w_*=1.0`, `robot_radius=0.17`, `clearance_margin_m=0.05`; sets `slam_manager_node.map_persist_path` | `mapper_params_online_async.yaml`, `nav2_params_explore_real.yaml` |
 | `nav_experiment.launch.py` | Mirrors robot_explore minus the `w_*`/`robot_radius`/clearance overrides (node defaults apply); takes `slam_config`/`nav2_config` paths as args | user-supplied |
 | `robot_map.launch.py` | — | `mapper_params_online_async.yaml`, `nav2_params_real.yaml` |
 | `robot_nav.launch.py` | — | `nav2_params_localization_real.yaml` + `nav2_params_real.yaml`, static map `~/.dome/slam_maps/basement1.yaml` |
@@ -204,15 +200,19 @@ These require a code edit to change.
 
 - **Two-layer params**: `ExploreParams` (shared, node-owned) + `FrontierParams`
   (algorithm-owned) are merged each tick into `FrontierTuning` by `merge_tuning`
-  (frontier_params.py:30-87), which the pure functions in `frontier_explorer.py` consume.
-  Constraint: `blacklist_radius > goal_inset_m` is enforced at merge time.
+  (frontier_params.py), which the pure functions in `frontier_explorer.py` consume.
+  Constraint: `blacklist_radius > goal_inset_m` is enforced at merge time. The
+  shared overlay is exactly two fields — `max_explore_radius`, `blacklist_radius`
+  (F34 T03 ownership rule: shared iff the node itself reads it).
 - **Algorithm registry**: `ALGORITHM_REGISTRY` (explorer_manager_node.py:47-51) maps
   `explore_algorithm` → class. Each algorithm self-declares its ROS params through the
   `declare_params(node)` protocol hook (explore_context.py:102-107). To add a tunable
   per-algorithm knob, add a field to `FrontierParams` and a matching entry in
   `declare_frontier_params()` — the launch/yaml plumbing then works automatically.
 - **Known quirks**:
-  - `blacklist_radius` is the only shared tuning with no ROS/launch exposure.
+  - `blacklist_radius` is now a declared ROS param (F34 T02), exposed in
+    `robot_explore`, `sim_explore_node`, `just_explorer`, `nav_experiment`;
+    `sim_nav_full` leaves it at the default.
   - `goal_inset_m` is ROS-declared but no launch file sets it.
 
 ---

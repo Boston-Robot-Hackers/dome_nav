@@ -201,7 +201,7 @@ local_costmap:
       width: 5  # upstream: 3
       height: 5  # upstream: 3
       resolution: 0.05
-      robot_radius: 0.15  # upstream: 0.22
+      robot_radius: 0.17  # upstream: 0.22 -- true DOME 0.16 + 1cm pad, matches explorer + mini yaml
       plugins:
       - voxel_layer
       - inflation_layer
@@ -253,7 +253,7 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
-      robot_radius: 0.15  # upstream: 0.22
+      robot_radius: 0.17  # upstream: 0.22 -- true DOME 0.16 + 1cm pad, matches explorer + mini yaml
       resolution: 0.05
       track_unknown_space: true
       # These 3 were misnested under static_layer, where they're not declared

@@ -15,6 +15,7 @@ def robot_explore_launch(
     use_sim_time: str = "false",
     map_name: str = "",
     max_explore_radius: float = 0.0,
+    blacklist_radius: float = 0.5,
 ):
     if not map_name:
         raise ValueError(
@@ -56,15 +57,16 @@ def robot_explore_launch(
     # 2.0 vs 1.0, min_frontier_size 10 vs 15, frontier_buffer_cells 0 vs 2).
     # max_frontier_dist 0.0 = unlimited. The frontier params (min/max_frontier_dist,
     # min_frontier_size, frontier_buffer_cells) are declared by FrontierAlgorithm in
-    # the node's namespace (F23 T03) but set here by the same names. blacklist_radius
-    # (ExploreParams) and goal_inset_m (FrontierParams) are not exposed here -- they
-    # use dataclass defaults. Sim launch files set their own values.
+    # the node's namespace (F23 T03) but set here by the same names. goal_inset_m
+    # (FrontierParams) is not exposed here -- it uses the dataclass default.
+    # Sim launch files set their own values.
     bl.node(
         "dome_nav",
         "explorer_manager_node",
         name="explore_manager",
         params={
             "max_explore_radius": max_explore_radius,
+            "blacklist_radius": blacklist_radius,
             "max_frontier_dist": 0.0,
             "min_frontier_dist": 0.5,
             "preferred_goal_distance": 2.0,

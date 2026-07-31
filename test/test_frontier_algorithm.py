@@ -90,27 +90,25 @@ def test_next_goal_returns_xy_on_frontier_map():
     assert len(decision.xy) == 2
 
 
-# --- preferred_goal_distance plumbed through from the shared ExploreParams ---
+# --- preferred_goal_distance now lives in FrontierParams (F34 T03) ---
 
 def test_next_goal_large_preferred_dist_picks_far_cluster():
-    algo = make_algo()
+    algo = make_algo(make_frontier_params(preferred_goal_distance=1000.0))
     info = make_info(10, 1)
     # free cells 2, 4, 8 each border an unknown neighbor -> 3 separate frontier
     # clusters at world x=2.5, 4.5, 8.5. Robot at x=0.
     data = [0, 0, 0, -1, 0, 0, 0, 0, 0, -1]
-    shared = ExploreParams(preferred_goal_distance=1000.0)
-    ctx = make_ctx(data, info, shared=shared)
+    ctx = make_ctx(data, info)
     decision = algo.next_goal(ctx)
     assert decision.outcome is GoalOutcome.NEW_GOAL
     assert decision.xy[0] > 7.0
 
 
 def test_next_goal_zero_preferred_dist_picks_near_cluster():
-    algo = make_algo()
+    algo = make_algo(make_frontier_params(preferred_goal_distance=0.0))
     info = make_info(10, 1)
     data = [0, 0, 0, -1, 0, 0, 0, 0, 0, -1]
-    shared = ExploreParams(preferred_goal_distance=0.0)
-    ctx = make_ctx(data, info, shared=shared)
+    ctx = make_ctx(data, info)
     decision = algo.next_goal(ctx)
     assert decision.outcome is GoalOutcome.NEW_GOAL
     assert decision.xy[0] < 3.0
@@ -160,18 +158,6 @@ def test_frontier_buffer_cells_from_frontier_params_changes_frontier():
     assert at_boundary.outcome is GoalOutcome.NEW_GOAL
     assert inset.outcome is GoalOutcome.NEW_GOAL
     assert at_boundary.xy[0] != inset.xy[0]
-
-
-def test_prefer_farthest_from_frontier_params_picks_far_cluster():
-    # Deprecated prefer_farthest lives in FrontierParams; True makes selection
-    # farthest-first regardless of the shared preferred_goal_distance.
-    info = make_info(10, 1)
-    data = [0, 0, 0, -1, 0, 0, 0, 0, 0, -1]
-    ctx = make_ctx(data, info, shared=ExploreParams(preferred_goal_distance=0.0))
-    algo = make_algo(make_frontier_params(prefer_farthest=True))
-    decision = algo.next_goal(ctx)
-    assert decision.outcome is GoalOutcome.NEW_GOAL
-    assert decision.xy[0] > 7.0
 
 
 # --- latest_clusters populated after each call ---
@@ -305,7 +291,7 @@ def test_novelty_off_matches_default_selection():
 
 def test_novelty_on_sets_telemetry_score():
     data, info = unknown_row_map()
-    algo = make_algo(make_frontier_params(use_novelty_scoring=True, novelty_top_n=5))
+    algo = make_algo(make_frontier_params(use_novelty_scoring=True))
     decision = algo.next_goal(make_ctx(data, info, robot_xy=(0.5, 1.5)))
     if decision.outcome is GoalOutcome.NEW_GOAL:
         assert algo.latest_novelty is not None
@@ -350,7 +336,6 @@ def test_merge_tuning_carries_scorer_weights_and_clearance():
 
 
 def test_session_params_include_novelty_settings():
-    algo = make_algo(make_frontier_params(use_novelty_scoring=True, novelty_top_n=7))
+    algo = make_algo(make_frontier_params(use_novelty_scoring=True))
     params = algo.session_params()
     assert params["use_novelty_scoring"] is True
-    assert params["novelty_top_n"] == 7

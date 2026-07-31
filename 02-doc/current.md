@@ -3,7 +3,36 @@
 Concise cold-start orientation. Detailed history lives in git log and the
 `04-tasks/` files — do **not** re-narrate it here.
 
-**Date:** 2026-07-29 · **Branch:** main
+**Date:** 2026-07-30 · **Branch:** semantic-exploration
+
+## This session (2026-07-30) — F34 tuning single-source DONE + F33 written
+
+F34 complete (T01–T05); F33 written. Work uncommitted — full diff loose in tree.
+
+- **F34 tuning single-source — DONE.** Dataclass = single source of truth for
+  explorer tuning. **T01**: `declare_frontier_params` declares/reads via
+  `dataclasses.fields()` loop; `merge_tuning` deduped to `fields()` iteration +
+  shared overlay; per-field metadata (`ros_description`/`ros_important`/
+  `ros_dynamic`), scorer weights carry `FloatingPointRange(from_value=0.0)`.
+  `prefer_farthest` deleted. **T02**: `blacklist_radius` now a real ROS param
+  (was silently pinned 0.5). **T03**: ownership rule settled — *shared iff the
+  node itself reads it*; `preferred_goal_distance` moved
+  `ExploreParams` → `FrontierParams` (scorer-only); `HelloWorldAlgorithm` gained
+  its own same-named step param; shared overlay now exactly 2 fields
+  (`max_explore_radius`, `blacklist_radius`); node telemetry key preserved via
+  `FrontierAlgorithm.session_params()`. **T04**: launch move transparent (all 5
+  files set it by name, now declared by the algorithm); `tunable_parameters.md`
+  reconciled. **T05**: suite 281 pass, colcon clean, literate `07`/`08`
+  regenerated, DRY chore removed, F34/TF34 moved to `done/`. F34 is the
+  **enabler** for F33 Phase B. **Not yet committed.**
+- **F33 semantic exploration** (dome_nav × dome_vision) written — explore + recognize
+  objects → semantic map in SLAM-map coords, reusable by Mode B go-to-label.
+  Settled: frame of record = `map`; contract = typed `SemanticTarget` msg in new
+  `dome_semantic_msgs` pkg; map owned by new neutral `dome_semantic` pkg. Phased
+  A (contract+adapter+launch) / C (explore-then-survey) / B (vision-aware explore,
+  depends F32 revival). **TF33 = Phase A only, T01–T10 not started.** Motivation:
+  `02-doc/analysis.md`.
+- **Uncommitted** — F34 T01/T02 work not yet committed.
 
 ## This session (2026-07-29) — live explore tuning: livelock + wedge root-caused, speeds lowered
 
@@ -237,7 +266,7 @@ the shared set.
 - `min_frontier_size`: 15 default / **5** sim / 10 real (launch)
 - `frontier_buffer_cells`: 2; `goal_inset_m`: 0.3
 - `preferred_goal_distance`: 1.0 real / 2.0 sim — `min |d - preferred|`
-- `use_novelty_scoring`: False (F15, opt-in); `novelty_top_n`: 5
+- `use_novelty_scoring`: False (F15, opt-in)
 - `max_explore_radius`: 0.0; `blacklist_radius`: 0.5 m
 - Node constants: `EXPLORE_HZ` 1, `NO_FRONTIER_PATIENCE` 14,
   `GOAL_TIMEOUT_S` 25, `STUCK_T_S` 20, `MAX_GOAL_ATTEMPTS` 8,

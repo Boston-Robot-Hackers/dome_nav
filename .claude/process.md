@@ -24,6 +24,8 @@
 * Numbered issues in `05-issues/{open,closed,deferred}/`; follow the template.
 * New issues → `open/`; → `closed/` when resolved or converted to a feature/task; → `deferred/` when explicitly deferred.
 
+* Whenevcer transitioning from working on one task, feature, chore, to another, stop and ask for permission to switch.
+
 # bootstrap
 * When asked to bootstrap a new project, create the following structure:
   - `LICENSE` — copy from `.claude/templates/LICENSE.template`, fill in year and author
