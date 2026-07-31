@@ -1,6 +1,6 @@
 # Code Review Checklist
 
-Version: 4.0 — universal Python review guide.
+Version: 4.1 — universal Python review guide.
 
 `MUST` blocks unless waived in the task/PR. `SHOULD` = expected default.
 `CONSIDER` = review prompt, not a mechanical rule. Prefer a linter/type-checker
@@ -16,9 +16,9 @@ human review on the judgment items below.
 - Before a PR: regenerate `01-literate/<module>.md` for each changed source file.
 
 ## Errors — report, don't guess and "fix"
-When code hits something wrong or unexpected, report it (raise or warn). Do not
-infer intent and "correct" it — a guess-and-repair hides a real bug or invents
-new wrong behavior. If the bad value came from our own code, fix it at source.
+On something wrong or unexpected, raise or warn — never infer intent and
+"correct" it. A guess-and-repair hides a real bug or invents new wrong
+behavior; if the bad value is ours, fix it at the source.
 
 **MUST**
 - Don't compensate for a violated expectation by coercing, defaulting, or
@@ -74,6 +74,10 @@ Numeric limits below are smells, not laws — they flag a function doing too muc
 not a hard cap.
 
 **MUST**
+- Bias to less code. Before writing any, ask "is this needed?" — not writing it
+  beats adding it. No speculative error handling, recovery, defaults, config, or
+  abstraction the spec doesn't require; every guard must catch a real, reachable
+  case.
 - Functions <= ~50 lines, files <= ~300 lines where practical.
 - Avoid if/else nesting > 1 deep and if-chains > 3 branches; extract helpers,
   return early, or use a lookup table. Extraction for branching or naming beats
