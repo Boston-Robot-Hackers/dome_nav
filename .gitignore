@@ -1,12 +1,1 @@
-.claude/settings.local.json
-__pycache__/
-*.pyc
-build/
-install/
-log/
-
-# stray screenshots / scratch images (not repo assets)
-/rviz.png
-
-# macOS AppleDouble metadata files
-._*
+# repo-specific ignores
