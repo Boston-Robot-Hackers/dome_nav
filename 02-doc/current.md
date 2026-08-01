@@ -3,7 +3,30 @@
 Concise cold-start orientation. Detailed history lives in git log and the
 `04-tasks/` files — do **not** re-narrate it here.
 
-**Date:** 2026-07-30 · **Branch:** semantic-exploration
+**Date:** 2026-07-31 · **Branch:** semantic-exploration
+
+## This session (2026-07-31) — F35 mission-layer extracted to dome_mission
+
+New sibling package **dome_mission** (own repo `Boston-Robot-Hackers/dome_mission`)
+now owns `/intent` and mission sequencing; dome_nav is navigation **primitives
+only**. TF35 T01–T07 done; T08 (these docs) in progress. Live sim bring-up still
+pending a sim host (gz can't run on this Pi).
+
+- **Layering**: `/intent` → dome_mission FSM → `ExploreArea` action (dome_nav
+  explorer) + Nav2 `NavigateToPose` (direct). Semantic map (`SemanticTargetArray`,
+  `dome_semantic_msgs`) → dome_mission label→pose. dome_nav never depends on
+  `dome_semantic_msgs`.
+- **dome_nav changes**: `nav_manager` + `nav_manager_node` **deleted** (go-to-label
+  moved to dome_mission `label_resolver` + `mission_node`). `explorer_manager_node`
+  dropped `/intent`, now exposes the **`ExploreArea` action** (`explore_area`;
+  blocking execute + `MultiThreadedExecutor` + reentrant group so the 1 Hz tick and
+  feedback run concurrently; `session_outcome` set at the DONE paths). Added
+  `dome_nav_msgs` dep. F02/F08 records + `tools/nav_intent_check.py` relocated to
+  dome_mission. Suite **231 pass** (4 known live-stack `test_map_validation` need a
+  robot).
+- **New interface pkg** `dome_nav_msgs` (ament_cmake): `ExploreArea.action`.
+- **Verify**: live smoke confirmed `/explore_area` advertised + explorer has no
+  `/intent` sub (single-handler invariant met).
 
 ## This session (2026-07-30) — F34 tuning single-source DONE + F33 written
 

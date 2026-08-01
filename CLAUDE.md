@@ -12,3 +12,8 @@ We are developing dome_nav, a ROS2 navigation package that wraps slam_toolbox an
 for the DOME robot. Literate docs are in `01-literate/`, project docs are in `02-doc/`,
 features are in `03-features/`, tasks are in `04-tasks/`, issues are in `05-issues/`,
 and the spec is in `02-doc/spec.md`.
+
+dome_nav is navigation **primitives only** (F35): SLAM, Nav2, frontier explore
+exposed as the `ExploreArea` action (`dome_nav_msgs`). Mission sequencing and
+go-to-label live in the sibling **dome_mission** package, which owns `/intent`.
+dome_nav never depends on `dome_semantic_msgs`.

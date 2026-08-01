@@ -1,6 +1,6 @@
 ---
-version: "1.0"
-generated: "2026-07-24"
+version: "2.0"
+generated: "2026-07-31"
 ---
 
 # The Exploration Session Manager — `explorer_manager_node.py`
@@ -22,11 +22,11 @@ the pure functions stay clean.
 ```mermaid
 stateDiagram-v2
     [*] --> idle
-    idle --> exploring: exploration_start intent
+    idle --> exploring: ExploreArea goal
     exploring --> exploring: tick picks + sends goals
     exploring --> done: frontiers exhausted / patience out / wedged
-    exploring --> idle: exploration_stop intent
-    done --> exploring: exploration_start intent
+    exploring --> idle: goal cancel
+    done --> exploring: ExploreArea goal
     note right of exploring
         1 Hz tick:
         fetch grids on demand
@@ -36,7 +36,47 @@ stateDiagram-v2
 ```
 
 The node is a small state machine (`idle` / `exploring` / `done`) driven by a
-1 Hz timer and by intents on `/intent`.
+1 Hz timer and by the **`ExploreArea` action** (F35). It used to subscribe
+`/intent` directly; now dome_mission owns `/intent` and calls this action, so the
+explorer is a reusable navigation primitive that knows nothing about intents.
+
+## Triggering a session — the `ExploreArea` action
+
+A session is one action goal. The goal's `map_name` names the SLAM map (empty
+keeps the current one); the result `outcome` mirrors the internal
+`GoalDecision` (`EXPLORED_DONE` / `STOPPED` / `NO_TARGETS_BLOCKED`); feedback
+carries `frontiers_remaining`, `explored_area_m2`, and the `current_goal`.
+
+The subtlety is that exploration is *timer-driven*, not a blocking loop, yet an
+action `execute_callback` must block until the result is ready. The node
+reconciles this with a `MultiThreadedExecutor` and a single
+`ReentrantCallbackGroup` shared by the timer and the action server: the execute
+callback blocks in its own thread — publishing feedback and watching for a
+cancel — while the 1 Hz `explore_tick` runs concurrently and advances the state
+machine. When the tick declares the session over it sets `session_outcome` and
+flips the state; the execute loop observes `state != "EXPL"`, calls
+`goal_handle.succeed()`, and returns the outcome. A cancel request maps to
+`STOPPED`.
+
+```python
+def execute_explore(self, goal_handle):
+    self.active_goal_handle = goal_handle
+    self.start_session(goal_handle.request.map_name)
+    while rclpy.ok():
+        if goal_handle.is_cancel_requested:
+            self.stop_exploring("IDLE")
+            goal_handle.canceled()
+            return ExploreArea.Result(outcome=ExploreArea.Result.STOPPED)
+        if self.state != "EXPL":            # the tick declared DONE
+            goal_handle.succeed()
+            return ExploreArea.Result(outcome=self.session_outcome)
+        goal_handle.publish_feedback(self.explore_feedback())
+        time.sleep(0.5)
+```
+
+Session *start* is factored into `start_session(map_name)` — reset counters,
+spin up TF, flip to `EXPL` — so the same logic serves the action and unit tests
+without a live graph.
 
 ## The CPU-frugality theme
 

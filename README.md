@@ -3,7 +3,17 @@
 Navigation and SLAM management package for the DOME robot.
 
 Wraps slam_toolbox and Nav2. Owns all SLAM/navigation config, manages map
-persistence across sessions, and bridges dome_control intents to Nav2 goals.
+persistence across sessions, and exposes navigation **primitives** — including
+autonomous exploration as the `ExploreArea` action (`dome_nav_msgs`).
+
+Mission sequencing and go-to-label were extracted to the neutral **dome_mission**
+package (F35); dome_nav no longer owns `/intent` or semantic knowledge.
+
+## Related packages
+
+- **dome_mission** — mission FSM; owns `/intent`, drives `ExploreArea` + Nav2.
+- **dome_nav_msgs** — the `ExploreArea` action interface (ament_cmake).
+- **dome_semantic_msgs** — `SemanticTarget` / `SemanticTargetArray`.
 
 ## Quick start
 

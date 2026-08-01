@@ -58,9 +58,12 @@ protocol; the default `FrontierAlgorithm` wraps the pure detection/scoring
 functions in `frontier_explorer`. This is the larger and more algorithmically
 interesting half.
 
-**Intent navigation** (go-to-object). Entry point `nav_manager_node`; the pure
-decision logic (intent parsing, target selection, localization scoring) lives in
-`nav_manager`. Simpler, but the same shape.
+**Intent navigation** (go-to-object) **has moved out** (F35). Mission sequencing
+and go-to-label now live in the neutral `dome_mission` package; dome_nav is
+navigation **primitives only**. The explorer no longer subscribes `/intent` — it
+exposes exploration as a cancellable `ExploreArea` action (`dome_nav_msgs`) that
+dome_mission drives. The former `nav_manager` / `nav_manager_node` are deleted;
+their go-to-label logic is dome_mission's `label_resolver` + `mission_node`.
 
 Plus two supporting concerns: **map persistence** (`slam_manager_node`, a
 lifecycle node that saves the pose graph at the right moment) and **launch**
@@ -75,11 +78,12 @@ Nearly every module in this package is built around a single principle:
 
 It shows up three times, in three forms:
 
-1. **Pure core / thin node.** `nav_manager` (pure) vs `nav_manager_node` (ROS);
-   `frontier_explorer` (pure) vs `explorer_manager_node` (ROS). The pure halves
-   have no rclpy import and are unit-tested with plain Python values — no
-   simulator, no graph. The nodes own only what *must* be impure: TF, action
-   clients, timers, the clock.
+1. **Pure core / thin node.** `frontier_explorer` (pure) vs
+   `explorer_manager_node` (ROS). The pure half has no rclpy import and is
+   unit-tested with plain Python values — no simulator, no graph. The node owns
+   only what *must* be impure: TF, action clients/servers, timers, the clock.
+   (The same split, applied to go-to-label, now lives across the boundary in
+   `dome_mission`.)
 
 2. **Contract / implementations.** `explore_context` defines the data types and
    the `ExplorationAlgorithm` protocol; `frontier_algorithm` and
@@ -134,11 +138,13 @@ The chapters are numbered by dependency — foundations first, orchestration las
 
 1. **01-utils** — launch/config plumbing everything leans on.
 2. **02-slam_manager_node** — map persistence (lifecycle node).
-3. **03-nav_manager_node** / **05-nav_manager** — intent navigation (shell + core).
-4. **04-explore_context** — the exploration contract.
-5. **06-frontier_explorer** — the pure detection + F31 scoring engine (the deep one).
-6. **08-frontier_algorithm** — the default algorithm + its tuning.
-7. **09-explorer_manager_node** — the session orchestrator.
-8. **10-algo_demo** — an interactive way to watch the algorithm think.
-9. **X05–X08** — appendices: telemetry, markers, sim launch files, the minimal
+3. **04-explore_context** — the exploration contract.
+4. **06-frontier_explorer** — the pure detection + F31 scoring engine (the deep one).
+5. **08-frontier_algorithm** — the default algorithm + its tuning.
+6. **09-explorer_manager_node** — the session orchestrator + ExploreArea action server.
+7. **10-algo_demo** — an interactive way to watch the algorithm think.
+8. **X05–X08** — appendices: telemetry, markers, sim launch files, the minimal
    reference algorithm.
+
+(Intent-navigation chapters 03/05 were removed when go-to-label moved to
+`dome_mission`; its literate lives in that package.)
