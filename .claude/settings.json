@@ -4,22 +4,9 @@
       "Bash(git add *)",
       "Bash(git commit *)",
       "Bash(git push *)",
-      "Bash(python3 -m pytest test/ -v)",
-      "Bash(python3 -c \"import rclpy\")",
-      "Bash(grep '\\\\.py$')",
-      "Bash(python3 *)",
-      "Read(//home/pitosalas/ros2_ws/**)",
-      "Bash(colcon build *)",
-      "Bash(cd *)",
-      "Edit(/home/pitosalas/ros2_ws/**)",
-      "Bash(ln:*)",
       "Bash(git add:*)",
       "Bash(git commit -m ':*)",
-      "Bash(git push:*)",
-      "Bash(ros2 topic info *)",
-      "Bash(ros2 topic list*)",
-      "Bash(ros2 node list*)",
-      "Bash(ros2 pkg prefix *)"
+      "Bash(git push:*)"
     ]
   }
 }
