@@ -9,6 +9,24 @@ Think of it as a true interactive lesson about algorithms, data structures and t
 
 Add a section at the end with observation on how the code can be improved in clarity, features, performance or any other ways.
 
+Length & density: be thorough but skimmable, not terse. Prefer fewer,
+sharper points over exhaustive ones — pick the load-bearing design
+decisions per module rather than commenting on every line — but don't
+compress everything into a handful of dense paragraphs either. A prose
+section should not restate what the adjacent code block already makes
+obvious; only add prose where it explains something the code doesn't.
+Cap the closing observations list at 3-6 items.
+
+Formatting for skimmability:
+- Short paragraphs: 2-4 sentences each, one idea per paragraph.
+- Use bulleted/numbered lists for anything enumerable (steps, cases,
+  trade-offs, alternatives) instead of folding them into prose.
+- Use **bold** for key terms and load-bearing phrases, *italics* for
+  emphasis or naming a pattern/technique, so a reader scanning the page
+  can pick up the throughline without reading every sentence.
+- Prefer several short, clearly-headed subsections over one long
+  undifferentiated one.
+
 Guidelines:
 - Begin with a brief introduction explaining what the program does and why
 - Organize sections around concepts and ideas, not necessarily the order 
