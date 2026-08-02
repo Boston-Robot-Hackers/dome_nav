@@ -5,12 +5,19 @@
 
 import json
 import math
+import queue
+import threading
 import time
 from unittest.mock import MagicMock, patch
 import pytest
 import rclpy
+import rclpy.task
 from action_msgs.msg import GoalStatus
 from nav_msgs.msg import OccupancyGrid
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.qos import (
+    QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy,
+)
 from dome_nav.explore_context import ExploreParams, GoalDecision, GoalOutcome
 from dome_nav.frontier_params import FrontierParams
 from dome_nav.frontier_algorithm import FrontierAlgorithm
@@ -833,3 +840,91 @@ def test_on_goal_result_failure_still_blacklisted(node):
     )
     assert node.goals_failed == 1
     assert (1.0, 2.0) in node.blacklist
+
+
+# --- I01 (dome_mission issue tracker): explore_tick's on-demand grid fetch
+# races a concurrently spinning executor. `fetch_grid` (via rclpy's
+# `wait_for_message`) creates a subscription, blocks on a private WaitSet
+# outside the executor, then destroys the subscription — mutating the node's
+# entity list from whatever thread calls it. `explore_tick` (a real 1Hz timer
+# callback) calls it whenever there's no active goal, from a worker thread
+# under the MultiThreadedExecutor + ReentrantCallbackGroup this node runs
+# under (see main()), concurrently with the main thread's own wait-set-rebuild
+# loop. When a destroy lands mid-rebuild, rclpy raises
+# `InvalidHandle: cannot use Destroyable because destruction was requested`,
+# which is exactly what crashed explorer_manager_node live (dome_mission
+# 05-issues/open/I01-explore-manager-crash-on-completion.md).
+#
+# This test never calls fetch_grid (or explore_tick) directly — it only ever
+# calls the real public start_session(), the same entry point
+# execute_explore uses, then lets the node's own real timer drive
+# explore_tick -> find_and_send_goal -> fetch_grid exactly as production
+# does. The one liberty taken for test speed: EXPLORE_HZ is patched higher
+# before construction (the timer period is fixed at __init__ time), so many
+# real ticks happen per second instead of one. With MockAlgorithm's default
+# "always blocked" decision, no nav goal is ever sent, so has_active_goal
+# stays False and every tick re-enters the fetch_grid branch — the session
+# naturally ends after NO_TARGET_PATIENCE-driven ticks, so the test restarts
+# it via start_session() in a loop to keep generating fresh fetch_grid calls
+# for the whole test window.
+#
+# Timing-dependent by nature: it fails on the buggy fetch_grid most runs
+# within the time budget below, but a race is never 100% guaranteed on any
+# given run. Not part of the plain fast suite; marked manual.
+#
+# Catching it: the InvalidHandle exception doesn't reliably propagate out of
+# executor.spin() itself — the MultiThreadedExecutor dispatches ready-waitable
+# handling through its own rclpy.task.Future/Task machinery, and a raise
+# inside that gets stashed via Future.set_exception() rather than raised
+# synchronously. If nothing calls .result()/.exception() on that Future, it
+# is silently dropped except for a stderr print from Future.__del__ at GC
+# time ("The following exception was never retrieved: ...") — easy to miss
+# and not something a bare try/except around spin() catches. So this test
+# patches rclpy.task.Future.set_exception for its duration to capture every
+# exception the executor's internal task machinery records, in addition to
+# the try/except around spin() itself (belt and suspenders: some failures
+# may still raise synchronously on the spin thread).
+
+
+@pytest.mark.manual
+def test_explore_tick_survives_concurrent_executor_spin(ros):
+    from dome_nav.explorer_manager_node import ExplorerManagerNode
+
+    with patch("tf2_ros.TransformListener"), \
+         patch("rclpy.action.ActionClient"), \
+         patch("dome_nav.explorer_manager_node.TelemetryWriter",
+               return_value=MagicMock()), \
+         patch.object(ExplorerManagerNode, "EXPLORE_HZ", 200.0):
+        node = ExplorerManagerNode(algorithm=MockAlgorithm())
+
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
+    errors: queue.Queue = queue.Queue()
+
+    def spin():
+        try:
+            executor.spin()
+        except Exception as exc:
+            errors.put(exc)
+
+    original_set_exception = rclpy.task.Future.set_exception
+
+    def capturing_set_exception(self, exception):
+        errors.put(exception)
+        original_set_exception(self, exception)
+
+    spin_thread = threading.Thread(target=spin, daemon=True)
+    with patch.object(rclpy.task.Future, "set_exception", capturing_set_exception):
+        spin_thread.start()
+        try:
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline and errors.empty():
+                if node.state in ("IDLE", "DONE"):
+                    node.start_session()
+                time.sleep(0.02)
+        finally:
+            executor.shutdown()
+            spin_thread.join(timeout=5.0)
+            node.destroy_node()
+
+    assert errors.empty(), f"executor thread crashed: {errors.get()!r}"

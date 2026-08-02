@@ -26,7 +26,6 @@ from rclpy.qos import (
     QoSProfile,
     QoSReliabilityPolicy,
 )
-from rclpy.wait_for_message import wait_for_message
 from std_msgs.msg import String
 from visualization_msgs.msg import MarkerArray
 
@@ -116,15 +115,21 @@ class ExplorerManagerNode(Node):
         )
         self.active_goal_handle = None
         self.explored_area_m2 = 0.0
-        # Grids fetched on demand (fetch_grid) while exploring, not held as standing
-        # subs (idle deserialize burned 10-20% CPU on the Pi). Must match the latched
-        # publishers' QoS for wait_for_message to return the last grid.
+        # Grid subscriptions run only while exploring, same rationale and pattern
+        # as the TF listener below: an idle node deserializes no grid traffic.
+        # Must match the latched publishers' QoS to receive the last grid on
+        # subscribe. Created in start_grids/exploration_start, torn down in
+        # stop_grids/stop — never dynamically created+destroyed per read, which
+        # used to race the executor's own wait-set rebuild (I01).
         self.map_qos = QoSProfile(
             depth=1,
             history=QoSHistoryPolicy.KEEP_LAST,
             reliability=QoSReliabilityPolicy.RELIABLE,
             durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
         )
+        self.map_sub = None
+        self.global_costmap_sub = None
+        self.local_costmap_sub = None
         # TF listener runs only while exploring: /tf at ~40Hz costs ~8% CPU to
         # deserialize for a 1Hz pose. Started in exploration_start, torn down in stop.
         self.tf_buffer: tf2_ros.Buffer | None = None
@@ -165,18 +170,6 @@ class ExplorerManagerNode(Node):
         self.reset_session()
         self.clear_active_goal()
         self.get_logger().info("ExplorerManagerNode ready.")
-
-    def fetch_grid(self, topic: str) -> OccupancyGrid | None:
-        """On-demand latest grid from the latched publisher, or None if none arrives.
-
-        Deserializes here only, never while idle. Briefly blocks the executor up to
-        time_to_wait (~ms).
-        """
-        ok, msg = wait_for_message(
-            OccupancyGrid, self, topic,
-            qos_profile=self.map_qos, time_to_wait=1.0,
-        )
-        return msg if ok else None
 
     def goal_within_costmap_bounds(self, xy: XY) -> bool:
         """True if xy maps inside the global costmap (None costmap ⇒ True).
@@ -238,7 +231,6 @@ class ExplorerManagerNode(Node):
         self, goal_xy: XY, robot_xy: XY | None, status: str, elapsed: float,
         nav2_error_code: int = 0, nav2_error_msg: str = "",
     ):
-        self.latest_local_costmap = self.fetch_grid("/local_costmap/costmap")
         report = self.call_hook("failure_report", self.render_context(robot_xy))
         self.get_logger().warning(format_failure_diagnostics(
             goal_xy, robot_xy, status, elapsed, self.goal_count,
@@ -259,6 +251,7 @@ class ExplorerManagerNode(Node):
             self.map_name = map_name
         self.reset_session()
         self.start_tf()
+        self.start_grids()
         # start_xy stays None here: the fresh TF buffer is still empty, so it is
         # captured on the first tick where map->base_footprint resolves.
         self.state = "EXPL"
@@ -335,11 +328,7 @@ class ExplorerManagerNode(Node):
             if self.has_active_goal:
                 self.check_goal_timeout()
             return
-        # Fetch grids on demand only when about to pick a goal — keeps the idle
-        # node free of standing grid subscriptions (the CPU sink).
-        self.latest_map = self.fetch_grid("/map")
         self.explored_area_m2 = self.known_area_m2(self.latest_map)
-        self.latest_global_costmap = self.fetch_grid("/global_costmap/costmap")
         self.find_and_send_goal()
 
     def known_area_m2(self, grid: OccupancyGrid | None) -> float:
@@ -653,6 +642,7 @@ class ExplorerManagerNode(Node):
         self.has_active_goal = False
         self.state = new_state
         self.stop_tf()
+        self.stop_grids()
         self.publish_status(new_state)
         self.get_logger().info(f"Exploration stopped → {new_state}.")
         self.telemetry.write(
@@ -680,6 +670,43 @@ class ExplorerManagerNode(Node):
                 self.destroy_subscription(sub)
         self.tf_listener = None
         self.tf_buffer = None
+
+    def start_grids(self):
+        # Standing grid subscriptions on demand (see __init__ note); the
+        # callbacks just cache the latest message, no blocking read.
+        if self.map_sub is not None:
+            return
+        self.map_sub = self.create_subscription(
+            OccupancyGrid, "/map", self.on_map, qos_profile=self.map_qos,
+        )
+        self.global_costmap_sub = self.create_subscription(
+            OccupancyGrid, "/global_costmap/costmap", self.on_global_costmap,
+            qos_profile=self.map_qos,
+        )
+        self.local_costmap_sub = self.create_subscription(
+            OccupancyGrid, "/local_costmap/costmap", self.on_local_costmap,
+            qos_profile=self.map_qos,
+        )
+
+    def stop_grids(self):
+        # Tear down so an idle node deserializes no grid traffic.
+        if self.map_sub is None:
+            return
+        self.destroy_subscription(self.map_sub)
+        self.destroy_subscription(self.global_costmap_sub)
+        self.destroy_subscription(self.local_costmap_sub)
+        self.map_sub = None
+        self.global_costmap_sub = None
+        self.local_costmap_sub = None
+
+    def on_map(self, msg: OccupancyGrid):
+        self.latest_map = msg
+
+    def on_global_costmap(self, msg: OccupancyGrid):
+        self.latest_global_costmap = msg
+
+    def on_local_costmap(self, msg: OccupancyGrid):
+        self.latest_local_costmap = msg
 
     def robot_xy_in_map(self) -> XY | None:
         if self.tf_buffer is None:
