@@ -1,16 +1,178 @@
 # dome_nav — Current Session Handoff
 
-Concise cold-start orientation. Detailed history lives in git log and the
-`04-tasks/` files — do **not** re-narrate it here.
+Concise cold-start orientation covering roughly the last week. Older entries
+move to `02-doc/changelog.md` (rule in `.claude/process.md`) — do **not**
+re-narrate git history here.
 
-**Date:** 2026-07-31 · **Branch:** semantic-exploration
+**Date:** 2026-08-03 · **Branch:** main
+
+## This session (2026-08-03) — checkpoint: ruff clean, literate synced, T04/T06 committed
+
+Full `/checkpoint` run over today's `dome_semantic` work (T04 + T06). Tests:
+dome_semantic 127/127; dome_nav 236/241 (4 known live-stack `test_map_validation`
+need a robot + 1 flaky concurrency test that passes in isolation — not a
+regression, no dome_nav Python source touched this session). `ruff
+check`/`ruff format` now clean across `dome_semantic`, including fenced
+Python blocks inside `01-literate/*.md`. One deliberate reversal of a prior
+checkpoint's call: 2026-08-02 left two `SIM102` nested-if findings in
+`association.py` (T02 port) unfixed as out-of-scope; revisited and applied
+since the merge is a pure boolean identity, not a control-flow reshape — see
+`dome_semantic/02-doc/current.md` for the full reasoning. Simplified
+`semantic_persistence.py`'s legacy-format handling per review (dropped the
+speculative old-bare-array migration branch — no such file can exist at the
+new keyed path yet).
+
+## This session (2026-08-03) — TF33 T06 done: persistence keyed to SLAM map identity
+
+Continuation of today's TF33 work in the sibling `dome_semantic` package —
+the semantic map now survives a node restart.
+
+- **New `dome_semantic/semantic_persistence.py`**: `save_semantic_map`/
+  `load_semantic_map` write/read `~/.dome/semantic_maps/<map_name>.json`
+  (same `~/.dome/` root as `slam_maps/`/`telemetry/`; `map_name` mirrors
+  `explorer_manager_node`'s param and `slam_manager`'s `--map_name`).
+  Envelope format `{"map_name": ..., "targets": [...]}` wraps
+  `WorldTracker.to_json()` rather than teaching the pure tracking core about
+  map identity.
+- **Never a silent merge**: the filename is the primary key, but the
+  sanitizing regex is lossy (`"room a"`/`"room#a"` collide) — the
+  envelope's own `map_name` is a second check. Wrong `map_name` and
+  unrecognized formats (e.g. an old dome_vision-era bare-array file) share
+  one fallback path: fresh tracker + warning, never a guess. **Decided
+  against migrating the old bare-array format** — no such file can exist at
+  the new keyed path (map_name-keying didn't exist before this task), so a
+  migration branch would be speculative code; the safe fresh-map fallback
+  satisfies the style-guide MUST without one.
+- **Node wiring**: new `map_name` ROS param (default `"unknown"`); tracker
+  now built via `load_semantic_map(...)` instead of a bare `WorldTracker()`;
+  new `node.save()` called from `main()`'s `finally` (plain `Node`, not
+  `LifecycleNode`, so no `on_shutdown` hook exists to use instead).
+- **Tests**: 8 new (6 `test_semantic_persistence.py`, 2
+  `test_semantic_map_node.py`) — 127 total dome_semantic tests pass;
+  `colcon build --packages-select dome_semantic` clean.
+- **Literate**: new `12-semantic_persistence.md` chapter; renumbered
+  `semantic_map_node.py`'s chapter 12→13 (gained a "Persistence" section);
+  `00-overview.md` diagram/reading-order/"not wired in" list updated to
+  match — full set now 14 files (00 + 13 chapters).
+- **Also this session**: mermaid diagrams across the literate set
+  reoriented to `flowchart TD` (vertical) instead of `LR`/side-by-side
+  subgraphs, so they don't shrink to fit on the page.
+
+## This session (2026-08-03) — TF33 T04 done: typed publishing + node wiring
+
+Cross-repo work in the sibling `dome_semantic` package (F33/TF33 records stay
+in dome_nav per the T02 pattern). `SemanticMapNode` now publishes a real
+`/semantic/targets` feed — `dome_mission`'s consumer (TF35 T05) is unblocked
+end-to-end for the first time.
+
+- **New `/semantic/targets` (`SemanticTargetArray`), `/targets/markers`,
+  `/targets/assoc_diag`, `/describe_scene`** — ported from dome_vision's
+  retired node, retargeted to `map` frame. `/semantic/targets` and
+  `/targets/markers` throttled by a new `publish_every_n` ROS param (default
+  5); `/targets/assoc_diag` stays unthrottled (tuning-diagnostic feed).
+  Target orientation always published identity — `WorldTracker` has no
+  object-facing estimate, so there's nothing non-arbitrary to publish; the
+  mission-layer consumer uses `pose.orientation` for the robot's own arrival
+  heading, not a claim about the object.
+- **New `dome_semantic/tracker_params.py`**: `declare_tracker_config(node)`
+  walks `WorldTrackerConfig.model_fields` (pydantic) and declares every field
+  as a ROS param — mirrors dome_nav's F34 "dataclass is the single source of
+  truth" pattern, adapted for pydantic. Pure, node-duck-typed function,
+  tested with a `FakeNode` (no live rclpy needed), same testability trade as
+  `declare_frontier_params`.
+- **Considered, deferred**: matching dome_nav's fuller pattern
+  (`ParameterDescriptor` descriptions, `ros_important`/`ros_dynamic`
+  metadata, strict bool/int/float type gating) — not a direct port since
+  `WorldTrackerConfig` is pydantic (not a dataclass) and already has a `str`
+  field dome_nav's type gate doesn't support; the metadata flags are
+  documentation-only no-ops in dome_nav's own code today. Worth a real
+  `ParameterDescriptor(description=...)` pass later if `ros2 param describe`
+  becomes a workflow anyone relies on.
+- **Tests**: 9 new (4 `test_tracker_params.py`, 5 `test_semantic_map_node.py`)
+  — 119 total dome_semantic tests pass.
+- **Build gotcha hit and fixed**: `dome_semantic_msgs` failed with `CMake
+  Error: source directory ".../ros2_ws/dome_semantic_msgs" does not exist` —
+  a stale `build/dome_semantic_msgs` CMake cache from an earlier
+  misconfigured first build, pointing at a path missing `src/`. Fixed by
+  clearing `build/`/`install/`/`log/latest_build` for just that package
+  (regenerable artifacts, outside any git tree — `~/ros2_ws` itself isn't a
+  git repo) and rebuilding. `colcon build --packages-select
+  dome_semantic_msgs dome_semantic` now clean.
+- **Literate**: full `01-literate/` set generated for `dome_semantic` — a
+  `00-overview.md` theory-of-operation plus one dependency-ordered chapter
+  per module (12 total). The package had no literate docs before this
+  session.
+- **Considered and rejected (for now)**: extracting the "declare a typed
+  config object as ROS params" pattern into a shared, DOME-independent
+  package. Genuinely general in intent, but the two existing implementations
+  (dome_nav's dataclass+descriptor version, this session's bare pydantic
+  version) haven't converged — extracting now means designing a
+  dataclass-and-pydantic API from a sample of two. Revisit on a third
+  consumer, or once the two are deliberately unified.
+
+## This session (2026-08-03) — current.md refresh + changelog split
+
+`current.md` had drifted: its last dated entry was 2026-07-31 despite three
+more days of committed work (2026-08-01/02), and the recorded branch
+(`semantic-exploration`) no longer matched actual (`main`, clean). Backfilled
+the missing sessions below from git log + the `TF33`/`F33` files, corrected
+the branch, and split entries older than ~1 week into `02-doc/changelog.md`
+per a new `.claude/process.md` rule. No code changed.
+
+## This session (2026-08-02) — TF33 T02/T03 done (dome_semantic package + map-frame TF/re-basing); I01 grid-fetch race fixed
+
+- **TF33 T02 — `dome_semantic` package created.** New sibling repo
+  `~/ros2_ws/src/dome_semantic` (full `.claude`/doc/feature/task bootstrap;
+  F33/TF33 records stay in dome_nav for now, same relocate-with-the-code
+  pattern F35 used). Ported `world_tracker.py` + its full pure dependency
+  closure (`association.py`, `class_profiles.py`, `size_estimate.py`,
+  `targets.py`, `tracker_config.py`, `geometry.py`), behavior-preserving.
+  Deliberate deviation: extracted `cosine_sim` into a new 15-line
+  `embedding_similarity.py` instead of importing dome_vision's `embedding.py`
+  whole (avoids pulling `torch`/`torchvision`/`cv2` into a lightweight
+  tracking-only package). `dome_vision_ros`'s live `semantic_map_node.py`
+  still uses the old `dome_vision.world_tracker` directly — cleanup deferred
+  until `dome_semantic`'s own node (T03/T04) is proven. 83 ported tests pass,
+  `colcon build --packages-select dome_semantic` clean.
+- **TF33 T03 — `map`-frame recording + re-basing on map jumps.** Not a port —
+  this logic never existed (the old node only transformed camera→`odom`, no
+  re-basing). New `tf_adapter.py` (retargeted to `map`; transform lookup now
+  uses the detection's own stamp per F33 G1, not time-zero/latest). New pure
+  `map_rebasing.py` (`PlanarTransform`, SE(2) compose/invert/apply,
+  `has_jumped`, `rebase_delta`, `rebase_tracker`). New `semantic_map_node.py`
+  subscribes `/oak/detections_3d`, re-bases stored targets on a detected
+  `map→odom` jump; missing TF warns (throttled) and drops the detection, no
+  crash. Scope boundary: no `SemanticTargetArray` publishing yet (that's
+  T04) — this node only proves the TF integration. 25 new tests, 110 total
+  dome_semantic tests pass, `colcon build` clean.
+- **I01 (dome_mission) — grid-fetch race fixed.** `fetch_grid()`'s
+  create/destroy-a-subscription-per-tick pattern raced the
+  `MultiThreadedExecutor`'s wait-set rebuild on another thread, occasionally
+  raising `InvalidHandle` live. Fixed with standing grid subscriptions
+  (`start_grids`/`stop_grids`, same lifecycle as the TF listener; callbacks
+  just cache the latest message). Also carries the Kilted
+  `nav2_params_explore_real.yaml` fix (`error_code_names` →
+  `error_code_name_prefixes`, `enable_stamped_cmd_vel: false`) that TF35 T07
+  applied live but never committed.
+- **Docs sync**: `.claude/literate.md` + `.claude/process.md` refreshed from
+  the master `j3` kit (density/skimmability rules; `.md`-writing formatting
+  rules folded in).
+
+## This session (2026-08-01) — live sim bring-up verified; housekeeping
+
+- **TF35 T07 live sim bring-up verified**: `ExploreArea` action server +
+  `/intent`-free explorer confirmed against the sim stack, closing the
+  "pending a sim host" gap noted 2026-07-31 below.
+- **Housekeeping**: `.gitignore` trimmed (common patterns moved to the global
+  gitignore); `.claude/` config synced from the `j3` kit
+  (`bootstrap.md`, `checkpoint.md` command updates).
 
 ## This session (2026-07-31) — F35 mission-layer extracted to dome_mission
 
 New sibling package **dome_mission** (own repo `Boston-Robot-Hackers/dome_mission`)
 now owns `/intent` and mission sequencing; dome_nav is navigation **primitives
-only**. TF35 T01–T07 done; T08 (these docs) in progress. Live sim bring-up still
-pending a sim host (gz can't run on this Pi).
+only**. TF35 T01–T08 all done (T08 landed same day). Live sim bring-up
+verified 2026-08-01 (see above).
 
 - **Layering**: `/intent` → dome_mission FSM → `ExploreArea` action (dome_nav
   explorer) + Nav2 `NavigateToPose` (direct). Semantic map (`SemanticTargetArray`,
@@ -57,199 +219,20 @@ F34 complete (T01–T05); F33 written. Committed in `d4a16f4`.
   `02-doc/analysis.md`.
 - **Committed** — F34 (T01–T05) + F33 feature/task files landed in `d4a16f4`.
 
-## This session (2026-07-29) — live explore tuning: livelock + wedge root-caused, speeds lowered
-
-All changes in `config/nav2_params_explore_real.yaml` (live real-robot explore). The
-2026-07-24 open question ("MPPI-stall vs monitor-gate", below) is now **answered**.
-
-- **Livelock fixed — tolerance stacking.** Explorer fake-"REACHED (dist=0.93m) in 0.1s"
-  repeatedly, robot never moving, same frontier re-picked 90+ times. Cause: planner
-  `GridBased.tolerance` 0.5 snapped an unreachable frontier goal to a path ending ~0.5 m
-  short, and controller `general_goal_checker.xy_goal_tolerance` 0.5 forgave another
-  0.5 m → a goal ~0.93 m away counted as reached with zero motion. **Fix: `GridBased.tolerance`
-  0.5 → 0.1** (line 223) → unreachable goal now aborts `NO_VALID_PATH`, explorer blacklists +
-  reselects instead of livelocking. `xy_goal_tolerance` left at 0.5.
-- **Wedge root-caused — FootprintApproach (monitor-gate, NOT MPPI).** After the livelock fix,
-  planner drew a good path but robot still didn't move. Split test resolved the 07-24 open
-  question: `cmd_vel_nav` = 0.09 (MPPI commanding motion) but `cmd_vel` = 0. Live deadband
-  verified `[0,0,0]` (smoother clean, Bug 1 fix loaded). Log showed
-  `collision_monitor: Robot to approach for 1.200000 seconds away from collision` → **FootprintApproach
-  scales cmd_vel→0** at start-in-inflation. `ros2 param set FootprintApproach.enabled false`
-  → gets stuck far less (confirms the gate) but **crashes** into walls (MPPI `CostCritic`
-  weight 3.81 alone can't hold tight spaces). It's a wedge-vs-crash tradeoff.
-  **Fix: `FootprintApproach.time_before_collision` 1.2 → 0.6** (line 347) — shorter lookahead
-  (0.24 m @ 0.4 m/s vs 0.48 m) gates only imminent collisions, cutting the wedge while keeping
-  crash protection. `enabled` stays true. Tune 0.4 (more wedge-free) ↔ 0.8 (safer) to taste.
-- **Speeds lowered for gentler exploration.** `vx_max` 0.6 → **0.4**, `wz_max` 1.4 → **1.0**
-  (MPPI FollowPath, lines 64/67) + matching velocity_smoother `max_velocity [0.4,0,1.0]` /
-  `min_velocity [-0.6,0,-1.0]` (reverse left at -0.6). Fastest fwd now 0.4 m/s, fastest turn 1.0 rad/s.
-- **Not propagated:** `_mini` / `_sim` explore configs still carry the old `tolerance: 0.5`,
-  speeds, and `time_before_collision: 1.2` — apply there if those stacks get used.
-- **Still open:** permanent wedge cure (F29 custom BackUp escape) so the robot un-wedges
-  rather than relying on a looser gate; optional STOP-polygon backstop if approach is ever
-  disabled.
-
-## This session (2026-07-24, evening) — parameter inventory + algo_demo repair + wedge diagnosis
-
-- **`02-doc/tunable_parameters.md` created**: full inventory of every tuning knob
-  — explorer-manager ROS params, `FrontierParams` ROS params (incl. deprecated
-  `prefer_farthest`/`novelty_top_n`), slam_manager params, launch-file exposure
-  matrix, slam_toolbox/nav2 yaml deltas, and code-edit-only constants. Notes the
-  two gaps: `blacklist_radius` has no ROS/launch exposure; `goal_inset_m` is
-  ROS-declared but set by no launch file.
-- **`tools/algo_demo.py` repaired** (was `TypeError`-dead since the F23/F31 split;
-  chores.md entry): CLI args → `FrontierParams`, `merge_tuning` → `FrontierTuning`,
-  new `pick_best_frontier(tuning, blacklist=, data=)` signature. Verified with
-  `--auto` runs on room/maze/corridor + `--nudge-mode unknown`. Literate
-  `10-algo_demo.md` regenerated v1.1. Full suite **270 pass**.
-- **Wedge investigation narrowed (no code change)**: `collision_monitor_state`
-  confirmed oscillating 0 (DO_NOTHING) ↔ 3 (APPROACH, FootprintApproach). RViz
-  measure showed the costmap is *correct*: obstacle 0.20 m from body edge ⇒ robot
-  center ~0.35 m ⇒ global cost 0 (global `inflation_radius` 0.2 ends at 0.20 m;
-  the pink halo is geometrically right). Ghost-cell/mismapping theory ruled out.
-  **Open**: split `cmd_vel_smoothed` vs `cmd_vel` during a stall to decide
-  MPPI-stall vs monitor-gate. Prime suspect if MPPI: local `inflation_radius`
-  0.25 > actual 0.20 m clearance (global is 0.2) — body edge sits at ~cost 217
-  locally, path-through-obstacle + path-alignment critics stall all trajectories.
-  Secondary: slam `minimum_travel_distance`/`minimum_travel_heading` 0.5/0.5 (sim
-  uses 0.1/0.1) starves map updates while stuck — chicken-egg worth fixing
-  regardless.
-
-## This session (2026-07-24) — docs cleanup + package-wide style-guide pass
-
-No behavior change. Cosmetic/quality + docs only; full suite still **266 pass**
-(4 live-stack `test_map_validation` need a robot), `colcon build` clean.
-
-- **Style guide grew a rule** (`.claude/style_guide.md` §Comments And Types, MUST):
-  complicated/obscure functions explain what + inputs/outputs, **preferably in the
-  docstring**; explicitly does not license in-body narrative `#` blocks (resolves
-  the clash with the existing narrative-block ban). Working rule applied everywhere:
-  *whole-function/class "what" → docstring; per-line "why" → `#` comment.*
-- **Package-wide style pass on all 14 `dome_nav/*.py`**: `#`-what-blocks → docstrings;
-  16 lines wrapped to ≤88; DRY (`explore_markers` `new_marker`/`add_point`,
-  `explore_telemetry` `telemetry_dir`); single-letter renames (`d/m/r/t/v/n/a/b` →
-  intention-revealing). One line left >88 = pre-existing aligned field-comment
-  (`frontier_explorer.py:191`).
-- **Docs fixed**: `02-doc/notes.md` map-persistence (no auto-resume by design +
-  how to resume; corrected stale "map_file_name hardcoded" claim);
-  `01-literate/X07` stale `sim_explore.launch.py` refs (file deleted 07-20) +
-  `pluggable_explore_manager_node` node name.
-- **Launch audit**: all 12 launch files justified, none dead. Doc-rot flagged:
-  `spec.md` outdoor row is a planned-future file (kept); `robot_nav_outdoor` /
-  `sim_explore` refs otherwise only in `done/` archives.
-- **Deferred (needs decision)**: `frontier_params.declare_frontier_params` +
-  `merge_tuning` hand-transcribe 13/16 dataclass fields — style_guide SHOULD (:52)
-  prefers `dataclasses.fields()`; behavior-sensitive (ROS param types), not done.
-- **Known stale literate (pre-existing, not this session)**: `X05-explore_telemetry.md`
-  shows a retired `next_run_number`/`exp-NNNN` scheme; real code is
-  `build_telemetry_filename` (`e<name><date>.json`). Needs a regen.
-
-## This session (2026-07-23) — F31 pipeline T03–T05 (novelty scorer + clearance)
-
-TF31 T01/T02 were already landed (uncommitted) at session start. Completed:
-
-- **T03** — novelty migrated to a weighted scorer; the two-stage
-  short-list-then-re-rank branch in `select_target` is gone. `novelty_top_n` is
-  now a deprecated no-op (kept declared so configs don't break). Added
-  pipeline-level novelty tests (tie-break toward higher-unknown path).
-- **T04** — new pure `clearance_field(data, info)` (multi-source relaxation BFS
-  from wall cells `>= OCCUPIED_THRESHOLD` 65 on the SLAM `/map`, 8-connected,
-  diagonal √2). Added `keep_clearance_floor` cell filter + `score_clearance_bonus`
-  scorer, registered when `w_clearance > 0`.
-- **T05** — `FrontierParams`/`FrontierTuning`/`merge_tuning`/`declare` carry
-  `w_distance`/`w_novelty`/`w_clearance`, `robot_radius` (R_inscribed source, not a
-  separate param), `clearance_margin_m`. `_minmax_normalize` made inf-safe
-  (`lo == hi ⇒ zeros`) so a no-wall map's all-inf clearance column is a no-op.
-- **Default `w_clearance` 1.0 ⇒ clearance ON by default** (spec intent: fix
-  wall-hug). Not sim-verified yet — **T07 must tune**. Maps with no occupied cell
-  are unaffected (clearance all-inf → floor/bonus no-op).
-- **Tests**: full suite **266 pass** (`/usr/bin/python3 -m pytest test/`, excl. 4
-  live-stack `test_map_validation` tests that need a running robot). `colcon build
-  --packages-select dome_nav` clean. Gotcha logged: PATH `python` is the platformio
-  venv (no numpy) — use `/usr/bin/python3` (memory `project_pure_test_run_recipe`).
-- **Params plumbed into launch**: `w_distance`/`w_novelty`/`w_clearance`/
-  `robot_radius`/`clearance_margin_m` now exposed on all three explorer launch
-  surfaces — `robot_explore` (real, explicit values, robot_radius 0.17),
-  `sim_explore_node` (sim args), `just_explorer` (-1 sentinels, the tuning
-  harness). `w_clearance:=0.0` = the T07 baseline; default 1.0 = clearance on.
-- Remaining TF31: **T06** (feature flags + literate regen), **T07** sim,
-  **T08** live.
-
-## This session (2026-07-22) — gate probe (preliminary) + F31 scoring pipeline
-
-Goal: pin down **which gate** stops the wedged robot (F29 mandatory probe).
-
-- `ros2 topic echo /collision_monitor_state` while wedged shows alternating
-  `action_type: 3` / `polygon_name: FootprintApproach` ↔ `action_type: 0` (empty).
-- Enum verified against jazzy `nav2_msgs/CollisionMonitorState.msg`:
-  **3 = APPROACH** (not LIMIT — LIMIT is 4). So the gate is confirmed
-  **FootprintApproach APPROACH**, and **no `STOP` (1) appears ⇒ the
-  invalid-source / TF-starvation stop is ruled out** for this stall.
-- Toggling 3↔0 = publish-on-change: Nav2 commands motion → zeroed → command
-  drops → retry. Classic wedge loop.
-- **Still open — static check vs approach simulation** (the F29 go/no-go):
-  APPROACH covers both the velocity-blind static check (≥ `min_points` 6 scan
-  points inside the 0.17 m footprint ⇒ ALL cmd_vel zeroed incl. reverse) and the
-  forward simulation (only motion toward points gated). Next measurements:
-  - `ros2 topic echo /collision_monitor/collision_points_marker` (lazy topic) —
-    count points within 0.17 m of base center.
-  - Compare monitor input vs output cmd_vel `linear.x`: ratio 0.0 ⇒ full gate
-    (static check likely); 0<r<1 ⇒ simulation throttle.
-  - While wedged, publish a small negative-x cmd_vel into the monitor and watch
-    the output — direct test whether reverse passes.
-  - Decision: ≥6 points inside footprint ⇒ static check ⇒ F29 BackUp escape
-    needs the `FootprintApproach.enabled false` dynamic toggle; <6 ⇒ plain
-    BackUp viable.
-- F29 has **no task file yet** (TF29 needed before code; probe should be T01).
-
-Also this session — **frontier goals hug walls** → wrote F31 goal-scoring pipeline:
-
-- **Root cause**: `find_frontier_clusters` buffers only against *unknown*
-  (`buffer_cells` rings from the `-1` boundary); occupied cells never checked.
-  `best_cell_in_cluster` filters size/blacklist/dist but has no obstacle-proximity
-  test (no `data` in scope). F27 rejects goals *on* lethal cells; near-lethal
-  passes → picks hug walls → feeds the F29 collision_monitor wedge.
-- **F31 written** (`03-features/notdone/F31-goal-scoring-pipeline.md`, High):
-  refactor selection into **filters + weighted scorers** (Nav2 `CriticManager`
-  shape) with a per-cycle `CellCtx` + registry from `FrontierParams`. Kills the
-  scattered `if params.x` guards and the F15 two-stage novelty hack (novelty
-  becomes just a weighted scorer). First new tenant = **obstacle clearance**: new
-  `clearance_field` BFS (distance-to-nearest-occupied), floor filter
-  (`clearance ≥ R_inscribed + margin`) + bonus scorer (`-clearance`). Two
-  must-gets: per-cycle [0,1] normalization; keep cluster/cell two-phase. Parity
-  test (clearance weight 0 + novelty migrated = old behavior) is the regression
-  anchor. F15/F30 migrate in as tenants; F27 relocates as a cell filter.
-- Wall-standoff YAML lever (local `cost_scaling_factor` 5.0→3.0) still pending
-  `colcon build` + real retest — F31 attacks the same wall-hug at goal selection,
-  upstream of costmap tuning.
-
-## Prior sessions (2026-07-18/20/21) — shipped + diagnosed
-
-- **F27 lethal-goal guard shipped + verified live** (code/tests done; sim T06 /
-  live T07 verification tasks still open). Robot no longer sends goals onto
-  lethal cells. Fixed the `on_goal_result` stale-callback race (live `TypeError`
-  crash) with regression tests.
-- **Mini-config crash tuning** (`nav2_params_explore_real_mini.yaml`):
-  `time_before_collision` 0.5→1.0, `robot_radius` 0.15→0.17 (true 0.16 + flared
-  post base), MPPI+smoother linear speed 0.5→0.25. `STUCK_T_S` 7→20 so the
-  explorer stops pre-empting Nav2 recovery.
-- **Wedge diagnosis:** start-wedged robot never moves; Nav2's inner recovery is
-  ClearLocalCostmap+retry (useless vs a real obstacle); Spin/BackUp live in the
-  outer recovery it never reaches within the stuck window. → **F29** custom
-  BackUp escape (feature written; collision_monitor source read 2026-07-21
-  upgraded the probe to mandatory — reverse may be gated by the static check).
-- **F28** (reason-tagged goal exclusion, per-reason TTL) and **F30**
-  (path-distance Dijkstra frontier ranking, replaces Euclidean — kills
-  through-wall goal picks) feature files written 2026-07-20/21. Neither has a
-  task file yet.
-- Pi is CPU-starved during nav: MPPI 8.6 Hz vs 20 desired; slam_toolbox TF
-  queue-full drops. Throughput problem, upstream of any tolerance tuning.
-
 ## Status
+
+F35 done: dome_nav is navigation primitives only; `dome_mission` (sibling repo)
+owns `/intent` and mission sequencing. **F33 Phase A in progress**: T01–T04
+and T06 done (msgs pkg, `dome_semantic` package with ported tracker,
+map-frame TF+re-basing, typed publishing, persistence keyed to SLAM map
+identity) — `dome_mission`'s consumer is unblocked end-to-end and the
+semantic map survives a node restart. T05 superseded/done. **T07 next**
+(fake detection producer for sim); T08–T10 not started.
 
 Sim exploration works; robot drives and covers the map (~16 goals over ~9×9 m).
 Full sim stack healthy. Real robot: explore runs but **start-wedged near an
-obstacle it stalls** (this session's investigation). Modes A/B not live-verified.
+obstacle it stalls** (F29, deferred). Mode B (go-to-label) now lives in
+dome_mission, not live-verified there yet.
 
 **Dev VM has 1 core** — Nav2 is multi-process, so everything serializes:
 intermittent action-ACK timeouts. Highest-impact fix = more vCPUs (4–6), not YAML.
@@ -265,7 +248,8 @@ Known-but-unfixed nav tuning:
 
 - **One explorer node for sim and real:** `explorer_manager_node.py`
   (injected `ExplorationAlgorithm`, default `FrontierAlgorithm`). Sim vs real
-  differ only by ROS params.
+  differ only by ROS params. Exposes the `ExploreArea` action (`dome_nav_msgs`);
+  no `/intent` — that's dome_mission's.
 - **F23 decoupling:** node knows nothing about frontiers. Protocol =
   `next_goal(ctx) -> GoalDecision` (`NEW_GOAL/NO_TARGETS_BLOCKED/EXPLORED_DONE`);
   viz/diag/telemetry are optional opaque hooks via `getattr`. Frontier params
@@ -323,11 +307,13 @@ ros2 topic echo /explore/status
 tail -f ~/.dome/telemetry/e*.json       # e<mapname><dd-mmm>.json (F17)
 ```
 
-Intent contract: `nav go <label>`→`navigation_go {label}`, `nav cancel`→
-`navigation_cancel`, `nav explore`→`exploration_start`, `nav explore stop`→
-`exploration_stop`. `/explore/markers`: frontiers yellow, blacklist red, goal cyan.
+`/intent` is now published by **dome_mission**, not dome_nav; the commands
+above only work if dome_mission is running. Intent contract: `nav go <label>`→
+`navigation_go {label}`, `nav cancel`→ `navigation_cancel`, `nav explore`→
+`exploration_start`, `nav explore stop`→ `exploration_stop`. `/explore/markers`:
+frontiers yellow, blacklist red, goal cyan.
 
-## Collision monitor probe commands (this investigation)
+## Collision monitor probe commands (F29 investigation, deferred)
 
 ```bash
 ros2 topic echo /collision_monitor_state                      # action change; 3=APPROACH, 1=STOP
@@ -338,20 +324,31 @@ ros2 param set /collision_monitor FootprintApproach.enabled false   # dynamic es
 
 ## Next steps
 
-1. ~~Finish gate probe → write TF29~~ — **F29 deferred 2026-07-29 (intentional).**
+1. **TF33 T07** — fake `/oak/detections_3d` producer for sim in
+   `dome_semantic` (analogous to `dome_mission`'s `tools/nav_intent_check.py`),
+   unlocking sim-based regression without OAK hardware and feeding T08.
+2. ~~Finish gate probe → write TF29~~ — **F29 deferred 2026-07-29 (intentional).**
    The wedge cure is parked; live-verify blocked on it (F10/F27/F31) is parked too.
    Probe artifacts kept for whenever F29 is revived: `scratchpad/count_footprint_points.py`
    (R=0.17, min_points=6).
-2. ~~TF31 T07/T08 verification~~ — **done 2026-07-29, F31 closed.**
-3. ~~Write TF30~~ — **F30 deferred 2026-07-29.**
-4. **Give the dev VM 4–6 vCPUs.**
-5. **Restore `FootprintApproach` enabled** in both explore configs.
-6. ~~TF27 T06 sim verify~~ — **F27 closed 2026-07-29** (T06/T07 marked done, hard to truly verify).
-7. TF15 T05 live verify (novelty on vs off).
-8. Real-robot retest of wall standoff (local `cost_scaling_factor` 5.0→3.0).
+3. **Give the dev VM 4–6 vCPUs.**
+4. **Restore `FootprintApproach` enabled** in both explore configs.
+5. TF15 T05 live verify (novelty on vs off).
+6. Real-robot retest of wall standoff (local `cost_scaling_factor` 5.0→3.0).
 
 ## In-flight features
 
+- **F33** semantic exploration, Phase A: **in progress** — T01–T04 and T06
+  done (`dome_semantic_msgs`, `dome_semantic` package with ported tracker,
+  map-frame TF + re-basing, typed `/semantic/targets` publishing, persistence
+  keyed to SLAM map identity — the `dome_mission` consumer is unblocked
+  end-to-end and the semantic map survives a restart), T05 superseded by F35
+  (consumer is dome_mission), **T07 next** (fake detection producer for
+  sim), T08–T10 not started. dome_nav never depends on `dome_semantic_msgs`
+  (F33 G9).
+- **F35** mission-layer extraction: **DONE (2026-07-31)** — relocated to
+  sibling repo `dome_mission`; F35/TF35 files moved out of dome_nav.
+- **F34** tuning single-source: **DONE (2026-07-29)** — moved to `done/`.
 - **F27** lethal-goal guard: **DONE (2026-07-29)** — code+tests done, live-observed;
   T06 sim/T07 live marked done with the caveat that both are very hard to really
   verify (can't force a nudged goal onto a lethal cell on demand). Feature + task
@@ -359,32 +356,24 @@ ros2 param set /collision_monitor FootprintApproach.enabled false   # dynamic es
 - **F29** BackUp escape: **deferred (2026-07-29, intentional)** — feature file
   only, no TF29; moved to `03-features/deferred/`. Was the intended start-wedge
   cure; parking it means the F10/F27/F31 live-verify blocked on the wedge is
-  parked too (see those entries).
+  parked too.
 - **F31** goal-scoring pipeline + clearance: **DONE (2026-07-29)** — T01–T08
-  complete, sim+live verified. Clearance-weighted goals land off walls; directional
-  effect confirmed but magnitude not quantified (no clean A/B metric). Feature +
-  task moved to `done/`. Umbrella for F15/F30 heuristics; fixed wall-hug. Permanent
-  wedge cure (F29 BackUp) still wanted.
+  complete, sim+live verified. Feature + task moved to `done/`.
 - **F30** path-distance ranking: **deferred (2026-07-29)** — feature file only,
   no TF30; moved to `03-features/deferred/`.
 - **F28** reason-tagged exclusion: **deferred (2026-07-29)** — feature file only,
   no TF28; moved to `03-features/deferred/`.
 - **F32** candidate-source abstraction: **deferred (2026-07-29)** — feature file
-  only, no TF32; moved to `03-features/deferred/`. (Depended on F31, now landed.)
+  only, no TF32; moved to `03-features/deferred/`. (Depended on F31, now landed;
+  also a prerequisite for F33 Phase B.)
 - **F26** survey-algorithms paper: TF26 T01–T05 not started.
 - **F15** novelty scoring: code done; T05 live verify + literate regen pending.
-- **F10** exploration: **trimmed 2026-07-29** to match reality (explore_lite
-  dropped; custom `frontier_explorer` + `explorer_manager_node`; F10 =
-  foundation for F15/F27/F31). Implementation + unit tests done; open only on live
-  verify T06/T07, blocked on the start-wedge — and **its cure F29 is now deferred,
-  so live verify is parked indefinitely**. The single explorer node is
-  `explorer_manager_node.py` (former `pluggable_explore_manager_node`, renamed in
-  `206a93f`); the old "orphan `explore_manager_node.py` pending removal" note was
-  stale — that file is gone, nothing to delete.
+- **F10** exploration: implementation + unit tests done; open only on live
+  verify T06/T07, blocked on the start-wedge — and its cure F29 is deferred,
+  so live verify is parked indefinitely.
 - **F09** dome_control integration: T04 live smoke pending.
-- **F05** rosbag integration test: **TF05 written (2026-07-29)**, T01–T07 not
-  started. Now also covers the F27/F31 heuristic-firing gap (T06): replay a bag →
-  real costmap builds → assert `goal_is_lethal` + clearance fire, robot-free.
+- **F05** rosbag integration test: TF05 written, T01–T07 not started. Also
+  covers the F27/F31 heuristic-firing gap (T06).
 
 ## Open issues
 

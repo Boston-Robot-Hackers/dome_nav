@@ -17,17 +17,19 @@ was:
 
 1. ~~TF35 T01–T04~~ — *done*: `dome_mission` skeleton, `ExploreArea` action,
    mission FSM, `/intent` moved out of dome_nav.
-2. **TF33 T01–T04 (this file)** — msgs, tracker port, map-frame recording,
-   publish. *Only T01 is done so far* (see below) — **this is the actual next
-   piece of work**, and nothing downstream of it can proceed without it.
-3. ~~TF35 T05~~ — *done*: `dome_mission` consumes `SemanticTargetArray` once
-   T04 below publishes it. Currently unblocked on the message *type* (T01 is
-   done) but still blocked on there being no live *publisher* (T04 not done).
+2. ~~TF33 T01–T04 (this file)~~ — *done (2026-08-03)*: msgs, tracker port,
+   map-frame recording, typed publishing. `SemanticMapNode` now publishes a
+   real, live `/semantic/targets` feed.
+3. ~~TF35 T05~~ — *done*: `dome_mission` consumes `SemanticTargetArray`. Was
+   blocked on T04 publishing something real; now unblocked end-to-end
+   (message type since T01, live publisher since T04) — not yet
+   live-verified together on one running stack (that's T08).
 4. ~~TF35 T06/T07~~ — *done*: dome_nav cleanup, `ExploreArea` action server,
    top-level launch, live sim bring-up verified 2026-08-01.
-5. **TF33 T08 sub-stack** — still owed here; composed *into* `dome_mission`'s
-   existing top-level launch (`mission_explore.launch.py`), which today
-   explicitly omits the dome_semantic/OAK-D group with a "TF33 uncoded" note.
+5. ~~TF33 T06~~ — *done (2026-08-03)*: persistence keyed to SLAM map identity.
+6. **TF33 T07 (fake detection producer for sim) is the next unstarted piece
+   of work** — see below. T08 (sub-stack launch composition) still needs T07
+   first (its own test plan leans on the fake producer).
 
 **Consumer of everything this task publishes is `dome_mission`, never
 dome_nav** — dome_nav must never gain a `dome_semantic_msgs` dependency.
@@ -147,20 +149,55 @@ dome_semantic` clean.
 
 ## T04 — Typed publishing + node wiring
 
-**Status**: not done
+**Status**: done (2026-08-03)
 
-Node publishes `SemanticTargetArray` on `/semantic/targets` (the topic
-`mission_node` already subscribes — see `dome_mission`'s `label_resolver.py`),
-plus `/targets/markers` in `map` frame, `/targets/assoc_diag`, and a
-`/describe_scene` Trigger service. Confirmation-threshold params
-(`min_frames`, `min_time_s`, tolerances) are ROS-declared and
-launch-overridable.
+`SemanticMapNode` now publishes `SemanticTargetArray` on `/semantic/targets`
+(the topic `mission_node` already subscribes — `dome_mission`'s
+`label_resolver.py`), `/targets/markers` in `map` frame (sphere + label +
+leader-line per confirmed target, faint dots for potentials), unthrottled
+`/targets/assoc_diag` (JSON, only when `use_class_profiles` is on), and a
+`/describe_scene` Trigger service. `/semantic/targets` and `/targets/markers`
+are throttled by a new `publish_every_n` ROS int param (default 5) — a
+publish-cadence concern kept separate from `WorldTrackerConfig`, which owns
+tracking-behavior tuning only.
+
+**Confirmation-threshold params**: new `dome_semantic/tracker_params.py`
+(`declare_tracker_config(node)`) walks `WorldTrackerConfig.model_fields` and
+declares every field as a ROS param (skips `class_profiles_inline`, a
+non-scalar type, and `fx`/`fy`, unused until size estimation is wired in) —
+mirrors dome_nav's F34 "dataclass is the single source of truth" pattern,
+adapted for pydantic's `model_fields` instead of `dataclasses.fields()`. The
+function is a pure `node`-duck-typed helper (declare_parameter/get_parameter
+only), so it's tested with a `FakeNode`, no live rclpy context needed —
+same testability trade as dome_nav's `declare_frontier_params`.
+
+**Considered and deferred**: matching dome_nav's fuller pattern
+(`ParameterDescriptor(description=...)` per field, `ros_important`/
+`ros_dynamic` metadata, strict bool/int/float-only type gating) — not a
+direct port since `WorldTrackerConfig` is pydantic (not a dataclass) and
+already has a `str` field (`class_profile_path`) dome_nav's narrow type gate
+doesn't support. `ros_important`/`ros_dynamic` are documentation-only no-ops
+in dome_nav's own code today, so skipping them costs nothing functional.
+Worth revisiting if `tracker_params.py` grows a real `ros2 param describe`
+consumer.
 
 **Consumer is `dome_mission` (already built, TF35 T05) — this task only
 publishes.** Nothing in dome_nav subscribes to this topic.
 
-**Test**: node-level test with a stubbed TF buffer — *N* detections over *T*
-seconds → one confirmed target in the array with the correct label/pose/count.
+**Test**: `test_tracker_params.py` (4 tests — declare/read round-trip, field
+coverage minus exclusions, launch-override precedence, `None`-default
+handling) + 5 new `test_semantic_map_node.py` tests (confirmed-target
+publish with correct label/pose/count/track_ids, potentials excluded,
+throttle honored, `/describe_scene` with/without targets). 119 total
+dome_semantic tests pass; `colcon build --packages-select
+dome_semantic_msgs dome_semantic` clean (after clearing a stale
+`build/dome_semantic_msgs` CMake cache left over from an earlier
+misconfigured first build — unrelated to this task's code).
+
+**Literate**: full 01-literate/ set generated for dome_semantic (00-overview.md
+theory-of-operation plus one dependency-ordered chapter per module) — the
+package had none before this task. Extended again under T06 below to cover
+the new persistence module.
 
 ## T05 — nav_manager consumes the typed msg
 
@@ -176,17 +213,50 @@ schemaless JSON) landed there too. This task stays here only as a pointer —
 
 ## T06 — Persistence keyed to SLAM map identity
 
-**Status**: not done
+**Status**: done (2026-08-03)
 
-Semantic map JSON under `~/.dome/`, keyed to the `slam_manager` `map_name`
-(G8), so Mode B reloads the semantic map matching the loaded SLAM map. Save on
-shutdown, restore on startup when the key matches. Old dome_vision-era JSON
-files: migrate, or ignore-with-warning (style-guide MUST: format changes
-preserve old files or handle defaults).
+New `dome_semantic/semantic_persistence.py`: `save_semantic_map`/
+`load_semantic_map` write/read `~/.dome/semantic_maps/<map_name>.json`
+(mirrors `explorer_manager_node`'s `map_name` param and `slam_manager`'s
+`--map_name` CLI convention — same `~/.dome/` root as `slam_maps/` and
+`telemetry/`). File is a small envelope, `{"map_name": ..., "targets":
+[...]}`, wrapping `WorldTracker.to_json()`'s existing bare-list format
+rather than teaching the pure tracking core about map identity.
 
-**Test**: round-trip save/restore; missing optional fields from an older file
-deserialize with defaults; mismatched `map_name` → fresh map + warning, never a
-silent merge.
+**Matching a save to a load**: primary key is the filename (derived from
+`map_name`, sanitized), but the sanitizing regex is lossy (`"room a"` and
+`"room#a"` both become `room_a.json`) — so the envelope's own `map_name`
+field is a second, independent check. Missing file → fresh tracker (normal
+first-run case, no warning). Anything else that isn't a matching envelope —
+wrong `map_name`, or an unrecognized shape (e.g. an old dome_vision-era bare
+JSON array, which predates map_name-keying entirely and can't exist at a
+`map_name`-derived path today) — falls into one unified path: fresh tracker
++ warning, **never a silent merge**. **Decided against migrating the old
+bare-array format**: no such file has ever existed at the new keyed path,
+so a migration branch would be speculative code for a case that can't occur
+yet; the style-guide MUST (persisted-format changes preserve old files or
+ship defaults) is satisfied by the safe fresh-map fallback, not a format
+converter.
+
+**Node wiring**: new `map_name` ROS param (default `"unknown"`, matching
+`explorer_manager_node`'s own default) selects which saved map to restore.
+`SemanticMapNode.__init__` now builds its tracker via
+`load_semantic_map(self.map_name, declare_tracker_config(self), ...)`
+instead of a bare `WorldTracker(...)`; a new `node.save()` method is called
+from `main()`'s `finally` block (this node is a plain `Node`, not a
+`LifecycleNode`, so `main`'s teardown is the shutdown hook, not
+`on_shutdown`).
+
+**Test**: `test_semantic_persistence.py` (6 tests — round-trip, missing
+file, unrecognized-format fallback with warning, real filename-collision
+mismatch with warning + fresh tracker, path sanitization, envelope
+contents) + 2 new `test_semantic_map_node.py` tests (construction restores
+a pre-existing map, `save()` writes current tracker state). 127 total
+dome_semantic tests pass; `colcon build --packages-select dome_semantic`
+clean. Literate: new `12-semantic_persistence.md` chapter;
+`13-semantic_map_node.md` (renumbered from 12) gained a "Persistence"
+section; `00-overview.md` architecture diagram, reading-order table, and
+"what's not wired in yet" list updated to match.
 
 ## T07 — Fake detection producer for sim
 

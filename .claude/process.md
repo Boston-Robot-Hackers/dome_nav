@@ -6,6 +6,13 @@
 * Any bug fix or regression gets a test.
 * Switching between task/feature/chore: stop and ask permission first.
 
+# session docs
+* `02-doc/current.md` holds session entries from roughly the last week only;
+  older entries move verbatim to `02-doc/changelog.md` (reverse-chronological,
+  same per-session format) — don't summarize or drop them.
+* Do this pruning whenever `current.md` is refreshed; check entry dates against
+  today's date each time.
+
 # chores
 * One running file, `04-tasks/chores.md`: `- [ ] <what and why>` → `- [x]` when applied.
 
