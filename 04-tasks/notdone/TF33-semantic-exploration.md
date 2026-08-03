@@ -56,17 +56,51 @@ this still holds*, but no further authoring work is needed here.
 
 ## T02 — `dome_semantic` package: port the tracker core (pure)
 
-**Status**: not done
+**Status**: done (2026-08-02)
 
-Port `WorldTracker` (two-tier confirmation, label-constrained association,
-lost/removed timeouts) from `dome_vision` into a new `dome_semantic` package as
-a pure, ROS-free core module — same pure/ROS split discipline as dome_nav's
-L0/L1. *Behavior-preserving port, not a redesign*: tolerances and thresholds
-carry over unchanged. `dome_vision` keeps OAK/depth/detection publishing; only
-the map/tracker moves out.
+New sibling repo `~/ros2_ws/src/dome_semantic` (full bootstrap: `.claude/`
+copied from `~/j3`, `02-doc/`, `03-features/`, `04-tasks/`, `05-issues/`
+scaffolded — F33/TF33 records **stay in dome_nav** for now, same
+relocate-with-the-code pattern F35 used, moving only once the extraction is
+further along).
 
-**Test**: dome_vision's existing pure tracker tests come along and pass under
-plain `pytest` in the new package (marker policy: no ROS imports in the core).
+**Ported, behavior-preserving** (tolerances/thresholds unchanged):
+`world_tracker.py` + its full pure dependency closure —  `association.py`,
+`class_profiles.py`, `size_estimate.py`, `targets.py`, `tracker_config.py`,
+`geometry.py` (needed transitively: `size_estimate.estimate_size_m` uses
+`geometry.Intrinsics`, and the ported tests exercise it).
+
+**One deliberate deviation**: `world_tracker.py` imports only `cosine_sim`
+from `dome_vision`'s `embedding.py` — but that file also defines
+`EmbeddingExtractor`, which pulls in `torch`/`torchvision`/`cv2` at module
+level. Copying it whole would force those heavy ML/CV deps onto a package
+meant to be a lightweight, ROS-free tracking core. Instead, `cosine_sim` was
+extracted into a new 15-line `embedding_similarity.py`; `EmbeddingExtractor`
+stays in `dome_vision` (it does image inference, not tracking math — no
+test imported `embedding.py`, so nothing lost).
+
+**Not done**: deleting anything from `dome_vision`. `dome_vision_ros`'s
+`semantic_map_node.py` still imports `dome_vision.world_tracker.WorldTracker`
+directly and is the live, currently-deployed tracker — cleanup waits until
+`dome_semantic`'s own ROS node (T03/T04) is built and proven, per the same
+delete-after-validation pattern F35/TF35 T06 used. See
+`dome_semantic/02-doc/notes.md`'s "Watch list" section: four **not-done**
+`dome_vision` features (F39 duplicate-target collapse, F40 odom-stopped tight
+radius, F56 WorldTracker architecture split, F57 target data-model
+consolidation) target this same code and stay `dome_vision`'s concern until
+that cleanup happens — after which they'd need re-authoring against
+`dome_semantic`, not a silent carry-over.
+
+**Test**: dome_vision's existing pure tracker tests came along and pass
+under plain `pytest` in the new package — 83 pass
+(`/usr/bin/python3 -m pytest test/` inside `dome_semantic`); `colcon build
+--packages-select dome_semantic` clean. Two of the original tests
+(`test_appconfig_world_tracker_section`,
+`test_appconfig_world_tracker_defaults_when_absent`) were dropped as
+out-of-scope — they test `dome_vision`'s own `AppConfig`, not `WorldTracker`
+itself. `tests/conftest.py`'s cwd-fixture and the
+`examples/configs/class_profiles.yaml` fixture were ported alongside the
+code so the remaining tests resolve their relative paths correctly.
 
 ## T03 — `map`-frame recording + re-basing on map jumps
 
