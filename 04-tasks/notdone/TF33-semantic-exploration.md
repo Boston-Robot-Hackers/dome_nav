@@ -104,22 +104,46 @@ code so the remaining tests resolve their relative paths correctly.
 
 ## T03 — `map`-frame recording + re-basing on map jumps
 
-**Status**: not done
+**Status**: done (2026-08-02)
 
-The ROS shell subscribes `/oak/detections_3d`, transforms each observation
-camera→`map` at observation time (TF2, with a timeout/drop policy when the
-chain is unavailable — *report, don't silently drop*). It tracks the
-`map→odom` transform each tick; when it jumps beyond a small epsilon (a SLAM
-correction), it re-bases all stored target poses so they stay in the current
-`map` frame. Frame-convention naming per the style guide (camera-frame vs
-world-frame values named distinctly).
+**Not a port** — unlike T02, none of this existed anywhere in the codebase.
+`dome_vision_ros`'s current `semantic_map_node.py` only transforms
+camera→**`odom`** (never `map`) and has no re-basing logic at all; F33's own
+G1 decision (frame of record = `map`, re-base on `map→odom` jumps) had never
+been implemented.
 
-**Test**: frame-convention tests (style-guide MUST for TF/xyz math) —
+**`dome_semantic/tf_adapter.py`** — ported `TFAdapter` (generic
+source/target-frame point transform via an injected `tf2_ros.Buffer`),
+retargeted to `map`. One deliberate behavior change from the original: the
+transform lookup now uses the detection's own stamp instead of
+time-zero/"latest available" — F33 G1 says "at observation time," and the
+original silently ignored its own `stamp` parameter.
 
-- known transform → expected map-frame position
-- synthetic `map→odom` jump → stored targets re-based to identical world
-  positions
-- missing TF → warning + drop counted, no crash
+**`dome_semantic/map_rebasing.py`** (new, pure, no ROS imports) — `PlanarTransform(x, y, yaw)`
+plus SE(2) `apply_transform`/`invert_transform`/`compose_transforms`;
+`has_jumped(old, new, epsilon_m, epsilon_rad)`; `rebase_delta(old, new)`
+composes the transform mapping an old-map-frame point to its new-map-frame
+position; `rebase_tracker(tracker, delta)` re-bases every stored
+`WorldTracker` target's `xyz_world`, `position_history`, and
+`pos_welford_mean` in place (z untouched — SLAM corrections are planar).
+
+**`dome_semantic/semantic_map_node.py`** (new) — subscribes
+`/oak/detections_3d`; `maybe_rebase()` looks up `map→odom` each tick via
+`lookup_transform`, seeds a baseline on first success (no false jump on
+frame one), and re-bases via the above when a jump is detected; missing TF
+warns (throttled) and drops the affected detection(s) without crashing.
+**Scope boundary vs. T04, matching this task file's own split**: no
+`SemanticTargetArray` publishing or param wiring yet — this node only
+proves the TF integration end-to-end, using a default `WorldTrackerConfig()`.
+
+**Test**: 25 new tests (`test_tf_adapter.py`, `test_map_rebasing.py`,
+`test_semantic_map_node.py`) — known transform → expected map-frame
+position; synthetic `map→odom` jump → stored targets re-based to identical
+positions (confirmed via SE(2) composition round-trip and an
+identity-delta no-op case); missing TF → warned + dropped, no crash. Node
+tests follow `dome_nav`'s own `tf2_ros.TransformListener`-patching pattern.
+110 total dome_semantic tests pass; `colcon build --packages-select
+dome_semantic` clean.
 
 ## T04 — Typed publishing + node wiring
 
