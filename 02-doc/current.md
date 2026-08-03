@@ -6,6 +6,18 @@ re-narrate git history here.
 
 **Date:** 2026-08-03 · **Branch:** main
 
+## This session (2026-08-03) — F33/TF33 feature and task records relocated to dome_semantic
+
+`03-features/notdone/F33-semantic-exploration.md` and
+`04-tasks/notdone/TF33-semantic-exploration.md` moved to the sibling
+`dome_semantic` repo (same paths there). Completes the relocate-with-the-code
+step T02 deferred ("F33/TF33 records stay in dome_nav for now... moving only
+once the extraction is further along") — the extraction (T01–T04, T06) is far
+enough along that the records now live with the code they describe.
+`dome_nav` no longer has any `F33`/`TF33` `.md` records of its own; historical
+entries below that reference the old in-`dome_nav` location remain as an
+accurate record of what was true when written.
+
 ## This session (2026-08-03) — checkpoint: ruff clean, literate synced, T04/T06 committed
 
 Full `/checkpoint` run over today's `dome_semantic` work (T04 + T06). Tests:
