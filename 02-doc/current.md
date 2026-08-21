@@ -4,7 +4,16 @@ Concise cold-start orientation covering roughly the last week. Older entries
 move to `02-doc/changelog.md` (rule in `.claude/process.md`) — do **not**
 re-narrate git history here.
 
-**Date:** 2026-08-03 · **Branch:** main
+**Date:** 2026-08-21 · **Branch:** main
+
+## This session (2026-08-21) — dev VM host migrated to M4 Pro, 8 vCPUs
+
+Dev VM's host machine changed to a MacOS M4 Pro; the VM itself now reports
+8 vCPUs (`nproc` inside the VM), up from the documented 1-core bottleneck.
+Exceeds the 4–6 vCPU target from the Pi-CPU/Nav2-serialization notes below.
+Doc-only update — no code changed. Still pending: live-verify that the
+intermittent Nav2 action-ACK timeouts (attributed to single-core
+serialization) are actually resolved under the new host.
 
 ## This session (2026-08-03) — F33/TF33 feature and task records relocated to dome_semantic
 
@@ -246,8 +255,10 @@ Full sim stack healthy. Real robot: explore runs but **start-wedged near an
 obstacle it stalls** (F29, deferred). Mode B (go-to-label) now lives in
 dome_mission, not live-verified there yet.
 
-**Dev VM has 1 core** — Nav2 is multi-process, so everything serializes:
-intermittent action-ACK timeouts. Highest-impact fix = more vCPUs (4–6), not YAML.
+**Dev VM now has 8 vCPUs** (host migrated to a MacOS M4 Pro, 2026-08-21) — was
+1 core, the documented cause of Nav2 multi-process serialization/intermittent
+action-ACK timeouts. vCPU count now exceeds the 4–6 target; live verification
+that the timeouts are actually gone is still pending.
 
 Known-but-unfixed nav tuning:
 - Planner choice unsettled: real configs SmacPlanner2D, sim NavFn.
@@ -343,7 +354,9 @@ ros2 param set /collision_monitor FootprintApproach.enabled false   # dynamic es
    The wedge cure is parked; live-verify blocked on it (F10/F27/F31) is parked too.
    Probe artifacts kept for whenever F29 is revived: `scratchpad/count_footprint_points.py`
    (R=0.17, min_points=6).
-3. **Give the dev VM 4–6 vCPUs.**
+3. ~~Give the dev VM 4–6 vCPUs~~ — **done, 2026-08-21** (VM now on new M4 Pro
+   host, 8 vCPUs). Live-verify the action-ACK timeouts are gone under the new
+   host before fully closing this out.
 4. **Restore `FootprintApproach` enabled** in both explore configs.
 5. TF15 T05 live verify (novelty on vs off).
 6. Real-robot retest of wall standoff (local `cost_scaling_factor` 5.0→3.0).
