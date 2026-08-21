@@ -6,13 +6,6 @@
 * Any bug fix or regression gets a test.
 * Switching between task/feature/chore: stop and ask permission first.
 
-# session docs
-* `02-doc/current.md` holds session entries from roughly the last week only;
-  older entries move verbatim to `02-doc/changelog.md` (reverse-chronological,
-  same per-session format) — don't summarize or drop them.
-* Do this pruning whenever `current.md` is refreshed; check entry dates against
-  today's date each time.
-
 # chores
 * One running file, `04-tasks/chores.md`: `- [ ] <what and why>` → `- [x]` when applied.
 
@@ -22,7 +15,9 @@
 
 # tasks
 * Full task list before any design/code. `TFNN-<slug>.md` (`NN` matches the feature) in `04-tasks/{notdone,done,deferred}/`; `template.md` shows the format.
+* Each step is numbered `TFNN.N`, matching the file's own `TFNN` (e.g. `TF03.0`, `TF03.1`, ...), starting at `.0` — not a bare `T0N`.
 * Every step gets a test where feasible (else record why); every feature gets a dedicated test-writing task.
+* Task lists must never include a "regenerate literate docs" task — literate docs are refreshed later, at checkpoint, not as part of a feature's task list.
 * Last task done → move the task file to `done/`, set the feature's Done/Tests Written/Test Passing to yes, move the feature file to `done/`.
 
 # issues
@@ -34,8 +29,14 @@
 * Blank line between paragraphs, always. Short paragraphs; bullets for anything enumerable; **bold** for key decisions; *italics* for emphasis or naming a pattern. Several short, headed subsections beat one block.
 * Applies every time a file is rewritten, not just on first authoring.
 
+# agent model selection
+* Default subagent dispatch to haiku; upgrade only when the task needs judgment, not just data-gathering.
+* **haiku** — file/log discovery, "where is X defined", dependency-closure scans, counting, formatting. Use the `explorer` agent (`.claude/agents/explorer.md`).
+* **sonnet** — analysis, code review, writing, moderate reasoning, synthesis across subagent findings. Use the `reviewer` agent (`.claude/agents/reviewer.md`).
+* **opus** — architecture decisions, novel debugging, cross-cutting design tradeoffs. Use the `architect` agent (`.claude/agents/architect.md`).
+
 # bootstrap
-* `.claude/bootstrap.md` is the scaffold spec — follow it when bootstrapping a new project.
+* `.claude/bootstrap.md` is the scaffold spec. Run `/bootstrap` to bootstrap a new project — don't follow it ad hoc from a mention in conversation.
 
 # github
 * Literate docs: apply `.claude/literate.md`'s prompt to each changed Python module, save as `01-literate/<module>.md`.

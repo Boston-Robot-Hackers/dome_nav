@@ -96,6 +96,19 @@ not a hard cap.
   in one class.
 - No features not required by the current spec.
 
+## Web assets (CSS / JS / HTML)
+Applies to any project with a UI layer (Streamlit, Flask, Dash, etc.).
+
+**MUST**
+- No inline CSS, JavaScript, or HTML template strings inside Python source
+  files — CSS/JS/HTML live in their own files, loaded at runtime.
+- Load asset files via `Path(__file__).parent / "filename"` and pass the
+  content to the framework.
+
+**SHOULD**
+- One CSS file per module that needs custom styles; shared styles go in a
+  shared asset file.
+
 ## Comments & types
 **MUST**
 - Any complicated/obscure function explains what it does and its inputs/outputs —

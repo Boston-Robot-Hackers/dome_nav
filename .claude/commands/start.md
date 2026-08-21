@@ -1,7 +1,10 @@
+---
+allowed-tools: Read Glob
+---
 To orient for this session do every step listed here:
 
 1. Read and always obey and apply @.claude/style_guide.md and @.claude/process.md
-2. Read @02-doc/current.md
+2. Read @02-doc/current.md and @02-doc/notes.md
 3. If current.md clearly states what is in progress and what the next task is, summarize it and stop — skip steps 4 and 5.
 4. Otherwise, list files in 03-features/notdone/ and read each one.
 5. List files in 04-tasks/notdone/ and read each one.
