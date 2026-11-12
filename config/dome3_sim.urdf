@@ -14,9 +14,11 @@
 
   Dimensions from dome3.urdf:
     base_link cylinder: r=0.15 m, l=0.003 m
-    wheels:             r=0.03 m,  l=0.0175 m, separation=0.25 m
+    wheels:             r=0.035 m, l=0.0175 m, separation=0.25 m
     caster sphere:      r=0.015 m
-    laser at base_link: xyz="-0.15 0 0.1", rpy="0 0 -pi/2"
+    laser at base_link: xyz="-0.08 0 0.105", rpy="0 0 -pi/2"
+    base_link 0.07 m above base_footprint; camera tilted 5 deg down
+    (values measured 2026-11-12; source of truth is dome2/config/dome3.durdf)
 
   ros_gz_bridge topics (configured in sim_explore.launch.py):
     /model/dome2/cmd_vel         <- /cmd_vel    (Twist)
@@ -67,62 +69,62 @@
   <joint name="base_footprint_to_base_link" type="fixed">
     <parent link="base_footprint"/>
     <child link="base_link"/>
-    <origin xyz="0 0 0.05"/>
+    <origin xyz="0 0 0.07"/>
   </joint>
 
   <!--
-    Wheels: cylinder r=0.03 m, l=0.0175 m, mass=0.2 kg.
+    Wheels: cylinder r=0.035 m, l=0.0175 m, mass=0.2 kg.
     Spin axis is Y in link frame (visual rpy="pi/2 0 0" rotates cylinder Z→Y).
-    Ixx=Izz = m/12*(3r²+h²) = 0.2/12*(0.0027+0.000306) = 0.0000501
-    Iyy     = m/2*r²         = 0.2/2*0.0009             = 0.0000900
+    Ixx=Izz = m/12*(3r²+h²) = 0.2/12*(0.003675+0.000306) = 0.0000664
+    Iyy     = m/2*r²         = 0.2/2*0.001225           = 0.0001225
   -->
   <link name="left_wheel">
     <inertial>
       <mass value="0.2"/>
-      <inertia ixx="0.0000501" ixy="0" ixz="0"
-               iyy="0.0000900" iyz="0"
-               izz="0.0000501"/>
+      <inertia ixx="0.0000664" ixy="0" ixz="0"
+               iyy="0.0001225" iyz="0"
+               izz="0.0000664"/>
     </inertial>
     <visual>
       <origin rpy="1.5707963267948966 0 0"/>
-      <geometry><cylinder radius="0.03" length="0.0175"/></geometry>
+      <geometry><cylinder radius="0.035" length="0.0175"/></geometry>
       <material name="green"/>
     </visual>
     <collision>
       <origin rpy="1.5707963267948966 0 0"/>
-      <geometry><cylinder radius="0.03" length="0.0175"/></geometry>
+      <geometry><cylinder radius="0.035" length="0.0175"/></geometry>
     </collision>
   </link>
 
   <link name="right_wheel">
     <inertial>
       <mass value="0.2"/>
-      <inertia ixx="0.0000501" ixy="0" ixz="0"
-               iyy="0.0000900" iyz="0"
-               izz="0.0000501"/>
+      <inertia ixx="0.0000664" ixy="0" ixz="0"
+               iyy="0.0001225" iyz="0"
+               izz="0.0000664"/>
     </inertial>
     <visual>
       <origin rpy="1.5707963267948966 0 0"/>
-      <geometry><cylinder radius="0.03" length="0.0175"/></geometry>
+      <geometry><cylinder radius="0.035" length="0.0175"/></geometry>
       <material name="red"/>
     </visual>
     <collision>
       <origin rpy="1.5707963267948966 0 0"/>
-      <geometry><cylinder radius="0.03" length="0.0175"/></geometry>
+      <geometry><cylinder radius="0.035" length="0.0175"/></geometry>
     </collision>
   </link>
 
   <joint name="base_link_to_left_wheel" type="continuous">
     <parent link="base_link"/>
     <child link="left_wheel"/>
-    <origin xyz="0.1 0.125 -0.03"/>
+    <origin xyz="0.1 0.125 -0.035"/>
     <axis xyz="0 1 0"/>
   </joint>
 
   <joint name="base_link_to_right_wheel" type="continuous">
     <parent link="base_link"/>
     <child link="right_wheel"/>
-    <origin xyz="0.1 -0.125 -0.03"/>
+    <origin xyz="0.1 -0.125 -0.035"/>
     <axis xyz="0 1 0"/>
   </joint>
 
@@ -149,24 +151,24 @@
   <joint name="base_link_to_caster" type="fixed">
     <parent link="base_link"/>
     <child link="caster"/>
-    <origin xyz="-0.12 0 -0.05"/>
+    <origin xyz="-0.12 0 -0.055"/>
   </joint>
 
   <!-- Laser post (visual only, fixed) -->
   <link name="laser_post_link">
     <visual>
-      <geometry><box size="0.01 0.01 0.09"/></geometry>
+      <geometry><box size="0.01 0.01 0.08"/></geometry>
       <material name="blue"/>
     </visual>
     <collision>
-      <geometry><box size="0.01 0.01 0.09"/></geometry>
+      <geometry><box size="0.01 0.01 0.08"/></geometry>
     </collision>
   </link>
 
   <joint name="base_link_to_laser_post_link" type="fixed">
     <parent link="base_link"/>
     <child link="laser_post_link"/>
-    <origin xyz="0 0 0.05"/>
+    <origin xyz="-0.08 0 0.04"/>
   </joint>
 
   <!--
@@ -195,7 +197,7 @@
   <joint name="base_link_to_laser" type="fixed">
     <parent link="base_link"/>
     <child link="laser"/>
-    <origin xyz="-0.15 0 0.1" rpy="0 0 -1.5707963267948966"/>
+    <origin xyz="-0.08 0 0.105" rpy="0 0 -1.5707963267948966"/>
   </joint>
 
   <!-- Remaining visual-only links from dome3.urdf (no inertia needed; fixed joints) -->
@@ -214,7 +216,7 @@
   </link>
   <joint name="base_link_to_camera_link" type="fixed">
     <parent link="base_link"/><child link="camera_link"/>
-    <origin xyz="0.13 0 0.08" rpy="-1.5357152088298105 -0.13962634015954636 -1.5707963267948966"/>
+    <origin xyz="0.13 0 0.075" rpy="-1.6580627893946132 0 -1.5707963267948966"/>
   </joint>
 
   <!-- ===== Gazebo Harmonic simulation extensions ===== -->
@@ -236,7 +238,7 @@
       <left_joint>base_link_to_left_wheel</left_joint>
       <right_joint>base_link_to_right_wheel</right_joint>
       <wheel_separation>0.25</wheel_separation>
-      <wheel_radius>0.03</wheel_radius>
+      <wheel_radius>0.035</wheel_radius>
       <odom_publish_frequency>20</odom_publish_frequency>
       <max_linear_velocity>0.3</max_linear_velocity>
       <min_linear_velocity>-0.3</min_linear_velocity>
