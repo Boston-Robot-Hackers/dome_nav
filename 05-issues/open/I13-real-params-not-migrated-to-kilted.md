@@ -73,7 +73,23 @@ On Kilted, `slam_toolbox` is a lifecycle node. In one of two starts of
 (`failed to send response to /slam_toolbox/change_state (timeout)`). The
 launch file never sent activate, so the node stayed `inactive` with no
 `/map` until `ros2 lifecycle set /slam_toolbox activate` was run by hand.
-`robot_map.launch.py` includes the same file, so it can stall the same way.
+`robot.launch.py` (formerly `robot_map.launch.py`) includes the same file,
+so it can stall the same way.
+
+**Evidence so far (2026-11-17).** `~/.ros/log` has 31 `slam_toolbox` starts,
+and 4 of them failed this way.
+
+- **Each time,** the warning comes from Fast DDS (`rmw_response.cpp:164`),
+  and `Activating` never follows.
+- **Two of the four** came during 12-process SLAM + Nav2 launches.
+- **One (E3)** had `slam_toolbox` starting alone, 21 s after the drivers.
+- **12-process launches also succeeded,** so startup load raises the odds
+  but is not needed.
+
+**Likely cause, unverified:** a DDS discovery race at startup. The reply and
+the `transition_event` are sent before the launch process's reader has
+matched. If so, the params rework will not fix it. No workaround yet: a
+check-and-activate helper was rejected as a kludge.
 
 ### Decision: start over from upstream
 

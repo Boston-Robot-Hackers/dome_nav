@@ -20,7 +20,7 @@ package (F35); dome_nav no longer owns `/intent` or semantic knowledge.
 ```bash
 colcon build --packages-select dome_nav
 source install/setup.bash
-bl dome_nav robot.launch.py
+bl dome_nav robot.launch.py --map_name <name>   # SLAM mapping (Mode A)
 ```
 
 ## Map persistence
