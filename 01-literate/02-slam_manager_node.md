@@ -169,20 +169,25 @@ def main():
     node.trigger_activate()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass  # Ctrl-C or the launcher's SIGTERM: a normal stop
     finally:
         try:
             node.trigger_shutdown()
         except Exception as e:
             node.get_logger().warning(f"trigger_shutdown failed on exit: {e}")
         node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+        rclpy.try_shutdown()
 ```
 
 The `try/except` around `trigger_shutdown` is defensive: an exception there must
-not prevent `destroy_node`/`rclpy.shutdown` from running.
+not prevent `destroy_node`/`rclpy.try_shutdown` from running.
+`ExternalShutdownException` is what Kilted's rclpy raises from `spin()` when
+a launch's SIGTERM has already shut the context down; it counts as a normal
+stop, like Ctrl-C. In that case the context is gone before
+`trigger_shutdown()` runs, so the synchronous save's
+`spin_until_future_complete` may not be able to wait for the service
+(unverified).
 
 ## Observations and possible improvements
 

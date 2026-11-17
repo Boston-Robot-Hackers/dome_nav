@@ -16,7 +16,7 @@ from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import OccupancyGrid
 from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 
 from dome_nav_msgs.action import ExploreArea
@@ -764,8 +764,8 @@ def main():
     executor = MultiThreadedExecutor()
     try:
         rclpy.spin(node, executor)
-    except KeyboardInterrupt:
-        pass
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass  # Ctrl-C or the launcher's SIGTERM: a normal stop
     finally:
         # stop_exploring owns session_end for normally-ended sessions; only an
         # interrupted active session needs the shutdown record here.
@@ -776,8 +776,7 @@ def main():
             )
         node.telemetry.close()
         node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

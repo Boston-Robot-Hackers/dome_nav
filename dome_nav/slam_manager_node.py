@@ -5,6 +5,7 @@
 
 import os
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
 from std_msgs.msg import String
 from nav_msgs.msg import OccupancyGrid
@@ -187,16 +188,15 @@ def main():
     node.trigger_activate()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass  # Ctrl-C or the launcher's SIGTERM: a normal stop
     finally:
         try:
             node.trigger_shutdown()
         except Exception as e:
             node.get_logger().warning(f"trigger_shutdown failed on exit: {e}")
         node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":
