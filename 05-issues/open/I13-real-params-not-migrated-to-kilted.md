@@ -86,6 +86,23 @@ and 4 of them failed this way.
 - **12-process launches also succeeded,** so startup load raises the odds
   but is not needed.
 
+**After the Kilted upgrade (2026-11-18).** Fast DDS was upgraded to 3.2.5
+on 2026-11-17. Four starts of `bl dome_nav robot.launch.py --mode slam`
+followed, with the drivers up.
+
+- **All four reached `Activating`.** None logged the `change_state` timeout.
+- **One run looked like a failure, but wasn't.** The errors the user saw
+  came at shutdown, from `slam_manager`, after "Shutdown nodes and quit?"
+  was answered (07:38:09). The run had already logged `Finished serializing
+  Dataset` at 07:37:49. The errors were:
+  - `Unable to start transition 7 from current state (12, 'shuttingdown')`
+  - `Failed to publish log message to rosout`
+
+  `slam_manager` tries a lifecycle transition while the launch is shutting it
+  down. That is a separate, harmless problem.
+- **Four starts can't show a fix.** The failure rate before was about 1 in
+  10.
+
 **Likely cause, unverified:** a DDS discovery race at startup. The reply and
 the `transition_event` are sent before the launch process's reader has
 matched. If so, the params rework will not fix it. No workaround yet: a
