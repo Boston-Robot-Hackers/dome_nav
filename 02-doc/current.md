@@ -314,12 +314,10 @@ bl dome_nav robot_explore.launch.py --map_name <name>  # Mode E: autonomous expl
 # Sim — single command:
 bl dome_nav sim_nav_full.launch.py --map_name <name> --world_name multi_room
 # sim_rviz.launch.py separate optional window.
-
-# Experiment harness (trimmed nav2, C2 CPU fix):
-bl dome_nav nav_experiment.launch.py
 ```
 
-`just_explorer.launch.py` is new + untracked (explorer node alone).
+`nav_experiment`, `nav2_experiment_navigation` and `just_explorer` were deleted on
+2026-11-19 (dome2 F05, TF05.3). Git history keeps them.
 
 ## Exploration control
 

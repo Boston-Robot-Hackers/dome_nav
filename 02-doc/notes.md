@@ -150,7 +150,8 @@ avg 5.46 → ~2, idle 68% → 84%.
   pick a frontier. → 8.9%.
 - **C2** — `nav2_bringup navigation_launch.py` boots route_server + waypoint_follower +
   docking_server ACTIVE (~7% each, bond heartbeat + DDS) even though dome_nav calls
-  none. Fix: `nav2_experiment_navigation.launch.py` drops them from `lifecycle_nodes`.
+  none. Fix: `nav2_experiment_navigation.launch.py` dropped them from `lifecycle_nodes`
+  (that file was deleted on 2026-11-19, dome2 F05; keep the fix in mind for any trimmed Nav2).
   → load 5.46→1.07. **Production `robot_explore.launch.py` still on upstream nav2_bringup
   (untrimmed by choice).**
 - **C3** — nav-on-NOGO CPU spike (load 12) is Bug 2's deadlock busy-looping (planner

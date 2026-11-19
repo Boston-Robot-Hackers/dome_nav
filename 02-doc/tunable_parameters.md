@@ -127,19 +127,16 @@ field moved to `FrontierParams` (F34 T03).
 
 ## 4. Launch-file exposure
 
-Which parameters each launch file actually sets. A `-1` sentinel in `just_explorer`
-means "keep the node default".
+Which parameters each launch file actually sets. `just_explorer`, `nav_experiment` and
+`nav2_experiment_navigation` were deleted on 2026-11-19 (dome2 F05, TF05.3).
 
 | Launch file | Explorer params set | Config files used |
 |---|---|---|
-| `just_explorer.launch.py` | `map_name`, `use_sim_time`, `min_frontier_dist`, `max_frontier_dist`, `min_frontier_size`, `preferred_goal_distance`, `max_explore_radius`, `blacklist_radius`, `use_novelty_scoring`, `w_distance`, `w_novelty`, `w_clearance`, `robot_radius`, `clearance_margin_m` | — (explorer only) |
 | `sim_explore_node.launch.py` (duplicated in `sim_nav_full.launch.py:72-81`) | `max_frontier_dist=15.0`, `min_frontier_dist=0.9`, `preferred_goal_distance=2.0`, `blacklist_radius=0.5`, `min_frontier_size=5`, `w_*=1.0`, `robot_radius=0.17`, `clearance_margin_m=0.05`, `max_explore_radius=0.0`, `map_name` (required), `use_sim_time=True` | sim yamls |
 | `robot_explore.launch.py` | `max_frontier_dist=0.0`, `min_frontier_dist=0.5`, `preferred_goal_distance=2.0`, `blacklist_radius=0.5`, `frontier_buffer_cells=0`, `min_frontier_size=10`, `w_*=1.0`, `robot_radius=0.17`, `clearance_margin_m=0.05`; sets `slam_manager_node.map_persist_path` | `mapper_params_online_async.yaml`, `nav2_params_explore_real.yaml` |
-| `nav_experiment.launch.py` | Mirrors robot_explore minus the `w_*`/`robot_radius`/clearance overrides (node defaults apply); takes `slam_config`/`nav2_config` paths as args | user-supplied |
 | `robot_map.launch.py` | — | `mapper_params_online_async.yaml`, `nav2_params_real.yaml` |
 | `robot_nav.launch.py` | — | `nav2_params_localization_real.yaml` + `nav2_params_real.yaml`, static map `~/.dome/slam_maps/basement1.yaml` |
 | `sim_slam.launch.py` / `sim_nav2.launch.py` | — | `mapper_params_online_async_sim.yaml` / `nav2_params_explore_sim.yaml` |
-| `nav2_experiment_navigation.launch.py` | — | All tuning via `params_file` arg (trimmed nav2_bringup) |
 | `sim_robot.launch.py` | `world_name`, `urdf_name="minimal_sim.urdf"`, spawn z=0.05 | — |
 
 ---
@@ -229,8 +226,6 @@ All files in `launch/`. **Composed** = brings up a full stack (often via `bl.inc
 | `robot_explore.launch.py` | composed | **Mode A** — slam_toolbox + Nav2 + explorer for autonomous map building. Primary real-robot exploration entry point. |
 | `robot_map.launch.py` | composed | slam_toolbox + Nav2 + dome_nav nodes, **no explorer** — manual (teleop) map building. |
 | `robot_nav.launch.py` | composed | **Mode B** — static saved map + AMCL + Nav2 for normal operation. Needs a map built by `robot_map`. |
-| `nav_experiment.launch.py` | composed | Experiment harness: slam + Nav2 + optional explorer (when `--map_name` given), both config yamls passed as args. Assumes driver stack runs separately. |
-| `nav2_experiment_navigation.launch.py` | leaf | Trimmed fork of nav2_bringup `navigation_launch.py` — drops 3 unused lifecycle servers to save Pi CPU. Included by the experiment path, not run directly. |
 
 ### Simulation
 
@@ -242,7 +237,6 @@ All files in `launch/`. **Composed** = brings up a full stack (often via `bl.inc
 | `sim_nav2.launch.py` | leaf | Nav2 stack; split so it starts only after `/map` exists (else lifecycle abort). |
 | `sim_explore_node.launch.py` | leaf | explorer_manager_node only; needs sim_robot + sim_slam + sim_nav2 already up. Manual-debug counterpart of sim_nav_full's explorer. |
 | `sim_rviz.launch.py` | leaf | RViz2 with `use_sim_time`. Optional viz. |
-| `just_explorer.launch.py` | leaf | explorer_manager_node only, bring-your-own `/map` + Nav2. Sim/real-agnostic; all tuning via explicit launch args. |
 
 ### Redundancy assessment
 

@@ -94,32 +94,9 @@ In RViz:
 
 ### 5. Explorer
 
-#### Session A — baseline (`w_clearance = 0.0`)
-
-```bash
-source /home/pitosalas/ros2_ws/install/setup.bash
-bl dome_nav just_explorer.launch.py \
-  --map_name f31_base \
-  --use_sim_time true \
-  --min_frontier_dist 0.9 \
-  --max_frontier_dist 15.0 \
-  --min_frontier_size 5 \
-  --preferred_goal_distance 2.0 \
-  --w_clearance 0.0
-```
-
-#### Session B — tuned (`w_clearance = 1.0`)
-
-```bash
-source /home/pitosalas/ros2_ws/install/setup.bash
-bl dome_nav just_explorer.launch.py \
-  --map_name f31_clear \
-  --use_sim_time true \
-  --min_frontier_dist 0.9 \
-  --max_frontier_dist 15.0 \
-  --min_frontier_size 5 \
-  --preferred_goal_distance 2.0
-```
+**`just_explorer.launch.py`, which these sessions used, was deleted on 2026-11-19**
+(dome2 F05, TF05.3). The sim workflow is being rebuilt as dome2 F06. Git history has
+the old commands.
 
 `w_clearance` defaults to `1.0`, so omitting it enables clearance scoring.
 

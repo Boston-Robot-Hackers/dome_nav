@@ -231,7 +231,7 @@ Rules:
 ### Tune an existing knob
 
 - **Launch**: pass the field name as a launch arg where the launch file
-  exposes one (`bl dome_nav just_explorer.launch.py --w_clearance 0.5`), or
+  exposes one (e.g. `--w_clearance 0.5`), or
   add it to the params dict of a launch file that hardcodes its set.
 - **Yaml**: any declared name can be set through a standard ROS params yaml —
   declaration is what makes that possible.
